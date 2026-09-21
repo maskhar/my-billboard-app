@@ -1,0 +1,89 @@
+***
+
+# 📘 DOKUMENTASI PROYEK: UTERO CLOUD
+**Status:** Prototype V1 (Completed)
+**Teknologi:** Next.js 15, Tailwind CSS, Prisma (SQLite), NextAuth, Google Gemini AI.
+
+---
+
+### 1. FITUR PUBLIK (User Experience)
+Area yang bisa diakses oleh pelanggan tanpa login/dengan login.
+
+*   **Peta Interaktif Full-Screen:**
+    *   Menggunakan Leaflet Maps yang memenuhi layar.
+    *   Fitur **Smart Search Bar**: Mencari lokasi, memfilter tipe (Baliho/Videotron), dan memilih tanggal. Tampilan otomatis menyesuaikan (Memanjang di Desktop, Kotak Tumpuk di HP).
+*   **Halaman Detail Billboard:**
+    *   Menggunakan **SLUG URL** (SEO Friendly: `.../billboard/baliho-ijen`) bukan ID acak.
+    *   **Location Visualizer:** Integrasi peta + Google Street View (Mode Embed).
+    *   **Cek Fasilitas:** Daftar Include/Exclude tertata rapi dalam 2 kolom.
+    *   **Kalender Ketersediaan:** Menampilkan tanggal mana yang kosong dan terisi secara visual.
+    *   **Smart Action:** Tombol "Sewa Sekarang" otomatis membawa tanggal yang dipilih ke Checkout.
+
+### 2. SISTEM TRANSAKSI (Booking Engine)
+Alur bisnis utama untuk penyewaan.
+
+*   **Halaman Checkout Pintar:**
+    *   **Kalkulator Otomatis:** Menghitung total harga berdasarkan Durasi (1/3/6/12 Bulan).
+    *   **Pajak & Admin:** Menambahkan PPN 11% dan Biaya Admin otomatis.
+    *   **Opsi Pembayaran:** Full Payment atau DP 60%.
+    *   **Fitur Faktur:** Opsi input NPWP jika penyewa adalah perusahaan.
+    *   **Perlindungan Role:** Admin dilarang melakukan order (diblokir sistem).
+*   **Dashboard User:**
+    *   Tracking Status: `PENDING` (Kuning) $\rightarrow$ `ACTIVE` (Hijau) $\rightarrow$ `CANCELLED/REFUND` (Merah).
+    *   **Hitung Mundur Pembayaran:** Timer 24 Jam sebelum pesanan hangus.
+    *   **Upload Desain:** Fitur upload materi iklan ke server (Local Storage dengan Kompresi).
+    *   **Invoice Generator:** Halaman invoice bersih siap cetak (PDF/Print) lengkap dengan detail item dan harga.
+    *   **Refund System:** Form pengajuan refund (Input Alasan & No Rekening) jika batal sewa.
+
+### 3. BACK-OFFICE ADMIN (Panel Pengelola)
+Area khusus pegawai/pemilik dengan keamanan berlapis.
+
+*   **Keamanan (Security):**
+    *   **Pintu Terpisah:** Login khusus admin ada di `/admin/login`.
+    *   **Auto Kick:** Jika admin login di halaman user biasa, ditendang. Jika user biasa masuk admin, diblokir.
+*   **Inventory Management (Gudang):**
+    *   **CRUD Lengkap:** Tambah, Edit, Hapus billboard.
+    *   **Smart Form:** Input spesifikasi lengkap (Tinggi, Lebar, Lampu), Upload Gambar (bisa CDN Cloudinary atau Local Server), dan Auto Generate Slug.
+    *   **Audit Trails:** Mencatat **Siapa** yang membuat dan **Kapan** terakhir diedit.
+    *   **Rollback / History:** Menyimpan riwayat perubahan harga/data. Admin bisa mengembalikan data lama (Restore) jika salah edit.
+*   **Order Management:**
+    *   Tabel pesanan dengan status real-time.
+    *   **Tombol Aksi Cerdas:**
+        *   **Terima:** Mengaktifkan pesanan.
+        *   **Tolak:** Membatalkan pesanan.
+        *   **Batal Paksa:** Membatalkan pesanan yang sudah aktif (dengan alasan).
+        *   **Proses Refund:** Input bukti transfer pengembalian dana (Upload Gambar Bukti).
+
+### 4. FITUR CANGGIH & KECERDASAN BUATAN (AI)
+Fitur unggulan yang membuat web ini terasa mahal.
+
+*   **Smart Chatbot (Google Gemini 2.0):**
+    *   Bot AI yang bisa menjawab pertanyaan user tentang produk ("Ada billboard harga 10jt?").
+    *   AI bisa memberikan **Link Produk** yang bisa diklik langsung di chat.
+*   **Live Chat System (Realtime):**
+    *   Dashboard Chat Admin mirip **Tawk.to/Intercom**.
+    *   **Human Take-Over:** Jika Admin klik "Join Chat", bot AI otomatis mati, dan Admin mengambil alih percakapan.
+    *   **Magic Reply:** Admin bisa klik tombol "Tongkat Sihir", AI akan mengetikkan balasan yang sopan secara otomatis.
+    *   **Fitur Notifikasi:** Bunyi "Ting!" jika ada chat baru masuk.
+    *   **Auto Scroll & Status:** Mendeteksi status Online, Mengetik, dan Sesi Berakhir.
+*   **Konfigurasi Dinamis:** Admin bisa mengganti API Key (Google Maps / Gemini AI) langsung dari Dashboard tanpa bongkar kodingan.
+
+---
+
+### STRUKTUR FILE PENTING (Untuk Diingat)
+*   `src/app/page.tsx` $\rightarrow$ Halaman Depan & Peta.
+*   `prisma/schema.prisma` $\rightarrow$ Cetak biru database lengkap.
+*   `src/components/ChatWidget.tsx` $\rightarrow$ Widget chat yang tampil di sisi User.
+*   `src/components/admin/ChatInterface.tsx` $\rightarrow$ Sistem Chat canggih sisi Admin.
+*   `src/app/api/` $\rightarrow$ Semua logika server (Booking, Chat, Upload, dll).
+
+---
+
+### ⚠️ TO DO LIST (PR Selanjutnya / Next Step)
+Jika nanti ingin dilanjutkan ke tahap Online (Production):
+
+1.  **Ganti Database:** Migrasi dari `SQLite` ke `PostgreSQL` (Supabase/Neon).
+2.  **Login Google:** Aktifkan fitur "Sign in with Google".
+3.  **Payment Gateway:** Sambungkan tombol "Bayar" ke API Xendit yang asli (agar QRIS muncul otomatis).
+
+***

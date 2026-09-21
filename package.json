@@ -2,26 +2,60 @@
   "name": "my-billboard-app",
   "version": "0.1.0",
   "private": true,
+  "author": {
+    "email": "me@maskhar.it.com",
+    "name": "Bimo Kharismantoro",
+    "url": "https://maskhar.it.com"
+  },
+  "license": "MIT",
+  "description": "A billboard app built with Next.js, Tailwind CSS, and Prisma.",
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 4000",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "next lint",
+    "menu": "node manager.js"
   },
   "dependencies": {
-    "next": "16.0.10",
-    "react": "19.2.1",
-    "react-dom": "19.2.1"
+    "@clerk/nextjs": "^6.36.5",
+    "@google/generative-ai": "^0.24.1",
+    "@headlessui/react": "^2.2.9",
+    "@prisma/client": "^5.22.0",
+    "bcryptjs": "^3.0.3",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.1.0",
+    "leaflet": "^1.9.4",
+    "lucide-react": "^0.300.0",
+    "next": "latest",
+    "next-auth": "^4.24.13",
+    "next-cloudinary": "^6.17.5",
+    "nodemailer": "^7.0.11",
+    "react": "latest",
+    "react-calendar": "^6.0.0",
+    "react-dom": "latest",
+    "react-leaflet": "^4.2.1",
+    "recharts": "^3.6.0",
+    "sharp": "^0.34.5",
+    "socket.io-client": "^4.8.1",
+    "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
-    "@tailwindcss/postcss": "^4",
-    "@types/node": "^20",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "babel-plugin-react-compiler": "1.0.0",
-    "eslint": "^9",
-    "eslint-config-next": "16.0.10",
-    "tailwindcss": "^4",
-    "typescript": "^5"
+    "@types/bcryptjs": "^2.4.6",
+    "@types/leaflet": "^1.9.8",
+    "@types/node": "latest",
+    "@types/nodemailer": "^7.0.4",
+    "@types/react": "latest",
+    "@types/react-dom": "latest",
+    "autoprefixer": "^10.0.1",
+    "eslint": "latest",
+    "eslint-config-next": "latest",
+    "postcss": "^8",
+    "prisma": "^5.22.0",
+    "tailwindcss": "^3.3.0",
+    "ts-node": "^10.9.1",
+    "typescript": "latest"
+  },
+  "prisma": {
+    "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
   }
 }
