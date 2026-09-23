@@ -11,10 +11,11 @@ export class BookingsController {
   constructor(private readonly bookingsService: BookingsService) {}
 
   @Post()
-  create(@Body() createBookingDto: CreateBookingDto) {
-    // In a real app, you'd get the user from the authenticated session
-    const user = { id: 'clerk-user-id', name: 'Test User', email: 'test@example.com', role: 'USER' }; // Placeholder
-    return this.bookingsService.create(createBookingDto, user);
+  create(@Body() createBookingDto: CreateBookingDto & { userId?: string }) {
+    // TODO: ganti ke JWT guard proper setelah keputusan arsitektur auth final.
+    // Untuk sementara userId diambil dari body (dikirim dari session NextAuth frontend)
+    // dan divalidasi (user harus benar-benar ada di database) oleh BookingsService.
+    return this.bookingsService.create(createBookingDto);
   }
 
   @Post('submit-design')

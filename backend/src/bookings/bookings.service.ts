@@ -14,7 +14,21 @@ export class BookingsService {
     private mailService: MailService,
   ) {}
 
-  async create(createBookingDto: CreateBookingDto, user: any) {
+  async create(createBookingDto: CreateBookingDto & { userId?: string }) {
+    const { userId } = createBookingDto;
+
+    if (!userId) {
+      throw new BadRequestException('userId wajib dikirim di body request.');
+    }
+
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new BadRequestException('User tidak ditemukan di database.');
+    }
+
     if (user.role === 'ADMIN' || user.role === 'SUPER_ADMIN') {
       throw new ForbiddenException('Admin dilarang membuat pesanan.');
     }
