@@ -57,4 +57,7 @@ public/uploads/
 *.tsbuildinfo
 next-env.d.ts
 
+# backend build output
+backend/dist/
+
 /src/generated/prisma
