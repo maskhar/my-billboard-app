@@ -18,11 +18,59 @@ export class UsersService {
   constructor(private prisma: PrismaService) {}
 
   async create(createUserDto: CreateUserDto) {
-    // ... (existing create method)
+    const { email, password, name, phone } = createUserDto;
+
+    const existing = await this.prisma.user.findUnique({
+      where: { email },
+    });
+
+    if (existing) {
+      throw new ConflictException('Email sudah terdaftar');
+    }
+
+    const hashedPassword = await hash(password, 10);
+
+    try {
+      const user = await this.prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          whatsapp: phone,
+        },
+      });
+
+      const { password: _password, ...safeUser } = user;
+      return safeUser;
+    } catch (error) {
+      throw new InternalServerErrorException('Terjadi kesalahan pada server.');
+    }
   }
 
   async updateProfile(userId: string, updateProfileDto: UpdateProfileDto) {
-    // ... (existing updateProfile method)
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('Pengguna tidak ditemukan.');
+    }
+
+    const data: { name?: string; whatsapp?: string } = {};
+    if (updateProfileDto.name !== undefined) data.name = updateProfileDto.name;
+    if (updateProfileDto.whatsapp !== undefined) data.whatsapp = updateProfileDto.whatsapp;
+
+    try {
+      const updatedUser = await this.prisma.user.update({
+        where: { id: userId },
+        data,
+      });
+
+      const { password: _password, ...safeUser } = updatedUser;
+      return safeUser;
+    } catch (error) {
+      throw new InternalServerErrorException('Terjadi kesalahan pada server.');
+    }
   }
 
   async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
