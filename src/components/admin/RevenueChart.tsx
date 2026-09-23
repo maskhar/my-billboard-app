@@ -2,6 +2,7 @@
 'use client';
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import { rupiah, rupiahSingkat } from '@/lib/money';
 
 export default function RevenueChart({ data }: { data: any[] }) {
   return (
@@ -11,11 +12,19 @@ export default function RevenueChart({ data }: { data: any[] }) {
             <BarChart data={data}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E5E7EB"/>
                 <XAxis dataKey="name" stroke="#9CA3AF" fontSize={12} tickLine={false} axisLine={false}/>
-                <YAxis stroke="#9CA3AF" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `Rp ${value/1000000}Jt`} />
-                <Tooltip 
+                <YAxis stroke="#9CA3AF" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `Rp ${rupiahSingkat(value)}`} />
+                {/*
+                  recharts memanggil formatter dengan `undefined` pada titik
+                  data yang kosong, sedangkan tipenya dulu ditulis `number`
+                  saja — `value.toLocaleString()` di sana memanggil metode pada
+                  nilai yang tidak ada. Selain itu `toLocaleString()` tanpa
+                  argumen memakai format Inggris: "15,000,000", dengan titik
+                  dan koma terbalik dari kebiasaan di sini.
+                */}
+                <Tooltip
                     cursor={{fill: '#F3F4F6'}}
                     contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
-                    formatter={(value:number) => [`Rp ${value.toLocaleString()}`, 'Omzet']}
+                    formatter={(value) => [rupiah(value as number | undefined), 'Omzet']}
                 />
                 <Bar dataKey="total" fill="#CE181E" radius={[4, 4, 0, 0]} barSize={40} />
             </BarChart>

@@ -174,11 +174,20 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
 
   // Efek untuk koneksi Socket.IO
   useEffect(() => {
-    const socket = io("http://localhost:3001");
+    // `withCredentials` wajib: chat-server mengenali admin dari cookie sesi
+    // NextAuth pada handshake. Tanpa flag ini browser tidak mengirim cookie ke
+    // origin berbeda (app :4000 → chat :3001), admin diperlakukan sebagai tamu,
+    // dan setiap `joinRoom` ditolak — inbox tampil kosong tanpa penjelasan.
+    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
+    const socket = io(chatUrl, { withCredentials: true });
     socketRef.current = socket;
 
     socket.on('connect', () => {
       console.log('Connected to chat server');
+    });
+
+    socket.on('authError', (err: { event?: string; message?: string }) => {
+      console.warn('Chat server menolak permintaan:', err?.event, err?.message);
     });
 
     socket.on('newMessage', (newMessage) => {
@@ -206,10 +215,17 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
 
   const handleSendMessage = (message: string) => {
     if (socketRef.current && selectedSession) {
+      // 'AGENT' bukan salah satu nilai sah kolom ChatSender — yang ada hanya
+      // USER, ADMIN, BOT, SYSTEM. Server memang sudah mengabaikan `sender`
+      // kiriman client dan menuliskan 'ADMIN' sendiri (chat-server/index.js),
+      // jadi isi database tidak pernah salah. Yang salah hanya pesan sementara
+      // yang ditampilkan sebelum jawaban server datang: nilainya tidak cocok
+      // dengan apa pun, sehingga baris itu sempat tampil di sisi yang keliru
+      // lalu melompat saat pesan aslinya tiba.
       const tempMessage = {
         id: Date.now().toString(),
         sessionId: selectedSession.id,
-        sender: 'AGENT',
+        sender: 'ADMIN',
         message: message,
         createdAt: new Date().toISOString(),
       };
@@ -217,10 +233,10 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
       // [BARU] Optimistic UI Update untuk admin
       setMessages((prevMessages) => [...prevMessages, tempMessage]);
 
-      // Kirim ke server
+      // `sender` sengaja tidak dikirim: server yang menentukannya dari
+      // identitas socket, bukan dari isi payload.
       socketRef.current.emit('sendMessage', {
         sessionId: selectedSession.id,
-        sender: 'AGENT',
         message: message,
       });
     }

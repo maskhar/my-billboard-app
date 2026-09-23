@@ -1,8 +1,21 @@
-// src/app/api/chat/send/route.ts
+// src/app/api/admin/chat/send/route.ts
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 
+// Peran yang boleh mengelola percakapan pelanggan.
+const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
+
 export async function POST(req: Request) {
+  // Handler ini berada di bawah /api/admin sehingga hanya boleh dipakai staf.
+  // Tanpa gate, siapa pun bisa menyisipkan pesan atas nama pengunjung ke sesi
+  // mana pun dan membuka kembali sesi yang sudah ditutup.
+  const session = await getServerSession(authOptions);
+  if (!session || !CHAT_ROLES.includes(session.user.role)) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
   try {
     const { sessionId, message } = await req.json();
 
@@ -11,19 +24,19 @@ export async function POST(req: Request) {
     }
 
     // 1. Cek Sesi Saat Ini Dulu
-    const session = await prisma.chatSession.findUnique({ 
-        where: { id: sessionId } 
+    const chatSession = await prisma.chatSession.findUnique({
+        where: { id: sessionId }
     });
 
-    if (!session) {
+    if (!chatSession) {
         return NextResponse.json({ error: "Sesi tidak ditemukan" }, { status: 404 });
     }
 
     // 2. Tentukan Status Baru
     // Kalau tadinya 'CLOSED', PAKSA ubah jadi 'OPEN' biar Admin notif
     // Kalau 'AGENT', tetap 'AGENT'. Kalau 'OPEN', tetap 'OPEN'.
-    let newStatus = session.status;
-    if (session.status === 'CLOSED') {
+    let newStatus = chatSession.status;
+    if (chatSession.status === 'CLOSED') {
         newStatus = 'OPEN';
         console.log(`♻️ RE-OPENING Session: ${sessionId}`); // Debug Log
     }
@@ -33,16 +46,16 @@ export async function POST(req: Request) {
     await prisma.$transaction([
         // A. Insert Pesan
         prisma.chatMessage.create({
-            data: { 
-                sessionId, 
-                sender: 'USER', 
-                message 
+            data: {
+                sessionId,
+                sender: 'USER',
+                message
             }
         }),
         // B. Update Sesi (Status & Waktu Terakhir)
         prisma.chatSession.update({
             where: { id: sessionId },
-            data: { 
+            data: {
                 status: newStatus,
                 isOnline: true, // Anggap user online lagi
                 updatedAt: new Date() // Biar naik ke atas di list admin
@@ -51,7 +64,7 @@ export async function POST(req: Request) {
     ]);
 
     // 4. Beri respon ke Client apakah harus dialihkan ke Admin atau Bot
-    if (session.status === 'AGENT') {
+    if (chatSession.status === 'AGENT') {
         return NextResponse.json({ status: 'sent_to_admin' });
     }
 

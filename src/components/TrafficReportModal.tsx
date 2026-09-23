@@ -5,9 +5,28 @@ import { BarChart3, X, ExternalLink, Loader2 } from 'lucide-react'; // Tambah Lo
 
 export default function TrafficReportModal({ url }: { url: string }) {
   const [isOpen, setIsOpen] = useState(false);
-  
-  // Buat URL Proxy
-  const proxyUrl = `/api/proxy?url=${encodeURIComponent(url)}`;
+
+  // Sebelumnya konten dimuat lewat /api/proxy?url=... Cara itu dibuang karena
+  // proxy tersebut menerima URL apa pun tanpa daftar izin (bisa menjangkau
+  // jaringan internal) dan memantulkan HTML asing sebagai dokumen dari origin
+  // kita sendiri — sehingga script pihak ketiga berjalan seolah-olah milik
+  // situs ini.
+  //
+  // Sekarang URL laporan dimuat langsung. Karena berasal dari origin pihak
+  // ketiga, script di dalamnya terisolasi oleh browser. `allow-same-origin`
+  // sengaja tidak disertakan agar isolasi itu tidak dilonggarkan.
+  // `new URL()` melempar bila alamatnya tidak valid. Sebelumnya dipanggil
+  // langsung di dalam JSX, sehingga satu baris data yang rusak di database
+  // cukup untuk membuat seluruh halaman produk gagal dirender.
+  let hostname = '';
+  let isSafeUrl = false;
+  try {
+    const parsed = new URL(url);
+    isSafeUrl = parsed.protocol === 'https:';
+    hostname = parsed.hostname;
+  } catch {
+    isSafeUrl = false;
+  }
 
   return (
     <>
@@ -37,21 +56,29 @@ export default function TrafficReportModal({ url }: { url: string }) {
                     </div>
 
                     <div className="flex-1 bg-white w-full h-full relative">
-                         {/* PANGGIL URL PROXY (Bukan URL Asli) */}
-                         <iframe 
-                            src={proxyUrl}
-                            className="w-full h-full border-none"
-                            title="Traffic Report Proxy"
-                            sandbox="allow-scripts allow-same-origin allow-forms"
-                         />
-                         
-                         {/* LOADING SCREEN (Muncul sebelum iframe selesai load) */}
-                         <div className="absolute inset-0 flex items-center justify-center -z-10 text-gray-400 text-sm">
-                            <div className="text-center">
-                                 <Loader2 className="animate-spin text-blue-500 mx-auto mb-2" size={32}/>
-                                 Memuat data dari <b className="text-blue-600">{new URL(url).hostname}</b>...
+                         {isSafeUrl ? (
+                            <iframe
+                               src={url}
+                               className="w-full h-full border-none"
+                               title="Laporan Trafik"
+                               sandbox="allow-scripts allow-forms allow-popups"
+                               referrerPolicy="no-referrer"
+                            />
+                         ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-gray-500 text-sm p-6 text-center">
+                               Laporan trafik tidak dapat ditampilkan karena alamatnya tidak valid.
                             </div>
-                         </div>
+                         )}
+
+                         {/* Tampilan sementara selagi iframe dimuat */}
+                         {isSafeUrl && (
+                            <div className="absolute inset-0 flex items-center justify-center -z-10 text-gray-400 text-sm">
+                               <div className="text-center">
+                                    <Loader2 className="animate-spin text-blue-500 mx-auto mb-2" size={32}/>
+                                    Memuat data dari <b className="text-blue-600">{hostname}</b>...
+                               </div>
+                            </div>
+                         )}
                     </div>
                 </div>
             </div>

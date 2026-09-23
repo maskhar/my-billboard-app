@@ -23,9 +23,10 @@ export default function RegisterPage() {
     const phone = formData.get('phone');
     const password = formData.get('password');
 
-    // Kirim ke API yang baru kita buat
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-    const res = await fetch(`${apiUrl}/api/users/register`, {
+    // Dialihkan dari backend NestJS (`/api/users/register`) ke route Next.
+    // Endpoint lama membalas "Sukses mendaftar" tanpa pernah membuat user,
+    // karena method `create()` di sisi sana tidak pernah diimplementasikan.
+    const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, phone, password })

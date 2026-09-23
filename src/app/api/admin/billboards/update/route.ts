@@ -3,6 +3,14 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { keDecimal, lebihBesar } from "@/lib/money";
+import {
+  BillboardStatus,
+  PublishStatus,
+  daftarNilai,
+  sahBillboardStatus,
+  sahPublishStatus,
+} from "@/lib/enum-guard";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -44,6 +52,37 @@ export async function POST(req: Request) {
       const excludesList = options.filter((o:any) => !o.included).map((o:any) => o.name);
       const galleryJson = JSON.stringify(body.gallery || []);
 
+      // PERIKSA NILAI DARI FORM SEBELUM MASUK TRANSAKSI
+      //
+      // Ini bukan soal kerapian pesan error saja. Kalau nilai asing baru
+      // ditolak di dalam `$transaction` di bawah, `billboardHistory.create`
+      // ikut batal — jadi riwayat perubahan pun tidak tercatat, dan admin
+      // hanya melihat "Gagal Update".
+      //
+      // `Number(body.price)` mengubah "" menjadi 0 (harga hilang diam-diam)
+      // dan "12jt" menjadi NaN (ditolak kolom Decimal).
+      const harga = keDecimal(body.price);
+      if (!lebihBesar(harga, 0)) {
+          return NextResponse.json(
+              { message: "Harga sewa harus diisi dengan angka lebih dari 0" },
+              { status: 400 }
+          );
+      }
+
+      if (!sahBillboardStatus(body.status)) {
+          return NextResponse.json(
+              { message: `Status tidak dikenal. Pilihan: ${daftarNilai(BillboardStatus)}` },
+              { status: 400 }
+          );
+      }
+
+      if (!sahPublishStatus(body.publishStatus)) {
+          return NextResponse.json(
+              { message: `Status publikasi tidak dikenal. Pilihan: ${daftarNilai(PublishStatus)}` },
+              { status: 400 }
+          );
+      }
+
       // TRANSAKSI DATABASE (Simpan History -> Update Data)
       await prisma.$transaction([
           // 1. Simpan History
@@ -68,7 +107,7 @@ export async function POST(req: Request) {
                   sku: body.sku,
                   address: body.address,
                   type: body.type,
-                  price: Number(body.price),
+                  price: harga,
                   lat: Number(body.lat),
                   lng: Number(body.lng),
                   mainImage: body.mainImage,

@@ -6,6 +6,8 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { Check, CalendarDays, ArrowLeft, MapPin, Download, ImageIcon } from 'lucide-react';
 import Link from 'next/link';
+import { notFound } from 'next/navigation';
+import { angkaRupiah } from '@/lib/money';
 
 type Props = {
   params: Promise<{ id: string }>
@@ -15,12 +17,22 @@ export default async function OrderDetailPage(props: Props) {
   const session = await getServerSession(authOptions);
   const params = await props.params;
 
+  if (!session) notFound();
+
   const order = await prisma.booking.findUnique({
       where: { id: params.id },
       include: { billboard: true }
   });
 
-  if (!order || !session) return <div className="p-10 text-center font-bold text-gray-500">Data order tidak ditemukan</div>;
+  if (!order) notFound();
+
+  // Cek kepemilikan. Sebelumnya order diambil berdasarkan id saja, sehingga user
+  // mana pun bisa membaca order milik orang lain hanya dengan mengganti id di URL.
+  //
+  // Sengaja memakai notFound(), bukan pesan "tidak berhak": pesan error akan
+  // membocorkan bahwa id tersebut memang ada di database.
+  const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(session.user.role);
+  if (order.userId !== session.user.id && !isAdmin) notFound();
 
   // --- HELPER FORMAT ---
   const formatTime = (d: Date | null) => {
@@ -161,7 +173,7 @@ export default async function OrderDetailPage(props: Props) {
                       <div className="grid grid-cols-2 gap-4 border-t border-gray-200 pt-3 md:w-1/2">
                           <div>
                               <p className='text-[10px] font-bold text-gray-400 uppercase'>Total Tagihan</p>
-                              <p className='font-bold text-utero'>Rp {order.totalPrice.toLocaleString('id-ID')}</p>
+                              <p className='font-bold text-utero'>Rp {angkaRupiah(order.totalPrice)}</p>
                           </div>
                           <div>
                               <p className='text-[10px] font-bold text-gray-400 uppercase'>Durasi</p>

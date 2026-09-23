@@ -2,25 +2,51 @@
 import Link from 'next/link';
 import BillboardDetailClient from './BillboardDetailClient';
 import { Billboard, SystemSetting } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
+import { uangUntukClient } from '@/lib/money';
+import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
+
+export const dynamic = 'force-dynamic';
 
 // Tipe data gabungan untuk hasil fetch dari backend kita
 type BillboardDetailData = Billboard & {
   bookings: { startDate: Date; endDate: Date }[];
 };
 
-// Fungsi untuk mengambil data SATU billboard dari backend NestJS
+// Sebelumnya halaman ini fetch ke `http://localhost:4001` — alamat yang
+// ditulis langsung di kode, bukan dari variabel env. Artinya halaman detail
+// produk hanya bisa hidup selama backend NestJS berjalan di mesin yang sama.
+//
+// Gate `publishStatus: 'PUBLISHED'` dipertahankan persis seperti di NestJS:
+// billboard berstatus DRAFT tidak boleh bisa dibuka lewat tebakan slug.
+//
+// `bookings` disaring ke status yang benar-benar memblokir tanggal, dan hanya
+// `startDate`/`endDate` yang diambil — sisa kolom booking memuat data pesanan
+// orang lain (nilai transaksi, catatan refund) dan tidak ada urusannya dengan
+// kalender ketersediaan publik.
 async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | null> {
   try {
-    const res = await fetch(`http://localhost:4001/api/billboards/${slug}`, { 
-      cache: 'no-store' // Selalu ambil data terbaru
+    return await prisma.billboard.findFirst({
+      where: {
+        slug,
+        publishStatus: 'PUBLISHED',
+      },
+      include: {
+        bookings: {
+          // Daftarnya dulu ditulis di sini sebagai tiga status. Padahal yang
+          // benar-benar mengunci tanggal ada sembilan — termasuk
+          // DESIGN_RECEIVED, IN_PRODUCTION, dan INSTALLATION. Akibatnya
+          // tanggal yang sudah terjual tampak KOSONG di kalender publik,
+          // pengunjung memilihnya, lalu ditolak 409 saat checkout. Kini
+          // memakai daftar yang sama dengan pemeriksaan bentrok di
+          // `booking/create`, supaya keduanya tidak bisa berbeda lagi.
+          where: { status: { in: [...STATUS_MENGUNCI_TANGGAL] } },
+          select: { startDate: true, endDate: true },
+        },
+      },
     });
-    // Jika backend mengembalikan status 404 (Not Found) atau error lain
-    if (!res.ok) {
-      return null;
-    }
-    return res.json();
   } catch (error) {
-    console.error("Gagal melakukan fetch ke backend untuk detail billboard:", error);
+    console.error('Gagal mengambil detail billboard:', error);
     return null;
   }
 }
@@ -72,7 +98,12 @@ export default async function DetailPage({ params, searchParams }: Props) {
 
   return (
     <BillboardDetailClient
-      rawData={rawData}
+      // `price` bertipe Decimal — sebuah objek. Next.js mengubah setiap prop
+      // menjadi JSON sebelum menyeberang ke komponen 'use client', dan objek
+      // Decimal tidak bisa diubah: halaman detail produk gagal dirender saat
+      // dijalankan. Karena `rawData` di sana bertipe `any`, pemeriksaan tipe
+      // tidak menangkapnya.
+      rawData={{ ...rawData, price: uangUntukClient(rawData.price) }}
       setting={setting}
       bookedDates={bookedDates}
       initialDate={selectedDate}

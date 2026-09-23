@@ -33,7 +33,13 @@ const SelectField = ({ label, id, value, onChange, children }: any) => (
     </div>
   );
 
-export default function UserProfileForm({ user }: { user: User }) {
+export default function UserProfileForm({ user }: { user: User & { identitasTersamar?: boolean } }) {
+  // KTP/NPWP hanya dikirim utuh kepada SUPER_ADMIN. Untuk peran lain,
+  // halaman induk mengirim bentuk tersamar dan menyalakan penanda ini.
+  // Tanpa memeriksanya, penyimpanan biasa akan menulis balik string
+  // bertitik-titik itu ke database dan menghapus nomor aslinya.
+  const identitasTersamar = !!user.identitasTersamar;
+
   const [businessDetails, setBusinessDetails] = useState({
     name: user.name || '',
     companyName: user.companyName || '',
@@ -43,13 +49,17 @@ export default function UserProfileForm({ user }: { user: User }) {
     officeAddress: user.officeAddress || '',
   });
 
+  // Kolom `newPassword`/`confirmPassword` dihapus. Tidak ada satu pun endpoint
+  // yang menerima admin menyetel password orang lain — `update-account`
+  // menolak tegas body yang memuat `password` (400), jadi dua kotak isian itu
+  // membuat SELURUH form ini selalu gagal, bahkan saat admin hanya mengubah
+  // nomor telepon. Pengguna mengganti passwordnya sendiri lewat
+  // `/api/user/change-password`.
   const [userAccount, setUserAccount] = useState({
     username: user.username || '',
     email: user.email || '',
     whatsapp: user.whatsapp || '',
-    role: user.role || 'USER', // Tambahkan role di sini
-    newPassword: '',
-    confirmPassword: '',
+    role: user.role || 'USER',
   });
 
   const [loading, setLoading] = useState(false);
@@ -59,10 +69,17 @@ export default function UserProfileForm({ user }: { user: User }) {
     e.preventDefault();
     setLoading(true);
     try {
+      // Bila nilai yang tampil adalah samaran, kolomnya TIDAK ikut dikirim.
+      // Mengirimnya berarti menimpa nomor asli dengan titik-titik.
+      const { ktp, npwp, ...sisanya } = businessDetails;
+      const muatan = identitasTersamar
+        ? { userId: user.id, ...sisanya }
+        : { userId: user.id, ...businessDetails };
+
       const res = await fetch('/api/admin/users/update-business', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, ...businessDetails }),
+        body: JSON.stringify(muatan),
       });
       if (!res.ok) throw new Error('Server error');
       alert('Business details updated successfully!');
@@ -76,31 +93,45 @@ export default function UserProfileForm({ user }: { user: User }) {
 
   const handleAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (userAccount.newPassword !== userAccount.confirmPassword) {
-      alert("Passwords do not match!");
-      return;
-    }
     setLoading(true);
     try {
-      const data: any = {
-        userId: user.id,
-        username: userAccount.username,
-        whatsapp: userAccount.whatsapp,
-        role: userAccount.role, // Kirim role ke API
-      };
-      if (userAccount.newPassword) {
-        data.password = userAccount.newPassword;
-      }
+      // Role TIDAK ikut dikirim ke sini. `update-account` sengaja menolak body
+      // yang memuat `role` (400) karena naik-turun pangkat punya aturan
+      // sendiri: hanya SUPER_ADMIN boleh mengangkat SUPER_ADMIN, dan ADMIN
+      // tidak boleh menurunkan SUPER_ADMIN. Aturan itu hidup di
+      // `/api/admin/users/update-role`, jadi perubahan role dikirim ke sana.
       const res = await fetch('/api/admin/users/update-account', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify({
+          userId: user.id,
+          username: userAccount.username,
+          whatsapp: userAccount.whatsapp,
+        }),
       });
-      if (!res.ok) throw new Error('Server error');
+      if (!res.ok) {
+        const hasil = await res.json().catch(() => null);
+        throw new Error(hasil?.message || 'Server error');
+      }
+
+      // Kirim role hanya bila memang diubah, supaya penyimpanan biasa tidak
+      // menyentuh endpoint yang lebih sensitif ini sama sekali.
+      if (userAccount.role !== user.role) {
+        const resRole = await fetch('/api/admin/users/update-role', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ userId: user.id, newRole: userAccount.role }),
+        });
+        if (!resRole.ok) {
+          const hasil = await resRole.json().catch(() => null);
+          throw new Error(hasil?.message || 'Gagal mengubah role');
+        }
+      }
+
       alert('Account details updated successfully!');
       router.refresh();
-    } catch (error) {
-      alert('Failed to update account details.');
+    } catch (error: any) {
+      alert(error?.message || 'Failed to update account details.');
     } finally {
       setLoading(false);
     }
@@ -114,8 +145,13 @@ export default function UserProfileForm({ user }: { user: User }) {
         <form onSubmit={handleBusinessSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
           <InputField label="Full Name" id="name" value={businessDetails.name} onChange={(e: any) => setBusinessDetails({ ...businessDetails, name: e.target.value })} />
           <InputField label="Company Name" id="companyName" value={businessDetails.companyName} onChange={(e: any) => setBusinessDetails({ ...businessDetails, companyName: e.target.value })} />
-          <InputField label="KTP" id="ktp" value={businessDetails.ktp} onChange={(e: any) => setBusinessDetails({ ...businessDetails, ktp: e.target.value })} />
-          <InputField label="NPWP" id="npwp" value={businessDetails.npwp} onChange={(e: any) => setBusinessDetails({ ...businessDetails, npwp: e.target.value })} />
+          <InputField label="KTP" id="ktp" value={businessDetails.ktp} onChange={(e: any) => setBusinessDetails({ ...businessDetails, ktp: e.target.value })} disabled={identitasTersamar} />
+          <InputField label="NPWP" id="npwp" value={businessDetails.npwp} onChange={(e: any) => setBusinessDetails({ ...businessDetails, npwp: e.target.value })} disabled={identitasTersamar} />
+          {identitasTersamar && (
+            <p className="md:col-span-2 text-xs text-gray-500">
+              KTP dan NPWP disamarkan. Hanya Super Admin yang bisa melihat dan mengubah nomor lengkapnya.
+            </p>
+          )}
           <div className="md:col-span-2">
             <InputField label="KTP Address" id="ktpAddress" value={businessDetails.ktpAddress} onChange={(e: any) => setBusinessDetails({ ...businessDetails, ktpAddress: e.target.value })} />
           </div>
@@ -150,8 +186,9 @@ export default function UserProfileForm({ user }: { user: User }) {
             <option value="SUPER_ADMIN">Super Admin</option>
           </SelectField>
           <InputField label="Phone" id="whatsapp" value={userAccount.whatsapp} onChange={(e: any) => setUserAccount({ ...userAccount, whatsapp: e.target.value })} />
-          <InputField label="New Password" id="newPassword" type="password" value={userAccount.newPassword} onChange={(e: any) => setUserAccount({ ...userAccount, newPassword: e.target.value })} placeholder="Leave blank to keep current" />
-          <InputField label="Confirm Password" id="confirmPassword" type="password" value={userAccount.confirmPassword} onChange={(e: any) => setUserAccount({ ...userAccount, confirmPassword: e.target.value })} placeholder="Confirm new password" />
+          <p className="text-xs text-gray-500">
+            Password tidak bisa diubah dari sini. Pengguna mengganti sendiri lewat halaman profilnya.
+          </p>
           <button type="submit" disabled={loading} className="w-full inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:bg-gray-300">
             {loading ? <Loader2 className="animate-spin" /> : 'Update Account'}
           </button>

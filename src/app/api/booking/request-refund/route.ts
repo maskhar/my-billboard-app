@@ -1,20 +1,107 @@
 // src/app/api/booking/request-refund/route.ts
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mail";
+import { keAngka, nol, persen, rupiah, type NilaiUang } from "@/lib/money";
+import { BookingStatus, Prisma } from "@prisma/client";
+import { STATUS_BOLEH_AJUKAN_REFUND } from "@/lib/transisi-status";
+
+/** Bagian dari uang masuk yang dikembalikan; sisanya potongan biaya admin. */
+const PERSEN_REFUND = 90;
+
+/**
+ * Berapa uang yang BENAR-BENAR sudah diterima dari pesanan ini.
+ *
+ * Ini bukan `totalPrice`. `totalPrice` adalah nilai pesanan — apa yang
+ * disepakati akan dibayar seluruhnya — sedangkan yang boleh dikembalikan
+ * hanya yang sudah masuk ke rekening.
+ *
+ * Cara membacanya, diturunkan dari skema dan alur yang ada:
+ *
+ *   - `dpAmount` diisi `booking/create` HANYA bila pembeli memilih skema DP;
+ *     pada pesanan lunas kolom itu 0 (bukan null). Jadi `dpAmount` bernilai
+ *     bukan-nol berarti "pembeli membayar sebagian, sebesar angka ini".
+ *   - Pelunasan sisa 40% belum punya jalur di sistem ini: tidak ada route yang
+ *     menaikkan `dpAmount` menjadi `totalPrice`, dan tidak ada kolom terpisah
+ *     yang mencatat pembayaran kedua. Maka selama `dpAmount` masih bukan-nol,
+ *     uang yang ada di tangan tetap sebesar `dpAmount` — apa pun status
+ *     pesanannya.
+ *   - Pada pesanan lunas (`dpAmount` nol), uang yang masuk adalah `totalPrice`.
+ *
+ * Bug yang diperbaiki: rumus lama `persen(totalPrice, 90)` mengambil 90% dari
+ * NILAI PESANAN. Pembeli yang baru menyetor DP Rp 20.010.000 atas pesanan
+ * Rp 33.350.000 membuat sistem memerintahkan admin mentransfer Rp 30.015.000
+ * — Rp 10.005.000 lebih besar dari seluruh uang yang pernah diterima dari
+ * orang itu, per transaksi, tanpa satu pun peringatan.
+ */
+function uangYangSudahMasuk(order: { totalPrice: NilaiUang; dpAmount: NilaiUang }): NilaiUang {
+  // `if (order.dpAmount)` TIDAK bisa dipakai: Decimal(0) adalah objek, dan
+  // setiap objek bernilai "benar" di JavaScript — lihat catatan di money.ts.
+  return nol(order.dpAmount) ? order.totalPrice : order.dpAmount;
+}
 
 export async function POST(req: Request) {
+  // Route ini sebelumnya tidak punya autentikasi sama sekali. Siapa pun bisa
+  // mengajukan refund atas order milik orang lain DAN menentukan nomor rekening
+  // tujuan transfer pada STEP B — artinya dana pelanggan bisa dialihkan ke
+  // rekening penyerang. Sesi + kepemilikan order kini wajib di kedua step.
+  const session = await getServerSession(authOptions);
+  if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+
   const body = await req.json();
   const adminEmail = process.env.ADMIN_EMAIL; // Email Bos
 
   // STEP A: User kirim ALASAN (Tahap Awal)
   if (body.step === 'reason') {
-      const order = await prisma.booking.update({
-          where: { id: body.orderId },
+      // Kepemilikan ditegakkan di tingkat query.
+      //
+      // `status` ikut disaring di sini. Sebelumnya step ini menerima pesanan
+      // dengan status APA PUN, termasuk yang sudah `CANCELLED` dan yang sudah
+      // `REFUNDED`. Pesanan yang dananya sudah ditransfer keluar bisa diajukan
+      // refund lagi, masuk kembali ke antrean admin, dan dibayar untuk kedua
+      // kalinya — uangnya keluar dua kali atas satu transaksi yang sama.
+      // Pesanan `PENDING_PAYMENT` juga tertolak di sini, dan memang harus:
+      // belum ada uang yang masuk untuk dikembalikan, jalurnya `booking/cancel`.
+      const { count } = await prisma.booking.updateMany({
+          where: {
+              id: body.orderId,
+              userId: session.user.id,
+              status: { in: [...STATUS_BOLEH_AJUKAN_REFUND] },
+          },
           data: {
               status: "REVIEW_REFUND",
               cancelReason: body.reason,
           },
+      });
+
+      if (count === 0) {
+          // Dibedakan: pesanannya memang bukan milik user (atau tidak ada),
+          // atau ada tapi statusnya tidak mengizinkan. Tanpa pembedaan ini
+          // user melihat "Pesanan tidak ditemukan" untuk pesanan yang jelas
+          // terpampang di layarnya.
+          const milikUser = await prisma.booking.findFirst({
+              where: { id: body.orderId, userId: session.user.id },
+              select: { status: true },
+          });
+
+          if (!milikUser) {
+              return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
+          }
+
+          return NextResponse.json(
+              {
+                  message:
+                      `Pesanan berstatus ${milikUser.status} tidak bisa diajukan refund. ` +
+                      `Pengajuan hanya berlaku untuk pesanan berstatus: ${STATUS_BOLEH_AJUKAN_REFUND.join(', ')}.`,
+              },
+              { status: 409 }
+          );
+      }
+
+      const order = await prisma.booking.findUniqueOrThrow({
+          where: { id: body.orderId },
           include: { billboard: true, user: true }
       });
 
@@ -27,7 +114,7 @@ export async function POST(req: Request) {
               message: `User <b>${order.user.name}</b> mengajukan pembatalan untuk billboard <b>${order.billboard.title}</b>.<br/>Alasan: "${body.reason}"`,
               orderDetail: {
                 id: order.id,
-                total: order.totalPrice,
+                total: keAngka(order.totalPrice),
                 status: "REVIEW REFUND",
                 billboardTitle: order.billboard.title,
                 billboardAddress: order.billboard.address,
@@ -41,17 +128,82 @@ export async function POST(req: Request) {
 
   // STEP B: User kirim REKENING (Tahap Kedua)
   if (body.step === 'bank') {
-      const orderData = await prisma.booking.findUnique({ where: { id: body.orderId } });
-      const refundNominal = (orderData?.totalPrice || 0) * 0.90;
+      // Kepemilikan ditegakkan di tingkat query. Ini step yang menentukan
+      // rekening tujuan transfer, jadi pemiliknya wajib dipastikan.
+      const orderData = await prisma.booking.findFirst({
+          where: { id: body.orderId, userId: session.user.id }
+      });
 
-      const order = await prisma.booking.update({
-          where: { id: body.orderId },
+      if (!orderData) {
+          return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
+      }
+
+      // Step ini hanya boleh dijalankan atas pesanan yang sudah disetujui admin
+      // untuk direfund. Tanpa penjaga ini, siapa pun pemilik pesanan bisa
+      // melompati step A dan langsung menulis nomor rekening + nominal refund
+      // ke pesanan yang statusnya tidak pernah ditinjau siapa pun — termasuk
+      // pesanan yang sudah `REFUNDED`, yang berarti transfer kedua.
+      if (orderData.status !== BookingStatus.WAITING_BANK) {
+          return NextResponse.json(
+              {
+                  message:
+                      `Pesanan berstatus ${orderData.status} belum siap menerima data rekening. ` +
+                      `Rekening hanya bisa diisi setelah Admin menyetujui pengajuan refund.`,
+              },
+              { status: 409 }
+          );
+      }
+
+      // `totalPrice * 0.90` menghasilkan NaN: nominal bertipe Decimal (objek),
+      // bukan angka biasa. NaN lalu ditulis ke kolom refundAmount dan ditolak
+      // database, sehingga seluruh pengajuan refund gagal di tengah jalan.
+      //
+      // Dan bahkan setelah dihitung dengan benar, DASARNYA masih salah:
+      // rumus lama mengambil 90% dari `totalPrice` (nilai pesanan), bukan dari
+      // uang yang benar-benar diterima. Lihat `uangYangSudahMasuk` di atas —
+      // pada pesanan DP, selisihnya adalah kerugian langsung sebesar puluhan
+      // juta rupiah per transaksi.
+      const uangMasuk = uangYangSudahMasuk(orderData);
+
+      // Dibulatkan ke rupiah utuh: 90% hampir selalu meninggalkan pecahan sen,
+      // dan admin mentransfer dalam rupiah penuh. Tanpa pembulatan, nominal
+      // yang tercatat di `refundAmount` selalu meleset tipis dari yang
+      // benar-benar ditransfer, dan selisihnya menggantung di pembukuan.
+      const refundNominal = persen(uangMasuk, PERSEN_REFUND)
+          .toDecimalPlaces(0, Prisma.Decimal.ROUND_HALF_UP);
+
+      // Pesanan yang belum menerima uang sama sekali tidak punya apa pun untuk
+      // dikembalikan. Membiarkannya lewat berarti memerintahkan admin
+      // mentransfer Rp 0 — dan mengunci pesanan di alur refund tanpa hasil.
+      if (nol(uangMasuk)) {
+          return NextResponse.json(
+              { message: "Belum ada pembayaran yang tercatat pada pesanan ini, jadi tidak ada dana yang bisa dikembalikan." },
+              { status: 409 }
+          );
+      }
+
+      const { count } = await prisma.booking.updateMany({
+          where: {
+              id: body.orderId,
+              userId: session.user.id,
+              // Status ikut disyaratkan di query agar dua permintaan yang tiba
+              // bersamaan tidak sama-sama lolos pemeriksaan di atas.
+              status: BookingStatus.WAITING_BANK,
+          },
           data: {
               status: "PROCESS_REFUND",
               userBankName: body.bankName,
               userBankAccount: body.bankAccount,
-              refundAmount: refundNominal 
+              refundAmount: refundNominal
           },
+      });
+
+      if (count === 0) {
+          return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
+      }
+
+      const order = await prisma.booking.findUniqueOrThrow({
+          where: { id: body.orderId },
           include: { billboard: true, user: true }
       });
 
@@ -61,10 +213,17 @@ export async function POST(req: Request) {
               to: adminEmail,
               subject: `💰 Segera Proses Transfer: #${order.id.slice(-6).toUpperCase()}`,
               title: "Data Rekening Masuk",
-              message: `User telah memasukkan data rekening. Mohon segera transfer pengembalian dana Rp ${refundNominal.toLocaleString('id-ID')}.<br/>Bank: ${body.bankName} - ${body.bankAccount}`,
+              // Dasar perhitungan ikut ditulis supaya admin bisa memeriksa
+              // angkanya sebelum mentransfer, bukan hanya mempercayainya.
+              message:
+                  `User telah memasukkan data rekening. Mohon segera transfer pengembalian dana <b>${rupiah(refundNominal)}</b>.<br/><br/>` +
+                  `Nilai pesanan: ${rupiah(order.totalPrice)}<br/>` +
+                  `Uang yang sudah diterima: <b>${rupiah(uangMasuk)}</b>${nol(order.dpAmount) ? ' (lunas)' : ' (DP)'}<br/>` +
+                  `Dikembalikan ${PERSEN_REFUND}% dari uang yang diterima: <b>${rupiah(refundNominal)}</b><br/><br/>` +
+                  `Bank: ${body.bankName} - ${body.bankAccount}`,
               orderDetail: {
                 id: order.id,
-                total: refundNominal, // Total yg harus ditransfer
+                total: keAngka(refundNominal), // Total yg harus ditransfer
                 status: "PROCESS REFUND",
                 billboardTitle: order.billboard.title,
                 billboardAddress: order.billboard.address,

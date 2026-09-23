@@ -100,6 +100,11 @@ export default function UserActions({ user }: { user: any }) {
                                 <option value="USER">USER (Pelanggan)</option>
                                 <option value="ADMIN">ADMIN (Pengelola)</option>
                                 <option value="OPERATOR">OPERATOR (Tim Chat/Order)</option>
+                                {/* CS sebelumnya tidak ada di sini, padahal peran itu
+                                    sah dan punya layoutnya sendiri. Akibatnya CS hanya
+                                    bisa diangkat lewat UserFormModal, tidak lewat
+                                    dashboard pengguna. */}
+                                <option value="CS">CS (Customer Service)</option>
                                 <option value="SUPER_ADMIN">SUPER ADMIN (Dewa)</option>
                             </select>
                         </div>

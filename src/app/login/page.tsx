@@ -35,7 +35,11 @@ export default function LoginPage() {
     } else {
         const session = await getSession();
         const userRole = session?.user?.role;
-        const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'USER_AIDA'];
+        // 'USER_AIDA' dihapus — role itu tidak ada di daftar role mana pun
+        // dan tidak pernah tertulis ke database. 'CS' ditambahkan: tanpa itu,
+        // petugas CS bisa masuk lewat pintu pelanggan dan tidak pernah
+        // diarahkan ke portal admin.
+        const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
 
         if (userRole && adminRoles.includes(userRole)) {
             await signOut({ redirect: false });

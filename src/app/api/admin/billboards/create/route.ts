@@ -3,6 +3,14 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { keDecimal, lebihBesar } from "@/lib/money";
+import {
+  BillboardStatus,
+  PublishStatus,
+  daftarNilai,
+  sahBillboardStatus,
+  sahPublishStatus,
+} from "@/lib/enum-guard";
 
 export async function POST(req: Request) {
   try {
@@ -42,6 +50,38 @@ export async function POST(req: Request) {
     // Jika tidak ada galeri tambahan, buat array kosong
     const galleryJson = JSON.stringify(body.gallery || []);
 
+    // 4b. PERIKSA NILAI DARI FORM SEBELUM MENYENTUH DATABASE
+    //
+    // Harga: `Number(body.price)` mengubah "" menjadi 0 dan "12jt" menjadi
+    // NaN. NaN ditolak kolom Decimal dan muncul ke admin sebagai "Gagal
+    // menyimpan data" tanpa keterangan, setelah seluruh form diisi.
+    const harga = keDecimal(body.price);
+    if (!lebihBesar(harga, 0)) {
+        return NextResponse.json(
+            { message: "Harga sewa harus diisi dengan angka lebih dari 0" },
+            { status: 400 }
+        );
+    }
+
+    // Status: dua kolom di bawah bertipe enum. Nilai asing ditolak database
+    // di lapisan paling dalam; diperiksa di sini supaya pesannya menyebut
+    // nilai apa yang sah.
+    const status = body.status || BillboardStatus.Available;
+    if (!sahBillboardStatus(status)) {
+        return NextResponse.json(
+            { message: `Status tidak dikenal. Pilihan: ${daftarNilai(BillboardStatus)}` },
+            { status: 400 }
+        );
+    }
+
+    const publishStatus = body.publishStatus || PublishStatus.DRAFT;
+    if (!sahPublishStatus(publishStatus)) {
+        return NextResponse.json(
+            { message: `Status publikasi tidak dikenal. Pilihan: ${daftarNilai(PublishStatus)}` },
+            { status: 400 }
+        );
+    }
+
     // 5. SIMPAN KE DATABASE
     const newBillboard = await prisma.billboard.create({
         data: {
@@ -51,13 +91,13 @@ export async function POST(req: Request) {
             address: body.address || "Alamat belum diisi",
             type: body.type || "Baliho",
             
-            // Konversi harga & koordinat ke angka
-            price: Number(body.price),
+            // Koordinat memang Float; harga tidak (lihat 4b di atas).
+            price: harga,
             lat: Number(body.lat) || -7.9,
             lng: Number(body.lng) || 112.6,
-            
-            status: body.status || "Available",
-            publishStatus: body.publishStatus || "DRAFT",
+
+            status,
+            publishStatus,
             mainImage: body.mainImage || "",
             
             // Masukkan data JSON yang sudah dipacking tadi

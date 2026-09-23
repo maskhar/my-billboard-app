@@ -9,6 +9,8 @@ import LocationVisualizer from '@/components/LocationVisualizer';
 import AvailabilityCalendar from '@/components/AvailabilityCalendar';
 import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
+import { safeJsonArray } from '@/lib/safe-json';
+import { rupiahSingkat } from '@/lib/money';
 
 // Tipe properti yang diterima dari Server Component
 type DetailPageClientProps = {
@@ -33,12 +35,21 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
     router.push(`?${params.toString()}`, { scroll: false });
   };
 
-  // Parsing data
-  const gallery = JSON.parse(rawData.gallery) as string[];
-  const specs = JSON.parse(rawData.specs) as { label: string; value: string }[];
-  const includes = JSON.parse(rawData.includes) as string[];
-  const excludes = JSON.parse(rawData.excludes) as string[];
-  const priceJt = (rawData.price / 1000000).toFixed(0);
+  // Parsing data.
+  //
+  // Sebelumnya `JSON.parse` mentah: satu billboard dengan kolom rusak membuat
+  // SELURUH halaman produk publik gagal dirender — bukan hanya bagian galeri
+  // atau spesifikasinya. Sekarang bagian yang rusak tampil kosong, sisanya
+  // tetap terbaca, dan penyebabnya tercatat di log server.
+  const gallery = safeJsonArray<string>(rawData.gallery, `Billboard.gallery id=${rawData.id}`);
+  const specs = safeJsonArray<{ label: string; value: string }>(rawData.specs, `Billboard.specs id=${rawData.id}`);
+  const includes = safeJsonArray<string>(rawData.includes, `Billboard.includes id=${rawData.id}`);
+  const excludes = safeJsonArray<string>(rawData.excludes, `Billboard.excludes id=${rawData.id}`);
+  // Dulu `(rawData.price / 1000000).toFixed(0)` — pembagian pada objek
+  // Decimal menghasilkan NaN, dan harga di halaman produk terbaca "NaN Jt".
+  // `rupiahSingkat` sudah memuat satuannya sendiri ("15 Jt", "1,5 M"), jadi
+  // kata "Jt" yang dulu ditulis terpisah di JSX ikut dihapus.
+  const hargaSingkat = rupiahSingkat(rawData.price);
 
   return (
     <div className="bg-gray-50 min-h-screen font-sans pb-20">
@@ -157,7 +168,7 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
               <div className="mb-6 relative z-10">
                 <span className="text-xs text-gray-400 font-bold uppercase tracking-widest block mb-2">Harga Mulai Dari</span>
                 <div className="flex items-baseline gap-1">
-                  <span className="text-4xl font-extrabold text-utero">{priceJt} Jt</span>
+                  <span className="text-4xl font-extrabold text-utero">{hargaSingkat}</span>
                   <span className="text-gray-400 text-sm font-medium">/Bulan</span>
                 </div>
               </div>

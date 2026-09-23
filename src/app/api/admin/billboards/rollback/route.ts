@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { safeJsonParse } from "@/lib/safe-json";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -18,8 +19,23 @@ export async function POST(req: Request) {
 
         if (!history) return NextResponse.json({ message: "History not found" }, { status: 404 });
 
-        // Parse Snapshot JSON
-        const details = JSON.parse(history.snapshot);
+        // Snapshot yang rusak dulu melempar ke `catch` di bawah dan muncul
+        // sebagai "Gagal Rollback" generik. Lebih buruk lagi kalau hasilnya
+        // objek kosong: setiap field jadi `undefined`, dan Prisma memperlakukan
+        // `undefined` sebagai "jangan ubah kolom ini" — rollback akan dilaporkan
+        // BERHASIL padahal tidak ada satu pun field yang dipulihkan.
+        const details = safeJsonParse<Record<string, any> | null>(
+            history.snapshot,
+            null,
+            `BillboardHistory.snapshot id=${historyId}`
+        );
+
+        if (!details || typeof details !== 'object') {
+            return NextResponse.json(
+                { message: "Data snapshot rusak, rollback dibatalkan agar data tidak tercampur." },
+                { status: 422 }
+            );
+        }
 
         // 2. Kembalikan data ke Billboard Utama
         await prisma.billboard.update({

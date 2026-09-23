@@ -3,13 +3,57 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { dekripsi, enkripsi, enkripsiSiap } from "@/lib/rahasia";
+
+// Menyamarkan API key: hanya 4 karakter terakhir yang ditampilkan.
+// Nilai utuh tidak pernah meninggalkan server.
+function maskApiKey(key: string | null): string | null {
+  if (!key) return null;
+  if (key.length <= 4) return "••••";
+  return `••••${key.slice(-4)}`;
+}
 
 export async function GET(req: Request) {
-  let setting = await prisma.systemSetting.findUnique({ where: { id: "default_config" } });
-  if (!setting) {
-      setting = await prisma.systemSetting.create({ data: { id: "default_config" } });
+  // Sebelumnya handler GET tidak punya gate sama sekali, sehingga Gemini API
+  // key dan Google Maps API key terkirim utuh ke siapa pun yang memanggilnya.
+  // Gate disamakan dengan handler POST di bawah.
+  const session = await getServerSession(authOptions);
+
+  if (!session || session.user.role !== 'SUPER_ADMIN') {
+      return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
-  return NextResponse.json(setting);
+
+  // Pola lama "baca dulu, buat kalau kosong" punya celah balapan: dua admin
+  // yang membuka halaman setelan pada saat yang sama sama-sama membaca
+  // "belum ada", lalu keduanya mencoba membuat baris dengan id yang sama —
+  // yang kedua gagal dengan pelanggaran kunci unik, dan halaman setelan
+  // menolak terbuka. `upsert` menyerahkan keputusan itu ke database, yang
+  // melihat kedua permintaan sekaligus.
+  const setting = await prisma.systemSetting.upsert({
+      where: { id: "default_config" },
+      update: {},
+      create: { id: "default_config" },
+  });
+
+  // Nilai API key tidak dikirim ke browser. Client hanya menerima penanda
+  // "sudah diisi/belum" plus pratinjau ter-mask untuk ditampilkan.
+  //
+  // Nilai di kolom kini tersimpan terenkripsi (lihat `src/lib/rahasia.ts`),
+  // jadi 4 karakter terakhir untuk pratinjau harus diambil dari nilai yang
+  // sudah dibuka — kalau tidak, yang tampil adalah potongan ciphertext.
+  const { geminiApiKey: geminiTersimpan, googleMapsApiKey: mapsTersimpan, ...aman } = setting;
+  const geminiApiKey = dekripsi(geminiTersimpan);
+  const googleMapsApiKey = dekripsi(mapsTersimpan);
+
+  return NextResponse.json({
+      ...aman,
+      geminiApiKey: null,
+      googleMapsApiKey: null,
+      geminiApiKeySet: !!geminiApiKey,
+      googleMapsApiKeySet: !!googleMapsApiKey,
+      geminiApiKeyMasked: maskApiKey(geminiApiKey),
+      googleMapsApiKeyMasked: maskApiKey(googleMapsApiKey),
+  });
 }
 
 export async function POST(req: Request) {
@@ -22,7 +66,16 @@ export async function POST(req: Request) {
   const body = await req.json();
 
   if (body.action === 'TEST_AI') {
-      const apiKey = body.apiKey ? body.apiKey.trim() : "";
+      // Bila client tidak mengirim key (karena GET sudah tidak membocorkannya),
+      // pakai key yang tersimpan di database.
+      let apiKey = body.apiKey ? String(body.apiKey).trim() : "";
+      if (!apiKey) {
+          const tersimpan = await prisma.systemSetting.findUnique({
+              where: { id: "default_config" },
+              select: { geminiApiKey: true },
+          });
+          apiKey = dekripsi(tersimpan?.geminiApiKey)?.trim() || "";
+      }
       if (!apiKey) return NextResponse.json({ message: "API Key kosong!" }, { status: 400 });
 
       // GUNAKAN MODEL TERBARU (Sesuai Log Akunmu)
@@ -67,14 +120,44 @@ export async function POST(req: Request) {
   }
 
   // Save Settings Normal
+  //
+  // API key hanya ditulis bila client benar-benar mengirim nilai baru.
+  // Karena GET tidak lagi mengembalikan key utuh, field yang dibiarkan kosong
+  // di form berarti "jangan ubah" — bukan "hapus key yang tersimpan".
+  const data: Record<string, string | null> = {
+      siteName: body.siteName,
+      siteDesc: body.siteDesc,
+  };
+
+  const adaKeyBaru =
+      (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim() !== "") ||
+      (typeof body.googleMapsApiKey === 'string' && body.googleMapsApiKey.trim() !== "");
+
+  // Menolak menyimpan, bukan menyimpan sebagai teks biasa. Menyimpan diam-diam
+  // tanpa enkripsi adalah cara paling halus untuk membuat pemilik usaha
+  // mengira kuncinya terlindungi padahal tidak.
+  if (adaKeyBaru && !enkripsiSiap()) {
+      return NextResponse.json(
+          {
+              message:
+                  "API key tidak disimpan: SETTINGS_ENCRYPTION_KEY belum diatur di environment server. " +
+                  "Buat dengan `openssl rand -hex 32`, masukkan ke .env, lalu jalankan ulang server.",
+          },
+          { status: 503 }
+      );
+  }
+
+  if (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim() !== "") {
+      data.geminiApiKey = enkripsi(body.geminiApiKey.trim());
+  }
+
+  if (typeof body.googleMapsApiKey === 'string' && body.googleMapsApiKey.trim() !== "") {
+      data.googleMapsApiKey = enkripsi(body.googleMapsApiKey.trim());
+  }
+
   await prisma.systemSetting.update({
       where: { id: "default_config" },
-      data: {
-          siteName: body.siteName,
-          siteDesc: body.siteDesc,
-          geminiApiKey: body.geminiApiKey,
-          googleMapsApiKey: body.googleMapsApiKey
-      }
+      data
   });
 
   return NextResponse.json({ message: "Pengaturan Disimpan" });

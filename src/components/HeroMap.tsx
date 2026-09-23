@@ -5,6 +5,7 @@ import { MapContainer, TileLayer, Marker, Popup, ZoomControl } from 'react-leafl
 import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import Link from 'next/link';
+import { rupiahSingkat } from '@/lib/money';
 
 const icon = L.icon({
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -64,7 +65,7 @@ const HeroMap = ({ billboards }: HeroMapProps) => {
                         <div className="flex flex-col">
                             <span className="text-[10px] text-gray-500">Mulai dari</span>
                             <span className="font-bold text-utero text-sm">
-                                Rp {(board.price / 1000000).toFixed(0)} Jt
+                                Rp {rupiahSingkat(board.price)}
                             </span>
                         </div>
                         <Link href={`/billboard/${board.slug}`} className="bg-utero text-white text-xs px-4 py-2 rounded-lg hover:bg-red-700 transition font-semibold">

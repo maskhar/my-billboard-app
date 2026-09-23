@@ -12,20 +12,52 @@ export default function ChatWidget() {
   const [messages, setMessages] = useState<any[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
   const socketRef = useRef<Socket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastMsgCount = useRef(0);
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:4001"); // Ganti port ke backend NestJS
+    // Dua perbaikan sekaligus di sini:
+    //
+    // 1. PORT. Sebelumnya menyambung ke 4001 (backend NestJS yang dihapus),
+    //    padahal chat-server mendengarkan di 3001. Live chat tidak pernah
+    //    tersambung.
+    //
+    // 2. IDENTITAS TAMU. chat-server kini mewajibkan handshake: tamu harus
+    //    membawa `guestToken` yang diterbitkan server lewat POST /api/chat/start.
+    //    Sebelumnya client mengirim `sessionId` pilihannya sendiri, sehingga
+    //    siapa pun bisa menebak id sesi orang lain dan ikut membaca
+    //    percakapannya. Sekarang sessionId diturunkan dari token, bukan dari
+    //    apa yang dikirim client.
+    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
+    const storedToken = localStorage.getItem('utero_chat_token');
+
+    socketRef.current = io(chatUrl, {
+        auth: storedToken ? { guestToken: storedToken } : undefined,
+    });
 
     socketRef.current.on('connect', () => {
-        console.log('Chat widget connected to NestJS backend');
         const storedId = localStorage.getItem('utero_chat_id');
-        if (storedId) {
+        if (storedId && storedToken) {
             setSessionId(storedId);
             socketRef.current?.emit('joinRoom', storedId);
         }
+    });
+
+    // Server menolak permintaan yang tidak berhak. Tanpa penanganan ini,
+    // widget diam seolah-olah pesan terkirim padahal ditolak.
+    socketRef.current.on('authError', (err: { event?: string; message?: string }) => {
+        console.warn('Chat ditolak server:', err?.event, err?.message);
+        // Sesi tersimpan kemungkinan sudah kedaluwarsa/dicabut — mulai dari awal.
+        localStorage.removeItem('utero_chat_id');
+        localStorage.removeItem('utero_chat_token');
+        setSessionId(null);
+    });
+
+    socketRef.current.on('guestSessionClaimed', ({ sessionId: sid }: { sessionId: string }) => {
+        setSessionId(sid);
+        socketRef.current?.emit('joinRoom', sid);
     });
 
     socketRef.current.on('newMessage', (newMessage) => {
@@ -54,19 +86,27 @@ export default function ChatWidget() {
       e.preventDefault();
       setLoading(true);
       try {
-          const res = await fetch('http://localhost:4001/api/chat/start', { // Arahkan ke backend NestJS
+          const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
+          const res = await fetch(`${chatUrl}/api/chat/start`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(form)
           });
           const session = await res.json();
-          if(session.id) {
+          if (session.id && session.guestToken) {
               localStorage.setItem('utero_chat_id', session.id);
-              setSessionId(session.id);
-              socketRef.current?.emit('joinRoom', session.id);
+              localStorage.setItem('utero_chat_token', session.guestToken);
+              // Socket sudah tersambung sebagai tamu tanpa identitas. Alih-alih
+              // menyambung ulang, tukarkan token di koneksi yang sama —
+              // server yang menetapkan sessionId, lalu membalas
+              // `guestSessionClaimed` yang menjalankan joinRoom.
+              socketRef.current?.emit('claimGuestSession', session.guestToken);
+          } else {
+              setError(session.error || 'Gagal memulai sesi chat.');
           }
       } catch (e) {
         console.error("Gagal memulai sesi chat:", e);
+        setError('Tidak bisa menghubungi layanan chat.');
       }
       setLoading(false);
   };
@@ -126,6 +166,11 @@ export default function ChatWidget() {
           {!sessionId ? (
             <div className="p-6 flex-1 flex flex-col justify-center bg-gray-50">
               <h4 className="text-gray-800 font-bold text-lg mb-6 text-center">Halo! Silakan isi data 👋</h4>
+              {error && (
+                <div className="mb-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg p-3">
+                  {error}
+                </div>
+              )}
               <form onSubmit={handleRegister} className="space-y-3">
                 <input className="w-full border p-3 rounded-lg text-sm" placeholder="Nama Lengkap" value={form.name} onChange={e => setForm({...form, name: e.target.value})} required/>
                 <input className="w-full border p-3 rounded-lg text-sm" placeholder="Email" type="email" value={form.email} onChange={e => setForm({...form, email: e.target.value})} required/>

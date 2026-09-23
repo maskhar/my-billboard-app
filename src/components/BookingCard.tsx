@@ -5,6 +5,14 @@ import { useState, useEffect } from 'react';
 import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+// Nominal yang sampai ke komponen ini sudah diubah menjadi angka biasa oleh
+// halaman induknya. Perbandingan `<`/`>` dan aritmetika `-`/`*` karena itu
+// "berfungsi" hari ini — tapi hanya selama konversi itu ada. Objek Decimal
+// yang lolos ke `<` akan dibandingkan sebagai teks ("900000000" < "99000000"
+// bernilai benar), dan `-` menghasilkan NaN. Karena prop `order` bertipe
+// `any`, tsc tidak akan memperingatkan apa pun. Pembantu money.ts benar pada
+// kedua bentuk, jadi kesalahan itu tidak bisa muncul lagi.
+import { angkaRupiah, kurang, lebihKecil, nol, persen, rupiah } from '@/lib/money';
 
 export default function BookingCard({ order }: { order: any }) {
   const router = useRouter();
@@ -24,21 +32,58 @@ export default function BookingCard({ order }: { order: any }) {
   const [isExpired, setIsExpired] = useState(false);
 
   // LOGIKA 1: TIMER HITUNG MUNDUR (Khusus Pending)
+  //
+  // Dulu tenggatnya dihitung di sini sebagai `createdAt + 24 jam` — angka tetap
+  // yang hanya hidup di browser. Dua akibatnya:
+  //
+  //   1. Tenggat yang ditampilkan adalah TEBAKAN komponen ini, bukan tenggat
+  //      yang ditegakkan sistem. Kalau aturan 24 jam berubah di server, layar
+  //      tetap menghitung 24 jam.
+  //   2. Hitung mundur habis, kartunya berubah "EXPIRED" — tapi barisnya tetap
+  //      PENDING_PAYMENT di database, dan pesanan PENDING_PAYMENT ikut mengunci
+  //      tanggal billboard. Inventori terkunci selamanya oleh pesanan yang
+  //      menurut layarnya sendiri sudah mati.
+  //
+  // Sekarang tenggatnya dibaca dari kolom `expiresAt`, fakta yang ditulis
+  // server saat pesanan dibuat. Pengekspirasian sesungguhnya dikerjakan
+  // `sapuPesananKedaluwarsa` di `src/lib/transisi-status.ts`, yang dipanggil
+  // dari jalur pembuatan pesanan — timer ini hanya menampilkannya.
   useEffect(() => {
     if (order.status !== 'PENDING_PAYMENT') return;
-    const deadline = new Date(order.createdAt).getTime() + (24 * 60 * 60 * 1000);
-    const interval = setInterval(() => {
-        const now = new Date().getTime();
-        const dist = deadline - now;
-        if (dist < 0) { setIsExpired(true); setTimeLeft("EXPIRED"); } 
-        else { 
-            const h = Math.floor(dist / (3600*1000));
-            const m = Math.floor((dist % (3600*1000)) / (60*1000));
-            setTimeLeft(`${h}j ${m}m`); 
+
+    // Pesanan lama dibuat sebelum kolom `expiresAt` ada, jadi tenggatnya tidak
+    // pernah tercatat. Menebaknya dari `createdAt` berarti menampilkan
+    // "EXPIRED" untuk pesanan yang tidak akan dihanguskan penyapu mana pun
+    // (penyapu sengaja melewati baris ber-`expiresAt` kosong). Lebih jujur
+    // tidak menampilkan hitung mundur sama sekali.
+    if (!order.expiresAt) {
+        setTimeLeft("");
+        setIsExpired(false);
+        return;
+    }
+
+    const deadline = new Date(order.expiresAt).getTime();
+
+    const hitung = () => {
+        const dist = deadline - new Date().getTime();
+        if (dist <= 0) {
+            setIsExpired(true);
+            setTimeLeft("EXPIRED");
+            return;
         }
-    }, 1000);
+        setIsExpired(false);
+        const h = Math.floor(dist / (3600 * 1000));
+        const m = Math.floor((dist % (3600 * 1000)) / (60 * 1000));
+        const s = Math.floor((dist % (60 * 1000)) / 1000);
+        setTimeLeft(`${h}j ${m}m ${s}d`);
+    };
+
+    // Dipanggil sekali di depan: tanpa ini layar kosong selama satu detik
+    // pertama, dan pesanan yang sudah lewat tenggat sempat terlihat hidup.
+    hitung();
+    const interval = setInterval(hitung, 1000);
     return () => clearInterval(interval);
-  }, [order]);
+  }, [order.status, order.expiresAt]);
 
 
   // LOGIKA 2: HANDLING TOMBOL UTAMA
@@ -46,20 +91,19 @@ export default function BookingCard({ order }: { order: any }) {
   // A. Upload File Desain ke Server
     const handleDesignSubmit = async (url: string) => {
     setLoading(true);
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     try {
-      const res = await fetch(`${apiUrl}/api/bookings/submit-design`, {
+      const res = await fetch('/api/booking/submit-design', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderId: order.id, designUrl: url }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({} as any));
       if (res.ok) {
         setModalType('NONE');
         alert('✅ Desain Berhasil Dikirim!');
         router.refresh();
       } else {
-        alert('Upload Gagal: ' + data.message);
+        alert('Upload Gagal: ' + (data.message || `Server menolak (${res.status}).`));
       }
     } catch (err) {
       alert('Error Server');
@@ -77,14 +121,15 @@ export default function BookingCard({ order }: { order: any }) {
     formData.append('file', file);
     formData.append('orderId', order.id);
 
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     try {
-      const res = await fetch(`${apiUrl}/api/uploads/design`, { method: 'POST', body: formData });
-      const data = await res.json();
+      // Sengaja TANPA header Content-Type: browser harus menyusunnya sendiri
+      // lengkap dengan boundary multipart.
+      const res = await fetch('/api/upload/design', { method: 'POST', body: formData });
+      const data = await res.json().catch(() => ({} as any));
       if (res.ok) {
         await handleDesignSubmit(data.url);
       } else {
-        alert('Upload Gagal: ' + data.message);
+        alert('Upload Gagal: ' + (data.message || `Server menolak (${res.status}).`));
       }
     } catch (err) {
       alert('Error Server');
@@ -101,34 +146,66 @@ export default function BookingCard({ order }: { order: any }) {
   const handleCancelPending = async () => {
       if(!confirm("Yakin mau membatalkan pesanan?")) return;
       setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/cancel`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: order.id }) 
-      });
-      setLoading(false);
-      router.refresh(); 
+      try {
+        const res = await fetch('/api/booking/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: order.id })
+        });
+        const data = await res.json().catch(() => ({} as any));
+        if (!res.ok) {
+          alert('Gagal membatalkan: ' + (data.message || `Server menolak (${res.status}).`));
+          return;
+        }
+        router.refresh();
+      } catch (err) {
+        alert('Error Server');
+      } finally {
+        setLoading(false);
+      }
   };
 
-  // E. Simulasi Bayar
+  // E. Bayar Online (BELUM AKTIF)
+  //
+  // Route /api/payment/notify sengaja dinonaktifkan (WEBHOOK_AKTIF = false) dan
+  // membalas 503 sampai verifikasi signature payment gateway selesai ditulis.
+  // Selama itu tombol ini TIDAK BOLEH mengklaim pembayaran berhasil: dulu
+  // respons non-OK diabaikan diam-diam, jadi user yang gagal bayar tidak
+  // melihat apa pun sementara statusnya tidak berubah.
   const handlePaySimulation = async () => {
-       const confirmed = confirm(`[SIMULASI XENDIT]\n\nBayar tagihan sebesar Rp ${order.totalPrice.toLocaleString('id-ID')}?`);
+       // Nominal yang ditagih sekarang adalah DP bila pembeli memilih DP,
+       // bukan nilai penuh pesanan. Sebelumnya dialog ini selalu menyebut
+       // `totalPrice`, jadi pembeli DP diminta menyetujui pembayaran 100%.
+       const tagihanSekarang =
+           order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice)
+               ? order.dpAmount
+               : order.totalPrice;
+       const confirmed = confirm(`Lanjutkan pembayaran tagihan sebesar ${rupiah(tagihanSekarang)}?`);
        if (!confirmed) return;
        setLoading(true);
-              const apiUrl = process.env.NEXT_PUBLIC_API_URL;
        try {
-        const res = await fetch(`${apiUrl}/api/payments/notify`, { 
-          method: 'POST', 
+        const res = await fetch('/api/payment/notify', {
+          method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id }) 
+          body: JSON.stringify({ orderId: order.id })
         });
-        if(res.ok) {
-            alert("Pembayaran Diterima! Status menunggu verifikasi Admin.");
-            router.refresh();
+
+        if (!res.ok) {
+            alert(
+              "⚠️ Pembayaran online belum aktif.\n\n" +
+              "Sistem pembayaran otomatis masih dalam proses pemasangan, jadi tagihan ini BELUM terbayar. " +
+              "Silakan lakukan pembayaran manual lalu hubungi Admin untuk konfirmasi — status pesanan akan diperbarui Admin setelah dana diverifikasi."
+            );
+            return;
         }
-       } catch(e) {}
-       setLoading(false);
+
+        alert("Pembayaran Diterima! Status menunggu verifikasi Admin.");
+        router.refresh();
+       } catch(e) {
+        alert("Tidak dapat menghubungi server pembayaran. Tagihan belum terbayar.");
+       } finally {
+        setLoading(false);
+       }
   };
 
   // F. Submit Alasan Refund
@@ -136,16 +213,25 @@ export default function BookingCard({ order }: { order: any }) {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/request-refund`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ step: 'reason', orderId: order.id, reason: form.get("reason") })
-      });
-      alert("Permintaan dikirim. Menunggu persetujuan Admin.");
-      setLoading(false);
-      setModalType('NONE');
-      router.refresh();
+      try {
+        const res = await fetch('/api/booking/request-refund', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ step: 'reason', orderId: order.id, reason: form.get("reason") })
+        });
+        const data = await res.json().catch(() => ({} as any));
+        if (!res.ok) {
+            alert("Gagal mengirim permintaan: " + (data.message || `Server menolak (${res.status}).`));
+            return;
+        }
+        alert("Permintaan dikirim. Menunggu persetujuan Admin.");
+        setModalType('NONE');
+        router.refresh();
+      } catch (err) {
+        alert('Error Server');
+      } finally {
+        setLoading(false);
+      }
   }
 
   // G. Submit Nomor Rekening
@@ -153,21 +239,30 @@ export default function BookingCard({ order }: { order: any }) {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/request-refund`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-              step: 'bank', 
-              orderId: order.id, 
-              bankName: form.get("bankName"), 
-              bankAccount: form.get("bankAccount") 
-          })
-      });
-      alert("Rekening disimpan. Dana diproses Admin.");
-      setLoading(false);
-      setModalType('NONE');
-      router.refresh();
+      try {
+        const res = await fetch('/api/booking/request-refund', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                step: 'bank',
+                orderId: order.id,
+                bankName: form.get("bankName"),
+                bankAccount: form.get("bankAccount")
+            })
+        });
+        const data = await res.json().catch(() => ({} as any));
+        if (!res.ok) {
+            alert("Gagal menyimpan rekening: " + (data.message || `Server menolak (${res.status}).`));
+            return;
+        }
+        alert("Rekening disimpan. Dana diproses Admin.");
+        setModalType('NONE');
+        router.refresh();
+      } catch (err) {
+        alert('Error Server');
+      } finally {
+        setLoading(false);
+      }
   }
 
 
@@ -219,14 +314,51 @@ export default function BookingCard({ order }: { order: any }) {
             <div className="flex flex-col justify-center border-l border-r border-gray-100 px-6">
                 <div className="mb-2">
                     <p className="text-[10px] text-gray-400 font-bold uppercase">Total Tagihan</p>
-                    <p className="text-lg font-bold text-gray-900">Rp {order.totalPrice.toLocaleString('id-ID')}</p>
+                    <p className="text-lg font-bold text-gray-900">Rp {angkaRupiah(order.totalPrice)}</p>
+
+                    {/*
+                      Pesanan DP: yang harus dibayar SEKARANG bukan totalnya.
+                      Tanpa baris ini pembeli hanya melihat nilai penuh dan
+                      mengira itulah tagihannya — padahal ia memilih DP 60%.
+                      `dpAmount` bernilai 0 pada pesanan lunas, dan 0 memang
+                      berarti "tidak ada tagihan DP terpisah" di sini.
+                    */}
+                    {order.status === 'PENDING_PAYMENT' && !!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice) && (
+                        <div className="mt-1 bg-orange-50 border border-orange-100 rounded px-2 py-1">
+                            <p className="text-[9px] text-orange-600 font-bold uppercase">Dibayar Sekarang (DP)</p>
+                            <p className="text-sm font-bold text-orange-700">Rp {angkaRupiah(order.dpAmount)}</p>
+                            {/*
+                              Dulu `order.totalPrice - order.dpAmount`. Itu
+                              berfungsi hanya selama halaman induk sempat
+                              mengubah kedua nominal menjadi angka biasa. Bila
+                              konversi itu suatu saat lepas, `-` atas dua objek
+                              Decimal menghasilkan NaN diam-diam — pelanggan
+                              membaca "Sisa Rp NaN", dan tsc tidak berkata
+                              apa-apa karena `order` bertipe `any`. `kurang`
+                              dari money.ts benar pada kedua bentuk.
+                            */}
+                            <p className="text-[9px] text-orange-500">Sisa Rp {angkaRupiah(kurang(order.totalPrice, order.dpAmount))} dibayar H-3 tayang</p>
+                        </div>
+                    )}
                 </div>
 
                 {/* Skenario 1: Pending & Belum Expired -> Bayar */}
                 {order.status === 'PENDING_PAYMENT' && !isExpired && (
-                     <div className='flex gap-2'>
-                        <button onClick={handlePaySimulation} className="flex-1 bg-red-600 text-white text-xs py-2 rounded font-bold hover:bg-red-700 shadow-md">Bayar</button>
-                        <button onClick={handleCancelPending} className="px-3 bg-gray-100 text-gray-500 text-xs py-2 rounded hover:bg-gray-200 font-bold">Batal</button>
+                     <div className='flex flex-col gap-2'>
+                        {/* Sisa waktu dibaca dari kolom expiresAt — lihat catatan timer di atas. */}
+                        {timeLeft && (
+                            <div className="flex items-center gap-1 text-[10px] font-bold text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
+                                <Clock size={11} /> Sisa waktu bayar: {timeLeft}
+                            </div>
+                        )}
+                        <div className='flex gap-2'>
+                            {/* Pembayaran online dinonaktifkan sampai verifikasi
+                                signature gateway selesai; tombol dimatikan agar
+                                tidak menjanjikan sesuatu yang ditolak server. */}
+                            <button onClick={handlePaySimulation} disabled title="Pembayaran online belum aktif" className="flex-1 bg-gray-200 text-gray-500 text-xs py-2 rounded font-bold cursor-not-allowed">Bayar</button>
+                            <button onClick={handleCancelPending} disabled={loading} className="px-3 bg-gray-100 text-gray-500 text-xs py-2 rounded hover:bg-gray-200 font-bold disabled:opacity-50">Batal</button>
+                        </div>
+                        <p className="text-[9px] text-gray-500 leading-snug">Pembayaran online belum aktif. Pelunasan dikonfirmasi Admin setelah transfer manual.</p>
                      </div>
                 )}
                 
@@ -372,7 +504,20 @@ export default function BookingCard({ order }: { order: any }) {
             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
                 <div className="bg-gray-50 px-6 py-4 border-b flex justify-between items-center"><h3 className="font-bold text-gray-800">Kenapa ingin batal?</h3><button onClick={() => setModalType('NONE')} className="text-gray-400 hover:text-red-500">✕</button></div>
                 <form onSubmit={handleSubmitReason} className="p-6 space-y-4">
-                    <div className="bg-yellow-50 text-yellow-800 text-xs p-3 rounded border border-yellow-200">⚠ Dana refund akan dipotong biaya admin 10%.</div>
+                    {/*
+                      Dasar refund disebut lengkap: 90% dari UANG YANG SUDAH
+                      MASUK, bukan dari nilai pesanan. Pada pesanan DP dua
+                      angka itu jauh berbeda, dan kalimat lama ("dipotong
+                      biaya admin 10%") membuat pembeli mengira ia akan
+                      menerima 90% dari total pesanan — termasuk bagian yang
+                      belum pernah ia bayarkan.
+                    */}
+                    <div className="bg-yellow-50 text-yellow-800 text-xs p-3 rounded border border-yellow-200">
+                        ⚠ Dana yang dikembalikan adalah <b>90% dari pembayaran yang sudah Anda lakukan</b> (dipotong biaya admin 10%).
+                        {!!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice) && (
+                            <> Anda baru membayar DP <b>Rp {angkaRupiah(order.dpAmount)}</b>, sehingga perkiraan refund <b>Rp {angkaRupiah(persen(order.dpAmount, 90))}</b>.</>
+                        )}
+                    </div>
                     <textarea name="reason" placeholder="Jelaskan alasan..." className="w-full border rounded-lg p-3 text-sm mt-1 h-24 focus:outline-none focus:border-utero" required></textarea>
                     <button disabled={loading} type="submit" className="w-full bg-utero text-white py-3 rounded-lg font-bold hover:bg-red-700 transition">{loading ? 'Mengirim...' : 'Ajukan Pembatalan'}</button>
                 </form>
@@ -386,7 +531,11 @@ export default function BookingCard({ order }: { order: any }) {
             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
                 <div className="bg-green-50 px-6 py-4 border-b flex justify-between items-center"><h3 className="font-bold text-green-800 flex items-center gap-2"><Landmark size={18}/> Input Rekening</h3><button onClick={() => setModalType('NONE')} className="text-gray-400 hover:text-red-500">✕</button></div>
                 <form onSubmit={handleSubmitBank} className="p-6 space-y-4">
-                    <p className="text-sm text-gray-600 mb-2">Dana refund 90% akan ditransfer ke:</p>
+                    {/* Nominal pasti dihitung server dari uang yang sudah masuk;
+                        di sini hanya disebut dasarnya, bukan angka yang mengikat. */}
+                    <p className="text-sm text-gray-600 mb-2">
+                        Dana refund (90% dari pembayaran yang sudah masuk) akan ditransfer ke:
+                    </p>
                     <div className="grid grid-cols-2 gap-4">
                         <input name="bankName" placeholder="Bank (cth: BCA)" className="w-full border rounded-lg p-3 text-sm font-bold" required />
                         <input name="bankAccount" type="number" placeholder="No Rekening" className="w-full border rounded-lg p-3 text-sm font-bold" required />

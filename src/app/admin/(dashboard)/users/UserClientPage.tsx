@@ -4,16 +4,33 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { Pencil, Wallet } from 'lucide-react';
-import type { User, Booking } from '@prisma/client';
 import UserFormModal from './UserFormModal';
+import { rupiah } from '@/lib/money';
 
 const GOOGLE_ICON = "https://cdn.iconscout.com/icon/free/png-256/free-google-1772223-1507807.png";
 
-type UserWithBookings = User & {
-    bookings: Booking[];
+// Tipe ini dulu `User & { bookings: Booking[] }` — tipe Prisma utuh, jauh
+// lebih longgar daripada data yang benar-benar dikirim, sehingga halaman
+// induk harus memakai cast `as unknown as` agar TypeScript diam. Kini ia
+// menggambarkan persis apa yang menyeberang: kolom aman milik pengguna,
+// plus dua angka yang sudah dijumlahkan di database.
+//
+// `bookings` sengaja TIDAK ada lagi di sini. Sebelumnya seluruh baris pesanan
+// tiap pengguna dikirim ke browser hanya untuk dijumlahkan di sana lalu
+// dibuang — dan ikut tertanam di HTML halaman.
+export type BarisPengguna = {
+    id: string;
+    name: string | null;
+    email: string | null;
+    image: string | null;
+    role: string;
+    authProvider: string | null;
+    createdAt: string;
+    jumlahOrder: number;
+    totalSpent: number;
 };
 
-export default function UserClientPage({ users }: { users: UserWithBookings[] }) {
+export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     return (
@@ -47,10 +64,13 @@ export default function UserClientPage({ users }: { users: UserWithBookings[] })
                     </thead>
                     <tbody className="divide-y divide-gray-100 text-sm">
                         {users.map((user) => {
-                            const totalSpent = user.bookings
-                                .filter(b => b.status === 'ACTIVE' || b.status === 'REFUNDED')
-                                .reduce((acc, curr) => acc + curr.totalPrice, 0);
-
+                            // Penjumlahan "Total Spending" dulu dilakukan di
+                            // sini, di browser, atas seluruh baris pesanan yang
+                            // dikirim serta. Kini sudah dihitung database
+                            // (lihat `page.tsx`), memakai daftar status yang
+                            // sama persis dengan kartu omzet admin — sehingga
+                            // dua halaman tidak bisa lagi menampilkan angka
+                            // yang berbeda untuk hal yang sama.
                             return (
                                 <tr key={user.id} className="hover:bg-gray-50 transition">
                                     <td className="px-6 py-4">
@@ -98,12 +118,12 @@ export default function UserClientPage({ users }: { users: UserWithBookings[] })
                                     </td>
 
                                     <td className="px-6 py-4">
-                                        <span className="font-bold text-gray-700">{user.bookings.length}</span> <span className="text-xs text-gray-400">Trx</span>
+                                        <span className="font-bold text-gray-700">{user.jumlahOrder}</span> <span className="text-xs text-gray-400">Trx</span>
                                     </td>
 
                                     <td className="px-6 py-4">
                                         <div className="flex items-center gap-1 text-green-700 font-bold">
-                                            <Wallet size={14} className="opacity-50"/> Rp {totalSpent.toLocaleString('id-ID')}
+                                            <Wallet size={14} className="opacity-50"/> {rupiah(user.totalSpent)}
                                         </div>
                                     </td>
 

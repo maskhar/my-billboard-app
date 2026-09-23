@@ -40,9 +40,11 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
     setIsOpen(false);
     
     try {
-      const body = { [type]: value }; // Correctly set the key based on the 'type'
-      const res = await fetch(`/api/proxy/billboards/${billboardId}/status`, {
-        method: 'PATCH',
+      // Dialihkan dari /api/proxy (yang tidak punya autentikasi sama sekali)
+      // ke route admin yang memverifikasi sesi dan role.
+      const body = { id: billboardId, [type]: value };
+      const res = await fetch('/api/admin/billboards/quick-update', {
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });

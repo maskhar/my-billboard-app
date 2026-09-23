@@ -7,6 +7,8 @@ import { useState } from 'react';
 import type { Booking, User, Billboard, AdditionalCharge } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
+import { safeJsonArray } from '@/lib/safe-json';
+import { jumlah, rupiah } from '@/lib/money';
 
 type Transaction = Booking & {
   user: User;
@@ -188,7 +190,23 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
     </div>
   );
 
-  const grandTotal = selected ? selected.totalPrice + (selected.additionalCharges?.reduce((sum, charge) => sum + charge.amount, 0) || 0) : 0;
+  // Dulu: `totalPrice + charges.reduce((sum, c) => sum + c.amount, 0)`.
+  // Nominal di database bertipe Decimal (objek), jadi `+` menyambung teks
+  // alih-alih menjumlah — Grand Total muncul sebagai deretan digit menempel,
+  // tanpa error apa pun. Sekarang dihitung sebagai Decimal.
+  const grandTotal = selected
+    ? jumlah(selected.totalPrice, ...(selected.additionalCharges ?? []).map((c) => c.amount))
+    : 0;
+
+  // Diurai sekali, bukan tiga kali di dalam JSX. Selain memboroskan pekerjaan,
+  // `JSON.parse` mentah di tengah render membuat satu baris DB rusak
+  // menjatuhkan seluruh halaman transaksi admin.
+  const specsBillboard = safeJsonArray<{ label: string; value: string }>(
+    selected?.billboard?.specs,
+    `Billboard.specs order=${selected?.id ?? '-'}`
+  );
+  const cariSpec = (kataKunci: string) =>
+    specsBillboard.find((s) => typeof s?.label === 'string' && s.label.includes(kataKunci))?.value;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-[calc(100vh-200px)]">
@@ -229,7 +247,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                 </div>
                 <div className="text-right">
                   <p className="text-gray-500">Total Amount</p>
-                  <p className="text-3xl font-bold text-utero">Rp {grandTotal.toLocaleString('id-ID')}</p>
+                  <p className="text-3xl font-bold text-utero">{rupiah(grandTotal)}</p>
                 </div>
               </div>
 
@@ -251,12 +269,12 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                     
                     <DetailSection title="Billing Details">
                         <div className="space-y-1 text-sm border-b pb-2 mb-2">
-                            <InfoPair label="Harga Pokok" value={`Rp ${selected.totalPrice.toLocaleString('id-ID')}`} />
+                            <InfoPair label="Harga Pokok" value={rupiah(selected.totalPrice)} />
                             {selected.additionalCharges.map(charge => (
-                                <InfoPair key={charge.id} label={charge.description} value={`+ Rp ${charge.amount.toLocaleString('id-ID')}`} />
+                                <InfoPair key={charge.id} label={charge.description} value={`+ ${rupiah(charge.amount)}`} />
                             ))}
                         </div>
-                        <InfoPair label="Grand Total" value={`Rp ${grandTotal.toLocaleString('id-ID')}`} />
+                        <InfoPair label="Grand Total" value={rupiah(grandTotal)} />
 
                         <AddChargeForm orderId={selected.id} />
                     </DetailSection>
@@ -269,9 +287,9 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
                            <span>Location:</span><span className="font-medium text-gray-800">{selected.billboard.address}</span>
                            <span>Type:</span><span className="font-medium text-gray-800">{selected.billboard.type}</span>
-                           <span>Lighting:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Penerangan"))?.value}</span>
-                           <span>Size:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Ukuran"))?.value}</span>
-                           <span>Orientation:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Layout"))?.value}</span>
+                           <span>Lighting:</span><span className="font-medium text-gray-800">{cariSpec("Penerangan") || '-'}</span>
+                           <span>Size:</span><span className="font-medium text-gray-800">{cariSpec("Ukuran") || '-'}</span>
+                           <span>Orientation:</span><span className="font-medium text-gray-800">{cariSpec("Layout") || '-'}</span>
                         </div>
                     </DetailSection>
 

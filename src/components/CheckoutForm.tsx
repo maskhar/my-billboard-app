@@ -31,15 +31,34 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   // Data User
   const { data: session } = useSession();
 
-  // Logika Harga
+  // ==========================================================================
+  // PRATINJAU HARGA — angka di bawah hanya untuk DILIHAT.
+  //
+  // Angka yang MENGIKAT dihitung ulang oleh server di
+  // `src/app/api/booking/create/route.ts` dari harga billboard di database.
+  // Dulu komponen ini mengirimkan `totalPrice` dan `dpAmount` hasil hitungannya
+  // sendiri lewat payload, dan server menyimpannya apa adanya — artinya harga
+  // pesanan ditentukan oleh browser pembeli, dan siapa pun bisa memesan
+  // billboard Rp 300 juta seharga Rp 1 dengan satu perintah `curl`.
+  //
+  // Karena itu payload di handlePayment TIDAK BOLEH memuat nominal apa pun
+  // lagi. Tarif di bawah wajib sama persis dengan konstanta di route tersebut
+  // (PERSEN_PPN, BIAYA_ADMIN, PERSEN_DP) — kalau berbeda, pembeli melihat satu
+  // angka di layar lalu ditagih angka lain.
+  // ==========================================================================
   const pricePerMonth = billboard.price;
   const adminFee = 50000;
-  
-  const subTotalSewa = pricePerMonth * duration; 
-  const ppn = subTotalSewa * 0.11; 
-  const grandTotal = subTotalSewa + ppn + adminFee;
-  
-  const mustPayNow = paymentType === 'full' ? grandTotal : (grandTotal * 0.60);
+
+  // Dibulatkan ke rupiah utuh di setiap langkah, meniru pembulatan server.
+  // Tanpa ini PPN 11% dan DP 60% meninggalkan pecahan sen yang membuat angka
+  // di layar meleset dari angka yang tercatat di database.
+  const bulatkan = (n: number) => Math.round(n);
+
+  const subTotalSewa = bulatkan(pricePerMonth * duration);
+  const ppn = bulatkan(subTotalSewa * 0.11);
+  const grandTotal = bulatkan(subTotalSewa + ppn + adminFee);
+
+  const mustPayNow = paymentType === 'full' ? grandTotal : bulatkan(grandTotal * 0.60);
 
   const handlePayment = async () => {
       const userRole = session?.user?.role;
@@ -56,31 +75,48 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
 
       setIsLoading(true);
 
+      // TIDAK ADA NOMINAL DI SINI, dan jangan ditambahkan kembali.
+      // `paymentType` memilih SKEMA bayar (lunas / DP); besarnya ditentukan
+      // server. Lihat catatan pratinjau harga di atas.
       const payload = {
           billboardId: billboard.id,
           duration: duration,
-          totalPrice: grandTotal,
           paymentType: paymentType,
-          dpAmount: mustPayNow, 
           designOption: designOption,
           startDateString: dateInput.value
       };
 
       try {
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-          const response = await fetch(`${apiUrl}/api/bookings`, {
+          const response = await fetch('/api/booking/create', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload)
           });
 
-          const result = await response.json();
+          // Respons error bisa saja bukan JSON (mis. halaman error), jadi
+          // parsing dijaga agar pesan aslinya tidak tertelan oleh catch.
+          const result = await response.json().catch(() => ({} as any));
 
           if (response.ok) {
-              alert("✅ ORDER DITERIMA! Silakan cek invoice di Dashboard.");
-              router.push('/dashboard'); 
+              // Nominal yang dikonfirmasi diambil dari BALASAN SERVER, bukan
+              // dari `mustPayNow` di layar. Keduanya seharusnya sama; kalau
+              // suatu saat berbeda (tarif di sini tertinggal dari tarif
+              // server), pembeli harus melihat angka yang benar-benar ditagih
+              // — bukan angka yang tadi dipajang.
+              const tagihan = typeof result.tagihanSekarang === 'number'
+                  ? result.tagihanSekarang
+                  : null;
+
+              alert(
+                  "✅ ORDER DITERIMA!\n\n" +
+                  (tagihan !== null
+                      ? `Nominal yang harus dibayar: Rp ${tagihan.toLocaleString('id-ID')}\n\n`
+                      : "") +
+                  "Silakan cek invoice di Dashboard."
+              );
+              router.push('/dashboard');
           } else {
-              alert("❌ Gagal: " + result.message);
+              alert("❌ Gagal: " + (result.message || `Server menolak (${response.status}).`));
           }
 
       } catch (err) {
@@ -116,7 +152,17 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                         >
                             <Calendar size={24} className="mb-2 opacity-80"/>
                             <span className="font-bold text-lg">{bulan} Bulan</span>
-                            {bulan === 12 && <span className="text-[10px] bg-yellow-400 text-black px-1 rounded font-bold mt-1">Hemat!</span>}
+                            {/*
+                              Badge "Hemat!" pada pilihan 12 bulan DIHAPUS.
+                              Tidak ada potongan harga untuk durasi mana pun:
+                              tarifnya lurus `harga × durasi`, sehingga 12 bulan
+                              dihitung dengan harga per bulan yang sama persis
+                              dengan 1 bulan. Badge itu menjanjikan diskon yang
+                              tidak pernah diberikan — klaim yang menyesatkan
+                              konsumen. Kalau nanti memang ada tarif bertingkat,
+                              tambahkan potongannya di server lebih dulu
+                              (booking/create), baru tampilkan labelnya di sini.
+                            */}
                         </div>
                     ))}
                 </div>

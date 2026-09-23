@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // PERBAIKAN: Menambahkan 'Plus' di sini
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
+import { safeJsonArray } from '@/lib/safe-json';
+import { angkaRupiah } from '@/lib/money';
 
 export default function BillboardFormPage() {
   const router = useRouter();
@@ -44,30 +46,43 @@ export default function BillboardFormPage() {
   useEffect(() => {
       if (billboardId) {
           setFetching(true);
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-          fetch(`${apiUrl}/api/billboards/${billboardId}/detail`)
-            .then(res => res.json())
+          fetch(`/api/admin/billboards/detail?id=${encodeURIComponent(billboardId)}`)
+            .then(res => {
+                if (!res.ok) throw new Error('Gagal memuat data billboard.');
+                return res.json();
+            })
             .then(data => {
                 if(data) {
-                    const parsedGallery = JSON.parse(data.gallery || "[]");
-                    const dbIncludes = JSON.parse(data.includes || "[]");
-                    const parsedSpecs = JSON.parse(data.specs || "[]");
+                    // `JSON.parse` mentah di dalam `.then()` melempar ke `.catch`
+                    // di bawah, sehingga kolom yang rusak muncul sebagai "gagal
+                    // memuat" — admin tidak punya petunjuk bahwa datanyalah yang
+                    // cacat, dan tidak bisa membuka form untuk memperbaikinya.
+                    // Sekarang bagian rusak jadi kosong dan form tetap terbuka.
+                    const parsedGallery = safeJsonArray<string>(data.gallery, `Billboard.gallery id=${billboardId}`);
+                    const dbIncludes = safeJsonArray<string>(data.includes, `Billboard.includes id=${billboardId}`);
+                    const parsedSpecs = safeJsonArray<{ label: string; value: string }>(data.specs, `Billboard.specs id=${billboardId}`);
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
-                    
+
                     const sizeSpec = parsedSpecs.find((s:any) => s.label === "Ukuran")?.value || "";
                     if(sizeSpec) { const parts = sizeSpec.replace(/m/g, '').split('x'); if(parts.length===2) { h=parts[0].trim(); w=parts[1].trim(); }}
 
-                    const sOrient = parsedSpecs.find((s:any) => s.label.includes("Layout"))?.value;
+                    // `s.label.includes(...)` melempar bila ada satu entri tanpa
+                    // `label` — array-nya sah tapi isinya tidak. Dijaga di satu
+                    // tempat lewat helper ini.
+                    const cariSpec = (kataKunci: string) =>
+                        parsedSpecs.find((s:any) => typeof s?.label === 'string' && s.label.includes(kataKunci))?.value;
+
+                    const sOrient = cariSpec("Layout");
                     if(sOrient) orient = sOrient;
 
-                    const sLight = parsedSpecs.find((s:any) => s.label.includes("Penerangan"))?.value;
+                    const sLight = cariSpec("Penerangan");
                     if(sLight) light = sLight;
-                    
-                    const sMat = parsedSpecs.find((s:any) => s.label.includes("Material"))?.value;
+
+                    const sMat = cariSpec("Material");
                     if(sMat) mat = sMat;
-                    
-                    const sSides = parsedSpecs.find((s:any) => s.label.includes("Tampilan"))?.value?.replace(' Sisi', '');
+
+                    const sSides = cariSpec("Tampilan")?.replace(' Sisi', '');
                     if(sSides) sides = sSides;
 
                     const mergedOptions = defaultAdminOptions.map(opt => ({ name: opt.name, included: dbIncludes.includes(opt.name) }));
@@ -83,7 +98,10 @@ export default function BillboardFormPage() {
                 }
                 setFetching(false);
             })
-            .catch(() => setFetching(false));
+            .catch(() => {
+                setFetching(false);
+                alert("Gagal memuat data billboard. Silakan muat ulang halaman.");
+            });
       }
   }, [billboardId]);
 
@@ -111,48 +129,52 @@ export default function BillboardFormPage() {
   const handleRollback = async (historyItem: any) => {
       if(!confirm(`Rollback data?`)) return;
       setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/billboards/rollback`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ historyId: historyItem.id }) 
-      });
-      setLoading(false); window.location.reload(); 
+      try {
+          const res = await fetch('/api/admin/billboards/rollback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ historyId: historyItem.id })
+          });
+          if (!res.ok) {
+              alert("Gagal melakukan rollback. Silakan coba lagi.");
+              setLoading(false);
+              return;
+          }
+          window.location.reload();
+      } catch {
+          alert("Gagal terhubung ke server.");
+          setLoading(false);
+      }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
       e.preventDefault();
       setLoading(true);
       
-      const packedSpecs = JSON.stringify([
-          { label: "Ukuran", value: `${form.sizeH}m x ${form.sizeW}m` },
-          { label: "Luas Area", value: `${(Number(form.sizeH) * Number(form.sizeW)).toFixed(1)} m²` },
-          { label: "Layout / Orientasi", value: form.orientation },
-          { label: "Tampilan", value: form.sides + " Sisi" },
-          { label: "Jenis Penerangan", value: form.lighting },
-          { label: "Material", value: form.material }
-      ]);
-      const includesList = form.adminOptions.filter((o:any)=>o.included).map((o:any)=>o.name);
-      const excludesList = form.adminOptions.filter((o:any)=>!o.included).map((o:any)=>o.name);
-
-      const payload = { 
-          ...form, id: billboardId,
-          specs: packedSpecs, includes: JSON.stringify(includesList), excludes: JSON.stringify(excludesList), gallery: form.gallery
+      // Route Next (create/update) yang menyusun sendiri `specs`, `includes`,
+      // dan `excludes` dari `adminOptions` + field ukuran mentah, jadi cukup
+      // kirim data form apa adanya.
+      const payload = {
+          ...form,
+          ...(billboardId ? { id: billboardId } : {}),
+          gallery: form.gallery,
+          adminOptions: form.adminOptions
       };
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      const endpoint = billboardId ? `${apiUrl}/api/billboards/${billboardId}` : `${apiUrl}/api/billboards`;
-      const method = billboardId ? 'PATCH' : 'POST';
+      const endpoint = billboardId ? '/api/admin/billboards/update' : '/api/admin/billboards/create';
 
       try {
-          const res = await fetch(endpoint, { 
-              method: method, 
-              headers: {'Content-Type': 'application/json'}, 
-              body: JSON.stringify(payload) 
+          const res = await fetch(endpoint, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json'},
+              body: JSON.stringify(payload)
           });
           if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
-          else { const msg = await res.json(); alert("Gagal: " + msg.message); }
-      } catch(err) { alert("Error Server"); }
+          else {
+              const msg = await res.json().catch(() => null);
+              alert("Gagal menyimpan data" + (msg?.message ? `: ${msg.message}` : "."));
+          }
+      } catch(err) { alert("Gagal terhubung ke server."); }
       setLoading(false);
   }
 
@@ -282,7 +304,7 @@ export default function BillboardFormPage() {
                                             <span>{log.changedBy?.name || "System"}</span>
                                             <span className="text-[10px] font-normal text-gray-400">{new Date(log.archivedAt).toLocaleDateString()}</span>
                                         </div>
-                                        <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {log.price.toLocaleString()}</p>
+                                        <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {angkaRupiah(log.price)}</p>
                                         <button onClick={()=>handleRollback(log)} className="text-blue-600 font-bold hover:underline flex gap-1"><RotateCcw size={10}/> Restore</button>
                                     </div>
                                 ))

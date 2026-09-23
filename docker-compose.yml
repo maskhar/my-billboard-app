@@ -7,8 +7,13 @@ services:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
       - POSTGRES_DB=utero-cloud-db
+    # Port 5432 di mesin ini sudah dipakai container Postgres milik proyek
+    # lain (`central-postgres`). Selama compose ini masih menulis '5432:5432',
+    # container di sini gagal naik — dan aplikasi diam-diam menyapa server
+    # milik proyek lain, yang menolaknya dengan P1000. Digeser ke 15436,
+    # mengikuti pola container database lain di mesin ini (15432-15435).
     ports:
-      - '5432:5432'
+      - '15436:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

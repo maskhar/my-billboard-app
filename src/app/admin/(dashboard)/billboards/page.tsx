@@ -1,41 +1,62 @@
-// import { prisma } from '@/lib/prisma';
+import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
 import { Plus, MapPin, Tag, Edit, Eye, User, Clock } from 'lucide-react';
-import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn'; 
-import StatusChanger from '@/components/admin/StatusChanger'; 
-import { Billboard, User as UserType } from '@prisma/client';
+import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn';
+import StatusChanger from '@/components/admin/StatusChanger';
+import { Billboard } from '@prisma/client';
+import { angkaRupiah } from '@/lib/money';
 
 export const dynamic = 'force-dynamic';
 
+// Hanya `name` yang dirender (inisial + nama pengubah terakhir). Kolom User
+// lainnya — email, hash password, KTP, NPWP — tidak ikut dikirim ke browser.
 type BillboardWithUsers = Billboard & {
-  updatedBy: UserType | null;
-  createdBy: UserType | null;
+  updatedBy: { id: string; name: string | null } | null;
+  createdBy: { id: string; name: string | null } | null;
 }
 
-async function getAdminBillboards(): Promise<BillboardWithUsers[]> {
+// Sebelumnya lewat HTTP ke backend NestJS. Halaman ini Server Component dan
+// akses ke halaman admin sudah dijaga middleware, jadi query langsung sudah
+// cukup — dan menghilangkan ketergantungan pada proses kedua yang harus hidup.
+// Tanpa batas, query ini mengambil SELURUH inventori setiap kali halaman
+// dibuka — beserta gambar, spesifikasi, dan dua relasi User per baris. Dengan
+// 30 billboard itu tidak terasa; dengan 3.000 halaman ini berhenti terbuka
+// sama sekali, dan tidak ada satu pun pesan yang menjelaskan kenapa.
+const PER_HALAMAN = 25;
+
+async function getAdminBillboards(halaman: number): Promise<{ data: BillboardWithUsers[]; total: number }> {
   try {
-    // WARNING: This is now an unauthenticated call for debugging purposes.
-    const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4001';
-    const targetUrl = `${backendUrl}/api/billboards/admin`;
-
-    const res = await fetch(targetUrl, { cache: 'no-store' });
-
-    if (!res.ok) {
-      console.error("Gagal mengambil data admin billboards:", res.status, await res.text());
-      return [];
-    }
-    
-    const billboards = await res.json();
-    return billboards;
-
+    const [data, total] = await prisma.$transaction([
+      prisma.billboard.findMany({
+        orderBy: { updatedAt: 'desc' },
+        include: {
+          createdBy: { select: { id: true, name: true } },
+          updatedBy: { select: { id: true, name: true } },
+        },
+        skip: (halaman - 1) * PER_HALAMAN,
+        take: PER_HALAMAN,
+      }),
+      prisma.billboard.count(),
+    ]);
+    return { data, total };
   } catch (error) {
-    console.error("Gagal mengambil data admin billboards:", error);
-    return [];
+    console.error('Gagal mengambil data admin billboards:', error);
+    return { data: [], total: 0 };
   }
 }
 
-export default async function AdminBillboardsPage() {
-  const billboards = await getAdminBillboards();
+export default async function AdminBillboardsPage({
+  searchParams,
+}: {
+  searchParams?: { halaman?: string };
+}) {
+  // `Number("abc")` menghasilkan NaN dan `Number("-5")` menghasilkan skip
+  // negatif — keduanya membuat query gagal. Dinormalkan ke 1.
+  const halamanMentah = Number(searchParams?.halaman);
+  const halaman = Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
+
+  const { data: billboards, total } = await getAdminBillboards(halaman);
+  const totalHalaman = Math.max(1, Math.ceil(total / PER_HALAMAN));
 
   return (
     <div className="space-y-6">
@@ -96,7 +117,7 @@ export default async function AdminBillboardsPage() {
 
                             <td className="px-6 py-3">
                                 <StatusChanger billboardId={item.id} currentStatus={item.status} currentPublishStatus={item.publishStatus || 'DRAFT'} />
-                                <div className="font-bold text-gray-800 text-xs mt-1">Rp {item.price.toLocaleString('id-ID')}</div>
+                                <div className="font-bold text-gray-800 text-xs mt-1">Rp {angkaRupiah(item.price)}</div>
                             </td>
 
                             <td className="px-6 py-3">
@@ -111,6 +132,32 @@ export default async function AdminBillboardsPage() {
                     ))}
                 </tbody>
             </table>
+
+            {totalHalaman > 1 && (
+              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4 text-sm">
+                <span className="text-gray-500">
+                  Halaman {halaman} dari {totalHalaman} · {total} titik
+                </span>
+                <div className="flex gap-2">
+                  {halaman > 1 && (
+                    <Link
+                      href={`/admin/billboards?halaman=${halaman - 1}`}
+                      className="rounded border border-gray-200 px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
+                    >
+                      Sebelumnya
+                    </Link>
+                  )}
+                  {halaman < totalHalaman && (
+                    <Link
+                      href={`/admin/billboards?halaman=${halaman + 1}`}
+                      className="rounded border border-gray-200 px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
+                    >
+                      Berikutnya
+                    </Link>
+                  )}
+                </div>
+              </div>
+            )}
         </div>
     </div>
   );

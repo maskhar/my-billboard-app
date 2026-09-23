@@ -2,19 +2,61 @@ import Navbar from '@/components/Navbar';
 import SearchFilter from '@/components/SearchFilter';
 import MapWrapper from '@/components/MapWrapper';
 import ChatWidget from '@/components/ChatWidget';
-import { Billboard } from '@prisma/client';
+import { prisma } from '@/lib/prisma';
+import { uangUntukClient } from '@/lib/money';
 
-async function getBillboards(): Promise<Billboard[]> {
+export const dynamic = 'force-dynamic';
+
+// Sebelumnya halaman ini fetch ke backend NestJS di port 4001, lalu menyaring
+// hasilnya di JavaScript. Dua masalah:
+//
+//   1. `findAll()` di NestJS sengaja tidak menyaring publishStatus (ada
+//      komentar "Hapus filter publishStatus" di sana), jadi SELURUH isi tabel
+//      billboard — termasuk DRAFT yang belum siap publik — dikirim melewati
+//      jaringan, baru disaring setelah sampai.
+//   2. Ini Server Component; ia berjalan di server yang sama dengan database.
+//      Memanggil HTTP ke proses lain hanya untuk menjalankan satu query adalah
+//      lapisan yang tidak perlu — dan satu-satunya alasan backend/ harus hidup
+//      agar halaman depan tidak kosong.
+//
+// Penyaringan sekarang dilakukan di query, jadi baris yang tidak layak tampil
+// tidak pernah meninggalkan database.
+async function getBillboards(query: string, type: string) {
   try {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4001';
-    const res = await fetch(`${apiUrl}/api/billboards`, { cache: 'no-store' });
-    if (!res.ok) {
-      console.error("Gagal mengambil data billboard dari backend:", res.statusText);
-      return [];
-    }
-    return res.json();
+    return await prisma.billboard.findMany({
+      where: {
+        status: 'Available',
+        publishStatus: 'PUBLISHED',
+        ...(type !== 'Semua' ? { type } : {}),
+        ...(query
+          ? {
+              OR: [
+                { title: { contains: query, mode: 'insensitive' as const } },
+                { address: { contains: query, mode: 'insensitive' as const } },
+              ],
+            }
+          : {}),
+      },
+      // Peta hanya merender delapan kolom ini. Sebelumnya seluruh baris
+      // dikirim ke browser — termasuk catatan internal dan jejak siapa yang
+      // terakhir mengubah. Dan karena `price` bertipe Decimal (objek), data
+      // itu juga gagal diubah menjadi JSON saat menyeberang ke komponen
+      // 'use client': peta tidak muncul sama sekali, tanpa keluhan dari
+      // pemeriksaan tipe.
+      select: {
+        id: true,
+        slug: true,
+        title: true,
+        type: true,
+        mainImage: true,
+        lat: true,
+        lng: true,
+        price: true,
+      },
+      orderBy: { updatedAt: 'desc' },
+    });
   } catch (error) {
-    console.error("Error saat fetch billboards:", error);
+    console.error('Gagal mengambil data billboard:', error);
     return [];
   }
 }
@@ -26,23 +68,15 @@ type Props = {
 
 export default async function Home({ searchParams: searchParamsProp }: Props) {
   const searchParams = await searchParamsProp;
-  const allBillboards = await getBillboards();
 
   const query = (searchParams.q as string) || '';
   const type = (searchParams.type as string) || 'Semua';
 
-  const filteredBillboards = allBillboards.filter(billboard => {
-    const statusMatch = billboard.status === 'Available';
-    const publishMatch = billboard.publishStatus === 'PUBLISHED';
-    
-    const queryMatch = !query || 
-      billboard.title.toLowerCase().includes(query.toLowerCase()) || 
-      billboard.address.toLowerCase().includes(query.toLowerCase());
-      
-    const typeMatch = type === 'Semua' || billboard.type === type;
-
-    return statusMatch && publishMatch && queryMatch && typeMatch;
-  });
+  // Penyaringan kini terjadi di database, bukan setelah data sampai.
+  const filteredBillboards = (await getBillboards(query, type)).map((b) => ({
+    ...b,
+    price: uangUntukClient(b.price),
+  }));
 
   return (
     <main className="relative h-screen w-full bg-white overflow-hidden">

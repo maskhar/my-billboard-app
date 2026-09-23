@@ -49,15 +49,15 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         e.preventDefault();
         setLoading(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-            const res = await fetch(`${apiUrl}/api/users/${user.id}/profile`, {
+            // userId diambil dari sesi server di dalam route, tidak dikirim dari client.
+            const res = await fetch('/api/user/update-profile', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(profileData),
             });
             if (!res.ok) {
-                const error = await res.json();
-                throw new Error(error.message || 'Gagal memperbarui profil.');
+                const error = await res.json().catch(() => null);
+                throw new Error(error?.message || 'Gagal memperbarui profil.');
             }
             alert('Profil berhasil diperbarui!');
             router.refresh();
@@ -76,15 +76,19 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         }
         setPasswordLoading(true);
         try {
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-            const res = await fetch(`${apiUrl}/api/users/${user.id}/change-password`, {
+            // userId diambil dari sesi server di dalam route, tidak dikirim dari client.
+            // confirmPassword hanya dipakai untuk validasi di sisi client.
+            const res = await fetch('/api/user/change-password', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(passwordData),
+                body: JSON.stringify({
+                    currentPassword: passwordData.currentPassword,
+                    newPassword: passwordData.newPassword,
+                }),
             });
             if (!res.ok) {
-                const error = await res.json();
-                throw new Error(error.message || 'Gagal mengubah password.');
+                const error = await res.json().catch(() => null);
+                throw new Error(error?.message || 'Gagal mengubah password.');
             }
             alert('Password berhasil diubah!');
             setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });

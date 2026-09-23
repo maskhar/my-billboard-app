@@ -7,8 +7,11 @@ import { prisma } from "@/lib/prisma";
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   
-  // Hanya Super Admin atau Admin yang boleh hapus
-  if (!session || session.user.role !== 'ADMIN') {
+  // Komentar di bawah ini dulu berbunyi "Hanya Super Admin atau Admin",
+  // tetapi syaratnya `role !== 'ADMIN'` — yang justru MENOLAK SUPER_ADMIN.
+  // Pemegang peran tertinggi tidak bisa menghapus siapa pun, dan pesan yang
+  // ia terima hanya "Akses Ditolak".
+  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
       return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 
@@ -27,15 +30,33 @@ export async function POST(req: Request) {
           return NextResponse.json({ message: "Gagal: User ini sedang memiliki transaksi aktif." }, { status: 400 });
       }
 
-      // Hapus data booking yang statusnya sudah selesai/batal dulu (clean up)
-      await prisma.booking.deleteMany({ where: { userId: id } });
-
-      // Hapus Usernya
-      await prisma.user.delete({ where: { id: id } });
+      // Dua penghapusan di bawah dulu berdiri sendiri-sendiri. Bila yang
+      // pertama berhasil dan yang kedua gagal — dan kegagalan itu WAJAR
+      // terjadi, karena `User` masih dirujuk oleh `BillboardHistory`,
+      // `Billboard.createdById`, dan `Billboard.updatedById` yang tidak
+      // memakai cascade — maka seluruh riwayat transaksi pengguna itu sudah
+      // lenyap sementara akunnya tetap ada. Bukti pembayaran, nominal, dan
+      // tanggal pemasangan hilang permanen, dan admin hanya melihat pesan
+      // "Gagal menghapus user" seolah tidak terjadi apa-apa.
+      //
+      // Di dalam `$transaction`, kegagalan di langkah mana pun mengembalikan
+      // semuanya seperti semula.
+      await prisma.$transaction(async (tx) => {
+          await tx.booking.deleteMany({ where: { userId: id } });
+          await tx.user.delete({ where: { id: id } });
+      });
 
       return NextResponse.json({ message: "User Berhasil Dihapus" });
 
   } catch (error) {
-      return NextResponse.json({ message: "Gagal menghapus user" }, { status: 500 });
+      // Sebab paling umum: pengguna ini masih tercatat sebagai pembuat atau
+      // pengubah billboard, atau punya baris di riwayat perubahan. Pesan
+      // "Gagal menghapus user" tidak pernah menjelaskan itu kepada admin,
+      // yang lalu mencoba berulang kali dengan hasil sama.
+      console.error('[users/delete] Gagal menghapus user:', error);
+      return NextResponse.json(
+          { message: "Gagal menghapus user. Kemungkinan ia masih tercatat sebagai pembuat/pengubah billboard atau punya riwayat perubahan." },
+          { status: 500 }
+      );
   }
 }

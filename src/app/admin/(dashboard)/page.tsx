@@ -8,6 +8,8 @@ import Link from 'next/link';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import CS_Dashboard from '../_components/cs/CS_Dashboard';
+import { angkaRupiah, rupiah } from '@/lib/money';
+import { wherePendapatan } from '@/lib/revenue';
 
 // Supaya data selalu fresh
 export const dynamic = 'force-dynamic';
@@ -28,9 +30,18 @@ export default async function AdminDashboard() {
   const totalBillboardsPromise = prisma.billboard.count();
   const totalOrdersPromise = prisma.booking.count();
   const totalCustomersPromise = prisma.user.count({ where: { role: 'USER' } });
+  // Daftar status diambil dari `wherePendapatan()`, bukan ditulis ulang di sini.
+  //
+  // Dulu daftarnya ditulis langsung di baris ini dan memuat `REFUNDED`: uang
+  // yang sudah dikembalikan ke pelanggan tetap dihitung sebagai omzet, jadi
+  // kartu "Total Omzet" selalu lebih besar dari uang yang benar-benar diterima,
+  // persis sebesar seluruh refund yang pernah terjadi. Daftar itu juga
+  // melewatkan tahap DESIGN_RECEIVED, IN_PRODUCTION, dan INSTALLATION —
+  // pesanan yang sudah dibayar tapi sedang dikerjakan hilang dari omzet sampai
+  // ia tayang. Lihat src/lib/revenue.ts untuk alasan lengkapnya.
   const revenueResultPromise = prisma.booking.aggregate({
     _sum: { totalPrice: true },
-    where: { status: { in: ['PAID_CONFIRMED', 'ACTIVE', 'REFUNDED'] } }
+    where: wherePendapatan()
   });
 
   const [
@@ -49,7 +60,7 @@ export default async function AdminDashboard() {
 
   // 2. Definisikan kartu statistik menggunakan data yang sudah di-fetch
   const stats = [
-    { title: "Total Omzet", value: `Rp ${totalRevenue.toLocaleString('id-ID')}`, icon: DollarSign, color: "bg-green-600" },
+    { title: "Total Omzet", value: rupiah(totalRevenue), icon: DollarSign, color: "bg-green-600" },
     { title: "Total Pesanan", value: totalOrders, icon: ShoppingBag, color: "bg-blue-600" },
     { title: "Titik Billboard", value: totalBillboards, icon: MapIcon, color: "bg-orange-500" },
     { title: "Pelanggan", value: totalCustomers, icon: Users, color: "bg-purple-600" },
@@ -145,7 +156,12 @@ export default async function AdminDashboard() {
                                         {order.status}
                                     </span>
                                 </td>
-                                <td className="px-6 py-4 text-right font-bold text-gray-800">Rp {order.totalPrice.toLocaleString()}</td>
+                                {/* `toLocaleString()` tanpa argumen memakai
+                                    format Inggris — "15,000,000" — dengan
+                                    titik dan koma terbalik dari kebiasaan di
+                                    sini. Pada nilai Decimal ia bahkan tidak
+                                    memberi pemisah ribuan sama sekali. */}
+                                <td className="px-6 py-4 text-right font-bold text-gray-800">Rp {angkaRupiah(order.totalPrice)}</td>
                             </tr>
                         ))}
                     </tbody>

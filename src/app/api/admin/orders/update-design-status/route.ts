@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { DesignStatus, daftarNilai, sahDesignStatus } from "@/lib/enum-guard";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -19,6 +20,16 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
     }
     
+    // Kolom `designStatus` bertipe enum. Tanpa pemeriksaan ini, nilai asing
+    // ditolak database dan muncul ke admin sebagai "Gagal mengupdate status
+    // desain" tanpa menyebut apa yang salah.
+    if (!sahDesignStatus(status)) {
+        return NextResponse.json(
+            { message: `Status desain tidak dikenal. Pilihan: ${daftarNilai(DesignStatus)}` },
+            { status: 400 }
+        );
+    }
+
     if (status === 'REJECTED' && !reason) {
         return NextResponse.json({ message: "Alasan penolakan harus diisi" }, { status: 400 });
     }

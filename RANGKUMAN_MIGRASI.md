@@ -1,4 +1,38 @@
-# Rangkuman Migrasi API (Next.js ke NestJS Backend)
+> # ⛔ DOKUMEN INI SUDAH TIDAK BERLAKU
+>
+> **Migrasi Next.js → NestJS DIBATALKAN pada 22 September 2026.**
+> Arahnya kini **kebalikannya**: Next.js menjadi satu-satunya backend, dan
+> direktori `backend/` (NestJS) **dihapus**.
+>
+> ### ⚠️ Jangan ikuti instruksi di bawah ini
+>
+> Dokumen ini berkali-kali menyatakan bahwa file `route.ts` di `src/app/api/`
+> "sudah usang dan dapat dihapus". **Itu sekarang salah dan berbahaya** —
+> file-file itulah yang dipertahankan. Yang dihapus adalah lawannya.
+>
+> ### Kenapa dibatalkan
+>
+> Migrasi ditinggalkan di tengah jalan, menyisakan dua backend yang sama-sama
+> hidup dengan logika bisnis berbeda untuk alur yang sama (terutama
+> perhitungan uang di booking). Duplikasi itu adalah sumber utama kekacauan
+> yang dikeluhkan: satu bug harus diperbaiki dua kali, dan tidak ada yang
+> tahu sisi mana yang sebenarnya dipakai.
+>
+> Backend NestJS juga tidak punya lapisan autentikasi yang aktif, sehingga
+> setiap endpoint yang masih dipanggil frontend menjadi pintu terbuka.
+>
+> ### Dokumen yang berlaku sekarang
+>
+> `docs/audit/00-TODO-PERBAIKAN.md` — lihat **Fase 4** untuk rencana
+> penghapusan `backend/` dan **Lampiran D** untuk keputusan D1.
+>
+> Isi di bawah dipertahankan **hanya sebagai catatan sejarah**: daftar
+> pemetaan endpoint-nya berguna untuk memverifikasi tidak ada perilaku yang
+> hilang saat `backend/` dihapus.
+
+---
+
+# ~~Rangkuman Migrasi API (Next.js ke NestJS Backend)~~ *(arsip)*
 
 Dokumen ini merangkum progres migrasi logika API dari direktori `src/app/api` di Next.js ke aplikasi backend NestJS yang terpusat.
 

@@ -25,6 +25,11 @@ node_modules/
 # production
 /build
 
+# Build output NestJS — 128 file dist/ sempat ter-track dan ikut masuk riwayat.
+# Pola ini mencegahnya terulang seandainya ada direktori dist lain menyusul.
+dist/
+**/dist
+
 # misc
 .DS_Store
 *.pem

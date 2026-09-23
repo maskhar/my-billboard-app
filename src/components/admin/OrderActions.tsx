@@ -37,16 +37,25 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
 
   const updateStatus = async (newStatus: string, extraData: any = {}) => {
       setLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/orders/update-status`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id, newStatus, ...extraData })
-      });
-      setLoading(false);
-      setShowTransferModal(false);
-      setShowInstallModal(false);
-      router.refresh();
+      try {
+          const res = await fetch('/api/admin/update-order', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ orderId: order.id, newStatus, ...extraData })
+          });
+          const data = await res.json().catch(() => ({} as any));
+          if (!res.ok) {
+              alert('Gagal memperbarui status: ' + (data.message || `Server menolak (${res.status}).`));
+              return;
+          }
+          setShowTransferModal(false);
+          setShowInstallModal(false);
+          router.refresh();
+      } catch (err) {
+          alert('Error Server: status tidak berubah.');
+      } finally {
+          setLoading(false);
+      }
   };
 
   // --- HANDLERS HELPER ---

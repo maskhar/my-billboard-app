@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import {
+  BillboardStatus,
+  PublishStatus,
+  daftarNilai,
+  sahBillboardStatus,
+  sahPublishStatus,
+} from "@/lib/enum-guard";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -19,9 +26,33 @@ export async function POST(req: Request) {
           return NextResponse.json({ message: "ID Billboard dibutuhkan" }, { status: 400 });
       }
 
-      const dataToUpdate: { status?: string, publishStatus?: string } = {};
-      if (status) dataToUpdate.status = status;
-      if (publishStatus) dataToUpdate.publishStatus = publishStatus;
+      // Nilai status dulu diteruskan apa adanya dari body request ke
+      // database. Salah ketik satu huruf akan tersimpan diam-diam dan
+      // billboard hilang dari katalog tanpa siapa pun tahu sebabnya.
+      const dataToUpdate: {
+        status?: BillboardStatus;
+        publishStatus?: PublishStatus;
+      } = {};
+
+      if (status !== undefined) {
+        if (!sahBillboardStatus(status)) {
+          return NextResponse.json(
+            { message: `Status billboard tidak dikenal. Nilai yang sah: ${daftarNilai(BillboardStatus)}` },
+            { status: 400 }
+          );
+        }
+        dataToUpdate.status = status;
+      }
+
+      if (publishStatus !== undefined) {
+        if (!sahPublishStatus(publishStatus)) {
+          return NextResponse.json(
+            { message: `Status publikasi tidak dikenal. Nilai yang sah: ${daftarNilai(PublishStatus)}` },
+            { status: 400 }
+          );
+        }
+        dataToUpdate.publishStatus = publishStatus;
+      }
 
       if (Object.keys(dataToUpdate).length === 0) {
           return NextResponse.json({ message: "Tidak ada data untuk diupdate" }, { status: 400 });

@@ -8,6 +8,7 @@ import Link from "next/link";
 import LogoutButton from '../_components/LogoutButton';
 import CS_Layout from "../_components/cs/CS_Layout"; // Layout Baru untuk CS
 import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert } from 'lucide-react';
+import { Role } from "@/lib/enum-guard";
 
 // [OPSIONAL] Komponen untuk menjaga konsistensi
 const AccessDenied = ({ session }: { session: any }) => (
@@ -86,7 +87,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
     const userRole = session.user.role;
-  const allowedRoles = ['ADMIN', 'SUPER_ADMIN'];
+
+  // Daftar ini dulu hanya ADMIN dan SUPER_ADMIN, padahal middleware.ts
+  // meloloskan CS dan OPERATOR ke /admin. Akibatnya keduanya berhenti di
+  // halaman "Akses Ditolak" — dan cabang `userRole === 'CS'` beberapa baris
+  // di bawah tidak pernah tercapai sama sekali, membuat seluruh layout CS
+  // menjadi kode mati. Daftar di sini kini sama dengan ADMIN_ROLES di
+  // middleware.ts; keduanya harus tetap seiring.
+  const allowedRoles: Role[] = [Role.ADMIN, Role.SUPER_ADMIN, Role.CS, Role.OPERATOR];
 
   if (!userRole || !allowedRoles.includes(userRole)) {
       return <AccessDenied session={session} />;
@@ -96,7 +104,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   if (userRole === 'CS') {
       return <CS_Layout session={session}>{children}</CS_Layout>;
   }
-  
+
   // --- Untuk Role Selain CS ---
   let menus = [
       { name: "Overview", icon: LayoutDashboard, link: "/admin" },
@@ -105,6 +113,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       { name: "Manage Users", icon: Users, link: "/admin/users" },
       { name: "Live Chat CS", icon: MessageCircle, link: "/admin/live-chat" },
   ];
+
+  // OPERATOR menangani chat dan pesanan, bukan inventaris atau daftar akun.
+  // Menu yang tidak boleh ia buka tidak ditampilkan; pembatasan sebenarnya
+  // tetap ada di masing-masing route API, bukan di daftar menu ini.
+  if (userRole === 'OPERATOR') {
+      menus = menus.filter(m => m.link !== '/admin/billboards' && m.link !== '/admin/users');
+  }
 
   if (userRole === 'SUPER_ADMIN') {
       menus.push({ name: "Pengaturan Website", icon: Settings, link: "/admin/settings" });

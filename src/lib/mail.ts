@@ -1,4 +1,5 @@
 import nodemailer from 'nodemailer';
+import { rupiah, type NilaiUang } from '@/lib/money';
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -13,9 +14,13 @@ const transporter = nodemailer.createTransport({
 });
 
 // Helper Rupiah
-const formatRupiah = (number: number) => {
-    return new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', minimumFractionDigits: 0 }).format(number);
-};
+//
+// `orderDetail` bertipe `any`, jadi TypeScript tidak pernah memprotes apa pun
+// yang dimasukkan ke sini. Ketika nominal Decimal dari database ikut terkirim,
+// `Intl.NumberFormat.format` menerimanya diam-diam dan mencetak "Rp NaN" —
+// di email tagihan yang sudah terlanjur sampai ke pelanggan.
+// `rupiah()` menerima Decimal, number, maupun string.
+const formatRupiah = (nilai: NilaiUang) => rupiah(nilai);
 
 const generateTemplate = (title: string, message: string, orderDetail?: any) => {
     // Template HTML Invoice Full (Dikembalikan seperti semula)

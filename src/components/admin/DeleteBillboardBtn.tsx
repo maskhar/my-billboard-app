@@ -17,9 +17,15 @@ export default function DeleteBillboardBtn({ id, title }: { id: string, title: s
       setLoading(true);
 
       try {
-          // Panggil API Hapus yang tadi kita perbaiki di langkah 1
-                    const res = await fetch(`/api/proxy/billboards/${id}`, {
-              method: 'DELETE',
+          // Dialihkan dari `/api/proxy/billboards/:id` ke route Next yang ber-auth.
+          // Proxy lama meneruskan DELETE ke backend tanpa sesi sama sekali, sehingga
+          // siapa pun bisa menghapus billboard. Route di bawah memeriksa sesi +
+          // role ADMIN/SUPER_ADMIN dan menolak penghapusan bila billboard masih
+          // punya booking ACTIVE / PENDING_PAYMENT.
+          const res = await fetch('/api/admin/billboards/delete', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ id }),
           });
 
           if (res.ok) {

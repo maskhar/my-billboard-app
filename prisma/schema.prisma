@@ -10,15 +10,94 @@ generator chatClient {
   output   = "../chat-server/node_modules/.prisma/client"
 }
 
-// [BARU] Generator khusus untuk backend server
-generator backendClient {
-  provider = "prisma-client-js"
-  output   = "../backend/node_modules/.prisma/client"
-}
+// Generator `backendClient` dihapus bersama folder `backend/` (22 Sep 2026).
+// Membiarkannya membuat setiap `prisma generate` gagal karena direktori
+// tujuannya sudah tidak ada.
 
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// ENUM — daftar nilai yang sah
+//
+// Sebelumnya semua kolom di bawah bertipe `String`, jadi database menerima
+// APA SAJA: salah ketik, huruf besar-kecil yang beda, nilai yang tidak pernah
+// dikenali kode mana pun. Semua lolos diam-diam dan baru terasa sebagai
+// "tombolnya tidak muncul" atau "ordernya hilang dari tab".
+//
+// PENTING soal huruf besar-kecil: label di bawah SENGAJA mengikuti tulisan
+// yang sudah dipakai kode, bukan konvensi Prisma yang biasanya UPPER_CASE.
+// `Available` (bukan `AVAILABLE`) dan `upload`/`service` (bukan `UPLOAD`)
+// adalah keputusan sadar. Kalau diseragamkan ke huruf besar, perbandingan
+// seperti `billboard.status !== 'Available'` di booking/create/route.ts
+// akan SELALU benar — artinya setiap pemesanan ditolak, tanpa pesan error
+// apa pun. Jangan "dirapikan" tanpa mengubah semua titik bacanya sekaligus.
+// ============================================================================
+
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+  OPERATOR
+  CS
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+}
+
+enum BillboardStatus {
+  Available
+  Booked
+}
+
+enum PublishStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum BookingStatus {
+  PENDING_PAYMENT
+  PAID_CONFIRMED
+  DESIGN_RECEIVED
+  IN_PRODUCTION
+  INSTALLATION
+  ACTIVE
+  REVIEW_REFUND
+  WAITING_BANK
+  PROCESS_REFUND
+  REFUNDED
+  CANCELLED
+}
+
+enum DesignStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+}
+
+// Huruf kecil, mengikuti nilai yang dikirim CheckoutForm dan dibandingkan
+// di 6 tempat sebagai `=== 'service'`.
+enum DesignOption {
+  upload
+  service
+}
+
+enum ChatSessionStatus {
+  OPEN
+  AGENT
+  CLOSED
+}
+
+enum ChatSender {
+  USER
+  ADMIN
+  BOT
+  SYSTEM
 }
 
 // 1. MODEL USER
@@ -29,8 +108,10 @@ model User {
   password      String?   
   image         String?   
   
-  role          String    @default("USER") // USER, ADMIN, SUPER_ADMIN, OPERATOR
-  
+  // Komentar lama menyebut 4 role, padahal `CS` sudah dipakai di seed dan
+  // di 6 route API chat. Sekarang daftarnya ada di `enum Role`, satu tempat.
+  role          Role      @default(USER)
+
   whatsapp      String?
   companyName   String?
   
@@ -42,15 +123,30 @@ model User {
   username      String?   @unique
   
   // === FITUR BARU ===
-  authProvider  String    @default("EMAIL") // "EMAIL" atau "GOOGLE"
+  authProvider  AuthProvider @default(EMAIL)
   isVerified    Boolean   @default(false)
   
-  otpCode       String?   // Kode rahasia sementara
-  otpExpires    DateTime?
+  // `otpCode` dan `otpExpires` DIHAPUS (task 3.27).
+  //
+  // Keduanya tidak pernah ditulis maupun dibaca oleh satu baris kode pun —
+  // nol referensi di seluruh repo. Yang tersisa hanyalah dua kolom yang ikut
+  // terbawa setiap kali kode memakai `include: { user: true }` tanpa
+  // `select`, yaitu bentuk kebocoran data yang sama dengan kolom `password`.
+  // Kolom kosong yang tidak dipakai tetap punya biaya: ia terkirim ke mana
+  // pun barisnya pergi.
+  //
+  // Bila verifikasi OTP benar-benar dibangun nanti, kolomnya dibuat ulang
+  // bersama kodenya, bukan sebelum.
   // ==================
-  
+
   createdAt     DateTime  @default(now())
-  
+
+  // Tanpa kolom ini tidak ada cara mengetahui kapan sebuah akun terakhir
+  // diubah. Saat ada sengketa — "role saya berubah sendiri", "nomor WA saya
+  // diganti orang" — satu-satunya jawaban yang bisa diberikan sistem adalah
+  // tanggal pendaftaran.
+  updatedAt     DateTime  @updatedAt @default(now())
+
   bookings          Booking[] 
   createdBillboards Billboard[] @relation("CreatedBy")
   updatedBillboards Billboard[] @relation("UpdatedBy")
@@ -67,12 +163,20 @@ model Billboard {
   sku         String?  @unique
   address     String
   type        String
-  price       Float
-  lat         Float
+  // Uang TIDAK BOLEH `Float`. Float menyimpan angka dalam basis 2, jadi
+  // 0.1 + 0.2 tidak persis 0.3 — selisihnya sangat kecil tapi menumpuk
+  // lewat penjumlahan dan persentase (PPN 11%, DP 60%, refund 90%),
+  // dan nominal di layar bisa meleset dari nominal yang ditagih.
+  // `Decimal(15,2)` menyimpan angka desimal apa adanya: cukup untuk
+  // Rp 9.999.999.999.999,99 dengan 2 angka di belakang koma.
+  price       Decimal  @db.Decimal(15, 2)
+
+  lat         Float    // koordinat peta, bukan uang — Float memang tepat
   lng         Float
-  status      String   @default("Available")
-  publishStatus String @default("DRAFT")
-  
+
+  status        BillboardStatus @default(Available)
+  publishStatus PublishStatus   @default(DRAFT)
+
   mainImage   String
   gallery     String 
   videoUrl    String?
@@ -97,6 +201,13 @@ model Billboard {
 
   // [PERBAIKAN ERROR TADI]
   history       BillboardHistory[]
+
+  // Halaman depan selalu menyaring dengan dua kolom ini sekaligus
+  // (`status: 'Available'` + `publishStatus: 'PUBLISHED'`). Tanpa indeks,
+  // database membaca SELURUH tabel setiap kali halaman dibuka.
+  @@index([publishStatus, status])
+  @@index([createdById])
+  @@index([updatedById])
 }
 
 // 3. MODEL BOOKING
@@ -109,13 +220,45 @@ model Booking {
   duration      Int
   endDate       DateTime
   
-  totalPrice    Float
-  dpAmount      Float?
-  status        String   @default("PENDING_PAYMENT")
-  
-  designOption  String   
+  // Lihat catatan Decimal di Billboard.price.
+  //
+  // RINCIAN TAGIHAN
+  // ---------------
+  // Sebelumnya hanya `totalPrice` yang disimpan — satu angka jadi, hasil
+  // hitungan di browser pembeli. Tidak ada cara memeriksa ulang angka itu:
+  // tidak diketahui harga satuannya berapa, pajaknya berapa, biaya adminnya
+  // berapa. Bila tarif berubah bulan depan, invoice lama pun ikut berubah
+  // karena harus dihitung ulang dari harga billboard yang sekarang.
+  //
+  // Empat kolom di bawah merekam rincian pada SAAT pemesanan dibuat, jadi
+  // invoice lama tetap menceritakan angka yang benar-benar disepakati waktu
+  // itu. Diisi oleh server (Fase 2.2), bukan oleh browser.
+  //
+  // Nullable karena baris yang sudah ada tidak punya rinciannya.
+  unitPrice     Decimal? @db.Decimal(15, 2) // harga sewa per bulan saat dipesan
+  basePrice     Decimal? @db.Decimal(15, 2) // unitPrice × duration, sebelum pajak
+  taxAmount     Decimal? @db.Decimal(15, 2) // PPN
+  adminFee      Decimal? @db.Decimal(15, 2) // biaya administrasi
+
+  totalPrice    Decimal  @db.Decimal(15, 2)
+  dpAmount      Decimal? @db.Decimal(15, 2)
+
+  status        BookingStatus @default(PENDING_PAYMENT)
+
+  // Batas waktu pembayaran. Dulu tenggat 24 jam hanya dihitung di browser
+  // dari `createdAt` (lihat BookingCard.tsx) — hitung mundur di layar habis,
+  // tapi pesanannya tetap hidup di database dan tanggalnya tetap terkunci
+  // selamanya. Dengan kolom ini, tenggatnya menjadi fakta yang tercatat dan
+  // bisa ditegakkan di sisi server.
+  expiresAt     DateTime?
+
+  designOption  DesignOption
   designFileUrl String?
-  designStatus  String? // PENDING_REVIEW, APPROVED, REJECTED
+
+  // Tetap nullable: NULL = user belum mengirim desain sama sekali.
+  // `PENDING_REVIEW` = desain sudah masuk, menunggu admin.
+  // Dua keadaan berbeda, jangan digabung.
+  designStatus  DesignStatus?
   designRejectionReason String?
 
   // -- Timestamps for Tracking --
@@ -128,12 +271,22 @@ model Booking {
   refundProof     String?
   userBankName    String? 
   userBankAccount String? 
-  refundAmount    Float?  
+  refundAmount    Decimal?  @db.Decimal(15, 2)
   refundedAt      DateTime?
   isLocked        Boolean   @default(false)
   
-  user          User      @relation(fields: [userId], references: [id])
-  billboard     Billboard @relation(fields: [billboardId], references: [id])
+  // `onDelete: Restrict` ditulis TEGAS di sini (task 3.16), bukan dibiarkan
+  // mengandalkan default Prisma.
+  //
+  // Sebuah booking adalah bukti transaksi: siapa membayar berapa, untuk
+  // titik mana, kapan dipasang. Menghapus akun pengguna atau menghapus
+  // billboard tidak boleh diam-diam melenyapkan bukti itu. Dengan Restrict,
+  // database MENOLAK penghapusan selama masih ada booking yang menunjuk ke
+  // sana — jadi penghapusan menjadi keputusan yang harus dihadapi admin
+  // secara sadar (lihat `api/admin/users/delete`, yang menghapus booking
+  // lebih dulu di dalam satu transaksi), bukan efek samping senyap.
+  user          User      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  billboard     Billboard @relation(fields: [billboardId], references: [id], onDelete: Restrict)
   
   createdAt     DateTime  @default(now())
 
@@ -143,6 +296,13 @@ model Booking {
 
   // -- BARU: BIAYA TAMBAHAN --
   additionalCharges AdditionalCharge[]
+
+  // Tiga pola query yang paling sering dipakai:
+  // daftar order milik satu user, tab status di dashboard admin,
+  // dan pengecekan tanggal bentrok per billboard.
+  @@index([userId, status])
+  @@index([status])
+  @@index([billboardId, startDate, endDate])
 }
 
 // 7. BIAYA TAMBAHAN
@@ -151,8 +311,13 @@ model AdditionalCharge {
   bookingId   String
   booking     Booking  @relation(fields: [bookingId], references: [id], onDelete: Cascade)
   description String
-  amount      Float
+  amount      Decimal  @db.Decimal(15, 2)
   createdAt   DateTime @default(now())
+
+  // Baris ini adalah tagihan kepada pelanggan. Bila nominalnya pernah
+  // dikoreksi, waktunya harus tercatat — kalau tidak, invoice hari ini dan
+  // invoice minggu lalu bisa berbeda tanpa satu pun jejak yang menjelaskannya.
+  updatedAt   DateTime @updatedAt @default(now())
 }
 
 
@@ -172,7 +337,7 @@ model ChatSession {
   guestName   String
   guestEmail  String
   guestPhone  String
-  status      String   @default("OPEN")
+  status      ChatSessionStatus @default(OPEN)
   isOnline    Boolean  @default(true)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -182,10 +347,16 @@ model ChatSession {
 model ChatMessage {
   id            String      @id @default(cuid())
   sessionId     String
-  sender        String
+  // `AGENT` sengaja tidak masuk enum: CS_InboxLayout mengirimnya, tapi
+  // chat-server menimpanya sebelum menyimpan, jadi nilai itu tidak pernah
+  // sampai ke database.
+  sender        ChatSender
   message       String
   createdAt     DateTime    @default(now())
   session       ChatSession @relation(fields: [sessionId], references: [id])
+
+  // Setiap membuka satu percakapan = ambil pesan satu sesi, urut waktu.
+  @@index([sessionId, createdAt])
 }
 
 // 6. RIWAYAT PERUBAHAN BILLBOARD (AUDIT LOGS)
@@ -197,14 +368,27 @@ model BillboardHistory {
   billboard   Billboard @relation(fields: [billboardId], references: [id], onDelete: Cascade)
   
   title       String
-  price       Float
-  status      String
-  
+  price       Decimal  @db.Decimal(15, 2)
+
+  // Tipe yang sama dengan Billboard.status. Harus sama, karena rollback
+  // menyalin nilai ini kembali ke Billboard.status apa adanya.
+  status      BillboardStatus
+
   // Relasi Balik ke User (Siapa yang mengubah)
   changedById String?
   changedBy   User?    @relation(fields: [changedById], references: [id])
   
   archivedAt  DateTime @default(now())
-  snapshot    String 
+  snapshot    String
+
+  // Tabel ini seharusnya hanya ditambahi, tidak pernah diubah. Justru karena
+  // itu kolom ini berguna: bila suatu hari ada baris yang `updatedAt`-nya
+  // tidak sama dengan `archivedAt`, itu bukti bahwa riwayat pernah disunting.
+  // Tanpa kolom ini penyuntingan seperti itu tidak meninggalkan jejak apa pun.
+  updatedAt   DateTime @updatedAt @default(now())
+
+  // Riwayat satu billboard, terbaru dulu.
+  @@index([billboardId, archivedAt])
+  @@index([changedById])
 }
 

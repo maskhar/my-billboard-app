@@ -16,7 +16,11 @@ const Navbar = () => {
     signOut({ callbackUrl: '/login' }); 
   };
 
-  const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'USER_AIDA'];
+  // 'USER_AIDA' dihapus: tidak pernah ada satu pun baris di database dengan
+  // role itu, dan tidak ada kode yang menuliskannya. CS ditambahkan — ia
+  // memang punya halaman sendiri di /admin dan sebelumnya tidak melihat
+  // tautan menuju ke sana.
+  const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
   const isAdmin = session?.user?.role && adminRoles.includes(session.user.role);
 
   const getRoleClass = (role: string | undefined | null) => {
@@ -28,7 +32,7 @@ const Navbar = () => {
         return 'bg-blue-100 text-blue-800';
       case 'OPERATOR':
         return 'bg-green-100 text-green-800';
-      case 'USER_AIDA':
+      case 'CS':
         return 'bg-yellow-100 text-yellow-800';
       default:
         return 'bg-gray-200 text-gray-600';

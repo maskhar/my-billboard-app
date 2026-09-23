@@ -1,10 +1,36 @@
 // prisma/seed.ts
 const { PrismaClient } = require("@prisma/client");
 const { hash } = require("bcryptjs");
+const { randomBytes } = require("crypto");
 
 const prisma = new PrismaClient();
 
+// Skrip ini MENGHAPUS SELURUH ISI TABEL sebelum mengisi ulang. Sebelumnya tidak
+// ada pengaman apa pun: satu `npm run seed` yang salah ketik di terminal yang
+// terhubung ke database sungguhan akan menghapus setiap user dan setiap booking,
+// tanpa konfirmasi dan tanpa cara mengembalikannya.
+function pastikanAmanUntukDihapus() {
+  if (process.env.NODE_ENV === "production") {
+    console.error("❌ Seed dibatalkan: NODE_ENV=production.");
+    console.error("   Skrip ini menghapus seluruh isi tabel. Jangan dijalankan di server produksi.");
+    process.exit(1);
+  }
+
+  const url = process.env.DATABASE_URL || "";
+  // Nama host tidak pernah dicetak — hanya dipakai untuk memutuskan.
+  const lokal = /@(localhost|127\.0\.0\.1|\[::1\])[:\/]/.test(url);
+
+  if (!lokal && process.env.SEED_IZINKAN_HAPUS !== "ya") {
+    console.error("❌ Seed dibatalkan: DATABASE_URL tidak menunjuk ke localhost.");
+    console.error("   Skrip ini menghapus seluruh isi tabel.");
+    console.error("   Bila Anda memang bermaksud melakukannya, jalankan ulang dengan SEED_IZINKAN_HAPUS=ya");
+    process.exit(1);
+  }
+}
+
 async function main() {
+  pastikanAmanUntukDihapus();
+
   console.log("🌱 Mulai Refresh Data...");
 
   // 1. HAPUS SEMUA DATA LAMA (URUTAN PENTING BIAR TIDAK ERROR)
@@ -15,7 +41,13 @@ async function main() {
   console.log("🔥 Data lama berhasil dibersihkan.");
 
   // 2. BUAT 5 JENIS USER
-  const passwordHash = await hash("123456", 10); // Password default untuk semua user
+  //
+  // Password sebelumnya "123456" untuk kelima akun — termasuk SUPER_ADMIN.
+  // Password seed punya kebiasaan bertahan hidup sampai ke server sungguhan,
+  // dan "123456" ada di baris pertama setiap daftar tebakan otomatis.
+  // Sekarang diacak tiap kali seed dijalankan dan dicetak SEKALI ke layar.
+  const passwordAcak = randomBytes(12).toString("base64url");
+  const passwordHash = await hash(passwordAcak, 12);
 
   const superAdmin = await prisma.user.create({
     data: {
@@ -55,6 +87,16 @@ async function main() {
     ],
   });
   console.log("👤 5 User berhasil dibuat.");
+  console.log("");
+  console.log("   ┌──────────────────────────────────────────────────────────┐");
+  console.log("   │ PASSWORD LOGIN (kelima akun memakai password yang sama)  │");
+  console.log("   │ Hanya dicetak sekali, di sini. Catat sekarang.           │");
+  console.log("   └──────────────────────────────────────────────────────────┘");
+  console.log(`   ${passwordAcak}`);
+  console.log("");
+  console.log("   Akun: bimokharis1810@gmail.com (SUPER_ADMIN), utero@gmail.com (ADMIN),");
+  console.log("         operator@gmail.com (OPERATOR), cs@gmail.com (CS), user@gmail.com (USER)");
+  console.log("");
 
   // 3. BUAT DATA BILLBOARD DUMMY
   const billboards = [

@@ -8,28 +8,82 @@ export default function SettingsPage() {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
   
-  // Tambah googleMapsApiKey di sini
+  // Nilai API key TIDAK pernah disimpan di state.
+  //
+  // `type="password"` pada input hanya menyembunyikan karakter secara visual —
+  // nilainya tetap ada di DOM dan di payload halaman, jadi siapa pun yang
+  // membuka devtools bisa membacanya. Karena itu GET /api/admin/settings kini
+  // mengembalikan `geminiApiKey`/`googleMapsApiKey` bernilai null, ditemani
+  // penanda `*KeySet` (boolean) dan pratinjau `*KeyMasked` (4 karakter
+  // terakhir). Halaman ini hanya menampilkan pratinjau itu.
   const [form, setForm] = useState({
       siteName: "",
       siteDesc: "",
+  });
+
+  // Status key tersimpan di server — bukan nilainya.
+  const [keyStatus, setKeyStatus] = useState({
+      geminiApiKeySet: false,
+      geminiApiKeyMasked: null as string | null,
+      googleMapsApiKeySet: false,
+      googleMapsApiKeyMasked: null as string | null,
+  });
+
+  // Nilai baru yang diketik admin. Dikosongkan = "jangan ubah key tersimpan".
+  const [newKeys, setNewKeys] = useState({
       geminiApiKey: "",
-      googleMapsApiKey: "" // New Field
+      googleMapsApiKey: "",
   });
 
   useEffect(() => {
       fetch('/api/admin/settings').then(res => res.json()).then(data => {
-          if(data) setForm(data);
+          if(!data) return;
+          setForm({
+              siteName: data.siteName || "",
+              siteDesc: data.siteDesc || "",
+          });
+          setKeyStatus({
+              geminiApiKeySet: !!data.geminiApiKeySet,
+              geminiApiKeyMasked: data.geminiApiKeyMasked ?? null,
+              googleMapsApiKeySet: !!data.googleMapsApiKeySet,
+              googleMapsApiKeyMasked: data.googleMapsApiKeyMasked ?? null,
+          });
       });
   }, []);
 
   const handleSave = async () => {
-            setLoading(true);
+      setLoading(true);
+
+      // Key hanya dikirim bila admin benar-benar mengetik nilai baru.
+      // Field yang dibiarkan kosong tidak ikut dikirim, sehingga key lama di
+      // database tetap utuh (API memperlakukan nilai kosong sebagai "abaikan").
+      const payload: Record<string, string> = { ...form };
+      if (newKeys.geminiApiKey.trim() !== "") {
+          payload.geminiApiKey = newKeys.geminiApiKey.trim();
+      }
+      if (newKeys.googleMapsApiKey.trim() !== "") {
+          payload.googleMapsApiKey = newKeys.googleMapsApiKey.trim();
+      }
+
       const res = await fetch('/api/admin/settings', {
           method: 'POST',
-          body: JSON.stringify(form)
+          body: JSON.stringify(payload)
       });
       if (res.ok) {
         alert("Pengaturan Berhasil Disimpan!");
+
+        // Muat ulang status key agar pratinjau ter-mask ikut diperbarui,
+        // lalu kosongkan field input supaya nilai baru tidak tertinggal di DOM.
+        const segar = await fetch('/api/admin/settings').then(r => r.json()).catch(() => null);
+        if (segar) {
+            setKeyStatus({
+                geminiApiKeySet: !!segar.geminiApiKeySet,
+                geminiApiKeyMasked: segar.geminiApiKeyMasked ?? null,
+                googleMapsApiKeySet: !!segar.googleMapsApiKeySet,
+                googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked ?? null,
+            });
+        }
+        setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
       } else {
         const json = await res.json();
         alert("Gagal menyimpan: " + (json.message || "Unknown error"));
@@ -37,11 +91,20 @@ export default function SettingsPage() {
       setLoading(false);
   };
 
+  // Key boleh diuji bila sudah tersimpan di server ATAU admin sedang mengetik
+  // kandidat key baru. Bila field kosong, API memakai key tersimpan di database
+  // — client tidak perlu (dan tidak boleh) memegang nilainya.
+  const bisaTestAI = keyStatus.geminiApiKeySet || newKeys.geminiApiKey.trim() !== "";
+
   const handleTestAI = async () => {
-      if(!form.geminiApiKey) return alert("Masukkan API Key dulu!");
+      if(!bisaTestAI) return alert("Masukkan API Key dulu!");
       setAiLoading(true); setAiResult("");
+      const body: Record<string, string> = { action: 'TEST_AI' };
+      if (newKeys.geminiApiKey.trim() !== "") {
+          body.apiKey = newKeys.geminiApiKey.trim();
+      }
       const res = await fetch('/api/admin/settings', {
-          method: 'POST', body: JSON.stringify({ action: 'TEST_AI', apiKey: form.geminiApiKey })
+          method: 'POST', body: JSON.stringify(body)
       });
       const json = await res.json();
       if(res.ok) setAiResult(json.aiResult); else alert("Gagal: " + json.message);
@@ -81,9 +144,24 @@ export default function SettingsPage() {
                 <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Google Maps API Key (Untuk Street View)</label>
                 <div className="relative">
                     <Key size={16} className="absolute left-3 top-3.5 text-gray-400"/>
-                    <input type="password" value={form.googleMapsApiKey || ""} onChange={e => setForm({...form, googleMapsApiKey: e.target.value})} className="w-full border border-gray-300 rounded-lg pl-10 p-3 font-mono text-sm" placeholder="AIza... (Isi untuk mengaktifkan Street View)"/>
+                    <input
+                        type="password"
+                        autoComplete="off"
+                        value={newKeys.googleMapsApiKey}
+                        onChange={e => setNewKeys({...newKeys, googleMapsApiKey: e.target.value})}
+                        className="w-full border border-gray-300 rounded-lg pl-10 p-3 font-mono text-sm"
+                        placeholder={keyStatus.googleMapsApiKeySet
+                            ? `Tersimpan (${keyStatus.googleMapsApiKeyMasked}) — isi untuk mengganti`
+                            : "AIza... (Isi untuk mengaktifkan Street View)"}
+                    />
                 </div>
-                <p className="text-[10px] text-gray-400 mt-1 italic">Jika dikosongkan, Street View akan menggunakan mode tombol eksternal.</p>
+                {keyStatus.googleMapsApiKeySet ? (
+                    <p className="text-[10px] text-green-600 mt-1 flex items-center gap-1 font-bold">
+                        <CheckCircle2 size={12}/> Key sudah tersimpan. Kosongkan field ini bila tidak ingin mengubahnya.
+                    </p>
+                ) : (
+                    <p className="text-[10px] text-gray-400 mt-1 italic">Belum diisi — Street View akan menggunakan mode tombol eksternal.</p>
+                )}
             </div>
         </div>
 
@@ -97,13 +175,29 @@ export default function SettingsPage() {
                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Gemini API Key</label>
                     <div className="relative">
                         <Key size={16} className="absolute left-3 top-3.5 text-gray-400"/>
-                        <input type="password" value={form.geminiApiKey || ""} onChange={e => setForm({...form, geminiApiKey: e.target.value})} className="w-full border border-gray-300 rounded-lg pl-10 p-3 font-mono text-sm" placeholder="AIza..."/>
+                        <input
+                            type="password"
+                            autoComplete="off"
+                            value={newKeys.geminiApiKey}
+                            onChange={e => setNewKeys({...newKeys, geminiApiKey: e.target.value})}
+                            className="w-full border border-gray-300 rounded-lg pl-10 p-3 font-mono text-sm"
+                            placeholder={keyStatus.geminiApiKeySet
+                                ? `Tersimpan (${keyStatus.geminiApiKeyMasked}) — isi untuk mengganti`
+                                : "AIza..."}
+                        />
                     </div>
+                    {keyStatus.geminiApiKeySet ? (
+                        <p className="text-[10px] text-green-600 mt-1 flex items-center gap-1 font-bold">
+                            <CheckCircle2 size={12}/> Key sudah tersimpan. Kosongkan field ini bila tidak ingin mengubahnya.
+                        </p>
+                    ) : (
+                        <p className="text-[10px] text-gray-400 mt-1 italic">Belum diisi — fitur AI nonaktif.</p>
+                    )}
                 </div>
                 <div className="bg-purple-50 rounded-xl p-4 border border-purple-100">
                     <div className="flex justify-between items-center mb-2">
                         <span className="text-xs font-bold text-purple-800">Test AI Response</span>
-                        <button onClick={handleTestAI} disabled={aiLoading || !form.geminiApiKey} className="bg-purple-600 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-2">
+                        <button onClick={handleTestAI} disabled={aiLoading || !bisaTestAI} className="bg-purple-600 text-white text-xs px-4 py-2 rounded-lg font-bold flex items-center gap-2">
                             {aiLoading ? <Loader2 className="animate-spin" size={14}/> : 'Test Generate'}
                         </button>
                     </div>

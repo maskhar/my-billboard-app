@@ -12,6 +12,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
     "express": "^4.19.2",
+    "next-auth": "^4.24.13",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {

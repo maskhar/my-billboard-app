@@ -4,6 +4,8 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { redirect } from 'next/navigation';
 import DashboardClientPage from './DashboardClientPage'; // Impor komponen client yang baru kita buat
+import { jumlah, keAngka, uangUntukClient } from '@/lib/money';
+import { isRevenueStatus } from '@/lib/revenue';
 
 // Status yang dianggap "Aktif / Berjalan"
 const activeStatuses = [
@@ -32,16 +34,57 @@ export default async function DashboardWrapper() {
       orderBy: { createdAt: 'desc' }
   });
 
-  const activeOrders = myBookings.filter(b => activeStatuses.includes(b.status));
-  const historyOrders = myBookings.filter(b => !activeStatuses.includes(b.status));
+  // Nominal uang di database bertipe Decimal — sebuah objek, bukan angka.
+  // Next.js mengubah setiap prop menjadi JSON sebelum menyeberangkannya ke
+  // komponen 'use client', dan objek Decimal tidak bisa diubah menjadi JSON:
+  // halaman dashboard gagal dirender saat dijalankan. Karena `order` di
+  // BookingCard bertipe `any`, pemeriksaan tipe tidak memperingatkan apa pun.
+  // Jadi semua nominal diubah ke angka biasa di sini, sebelum menyeberang.
+  const siapkanPesanan = (b: (typeof myBookings)[number]) => ({
+    ...b,
+    totalPrice: uangUntukClient(b.totalPrice),
+    dpAmount: b.dpAmount === null ? null : uangUntukClient(b.dpAmount),
+    refundAmount: b.refundAmount === null ? null : uangUntukClient(b.refundAmount),
+    // Empat kolom rincian di bawah baru terisi sejak harga dihitung di server.
+    // Tanpa konversi ini mereka ikut terbawa `...b` sebagai objek Decimal —
+    // halaman ini akan mati saat dijalankan begitu ada satu komponen yang
+    // menampilkannya, dan `tsc` tidak akan berkata apa-apa karena prop
+    // `order` di BookingCard bertipe `any`.
+    unitPrice: b.unitPrice === null ? null : uangUntukClient(b.unitPrice),
+    basePrice: b.basePrice === null ? null : uangUntukClient(b.basePrice),
+    taxAmount: b.taxAmount === null ? null : uangUntukClient(b.taxAmount),
+    adminFee: b.adminFee === null ? null : uangUntukClient(b.adminFee),
+    billboard: b.billboard
+      ? { ...b.billboard, price: uangUntukClient(b.billboard.price) }
+      : b.billboard,
+  });
 
-  const totalSpent = myBookings
-    .filter(b => ['ACTIVE', 'REFUNDED'].includes(b.status))
-    .reduce((acc, curr) => acc + curr.totalPrice, 0);
+  const activeOrders = myBookings.filter(b => activeStatuses.includes(b.status)).map(siapkanPesanan);
+  const historyOrders = myBookings.filter(b => !activeStatuses.includes(b.status)).map(siapkanPesanan);
+
+  // `acc + curr.totalPrice` dulu menyambung teks, bukan menjumlah: hasilnya
+  // "1000000015000000" alih-alih 25.000.000. Ditampilkan sebagai "Total
+  // Pengeluaran" di kartu profil.
+  //
+  // Penyaringan statusnya juga dulu salah pada dua hal. Pertama, `REFUNDED`
+  // ikut dijumlahkan: pelanggan yang pesanannya dibatalkan dan uangnya sudah
+  // dikembalikan penuh tetap melihat nominal itu tercatat sebagai
+  // pengeluarannya — seolah uangnya hangus. Kedua, pesanan yang sudah dibayar
+  // tapi belum tayang (PAID_CONFIRMED sampai INSTALLATION) tidak dihitung,
+  // jadi pelanggan yang baru saja membayar melihat "Total Pengeluaran" tetap
+  // nol sampai billboardnya terpasang. Kini daftarnya satu dengan yang dipakai
+  // laporan admin, lewat `isRevenueStatus`.
+  const totalSpent = keAngka(
+    jumlah(
+      ...myBookings
+        .filter(b => isRevenueStatus(b.status))
+        .map(b => b.totalPrice)
+    )
+  );
 
   // Render komponen client dan kirim data sebagai props
   return (
-    <DashboardClientPage 
+    <DashboardClientPage
         session={session}
         activeOrders={activeOrders}
         historyOrders={historyOrders}

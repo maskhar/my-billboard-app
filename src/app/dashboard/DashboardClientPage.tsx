@@ -5,6 +5,7 @@ import DashboardLayout from './DashboardLayout'; // Impor layout baru
 import Navbar from '@/components/Navbar';
 import BookingCard from '@/components/BookingCard';
 import { User, Wallet, Briefcase, History } from 'lucide-react';
+import { rupiahSingkat } from '@/lib/money';
 
 type DashboardPageProps = {
   session: any;
@@ -68,8 +69,8 @@ const ProfileCard = ({ session, activeOrderCount, totalSpent }: any) => {
         <div className='bg-green-50 border border-green-100 p-4 rounded-lg'>
             <p className="text-[10px] text-green-500 font-bold uppercase tracking-wider mb-1">Total Pengeluaran</p>
             <p className="text-xl font-bold text-green-700 flex items-center gap-2">
-                <Wallet size={16}/> 
-                Rp {(totalSpent / 1000000).toLocaleString('id-ID', {maximumFractionDigits:1})} Jt
+                <Wallet size={16}/>
+                Rp {rupiahSingkat(totalSpent)}
             </p>
         </div>
       </div>
