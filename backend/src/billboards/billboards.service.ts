@@ -4,6 +4,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateBillboardDto } from './dto/create-billboard.dto';
 import { UpdateBillboardDto } from './dto/update-billboard.dto';
 import { QuickUpdateBillboardDto } from './dto/quick-update-billboard.dto';
+import { assertAdmin } from '../common/admin-check.helper';
 
 @Injectable()
 export class BillboardsService {
@@ -176,7 +177,10 @@ export class BillboardsService {
     });
   }
 
-  async updateStatus(id: string, data: { status?: string; publishStatus?: string }) { // Ganti signature
+  async updateStatus(id: string, data: { status?: string; publishStatus?: string; adminEmail?: string }) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    await assertAdmin(this.prisma, data.adminEmail);
+
     const billboard = await this.prisma.billboard.findUnique({ where: { id } });
     if (!billboard) {
       throw new NotFoundException('Billboard not found');
@@ -233,7 +237,10 @@ export class BillboardsService {
     }
   }
 
-  async remove(id: string) {
+  async remove(id: string, adminEmail?: string) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    await assertAdmin(this.prisma, adminEmail);
+
     const hasActiveOrder = await this.prisma.booking.findFirst({
       where: {
         billboardId: id,

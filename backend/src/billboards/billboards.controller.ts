@@ -24,11 +24,9 @@ export class BillboardsController {
     return this.billboardsService.update(id, updateBillboardDto, userId);
   }
 
-  @Public()
   @Delete(':id')
-  remove(@Param('id') id: string) {
-    // Note: Should probably also check for ownership or admin role here
-    return this.billboardsService.remove(id);
+  remove(@Param('id') id: string, @Body() body: { adminEmail?: string }) {
+    return this.billboardsService.remove(id, body?.adminEmail);
   }
 
   @Public()
@@ -63,10 +61,8 @@ export class BillboardsController {
     return billboard;
   }
 
-  @Public()
   @Patch(':id/status')
-  updateStatus(@Param('id') id: string, @Body() body: { status?: string; publishStatus?: string }) {
-    // Note: This should also be protected and use the user ID for auditing
+  updateStatus(@Param('id') id: string, @Body() body: { status?: string; publishStatus?: string; adminEmail?: string }) {
     return this.billboardsService.updateStatus(id, body);
   }
 
