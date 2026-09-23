@@ -3,6 +3,7 @@ import { Injectable, InternalServerErrorException, UnauthorizedException } from 
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../lib/mail.service';
 import { UpdateOrderDto } from './dto/update-order.dto';
+import { assertAdmin } from '../common/admin-check.helper';
 
 @Injectable()
 export class OrdersService {
@@ -12,6 +13,10 @@ export class OrdersService {
   ) {}
 
   async updateOrderStatus(updateOrderDto: UpdateOrderDto) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    // Untuk sementara endpoint ini divalidasi lewat adminEmail di body + role di DB.
+    await assertAdmin(this.prisma, updateOrderDto.adminEmail);
+
     const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = updateOrderDto;
 
     try {
