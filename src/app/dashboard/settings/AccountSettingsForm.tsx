@@ -3,6 +3,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { Loader2 } from 'lucide-react';
 import type { User } from '@prisma/client';
 
@@ -36,6 +37,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
     const router = useRouter();
+    const { data: session, update } = useSession();
 
     const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setProfileData({ ...profileData, [e.target.name]: e.target.value });
@@ -51,7 +53,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL;
             const res = await fetch(`${apiUrl}/api/users/${user.id}/profile`, {
-                method: 'POST',
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(profileData),
             });
@@ -59,6 +61,10 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 const error = await res.json();
                 throw new Error(error.message || 'Gagal memperbarui profil.');
             }
+            await update({
+                ...session,
+                user: { ...session?.user, name: profileData.name },
+            });
             alert('Profil berhasil diperbarui!');
             router.refresh();
         } catch (error: any) {
@@ -78,7 +84,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         try {
             const apiUrl = process.env.NEXT_PUBLIC_API_URL;
             const res = await fetch(`${apiUrl}/api/users/${user.id}/change-password`, {
-                method: 'POST',
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(passwordData),
             });

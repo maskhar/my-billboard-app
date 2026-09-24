@@ -98,7 +98,14 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     
-    async jwt({ token, user, account, profile }) {
+    async jwt({ token, user, account, profile, trigger, session }) {
+      if (trigger === 'update' && session) {
+        const updatedUser = (session as any).user ?? {};
+        if (updatedUser.name) token.name = updatedUser.name;
+        if (updatedUser.image) token.picture = updatedUser.image;
+        return token;
+      }
+
       if (user) {
         // Ambil data lengkap dari DB saat login
         const dbUser = await prisma.user.findUnique({
