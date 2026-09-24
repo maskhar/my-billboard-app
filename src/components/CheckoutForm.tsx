@@ -42,6 +42,12 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   const mustPayNow = paymentType === 'full' ? grandTotal : (grandTotal * 0.60);
 
   const handlePayment = async () => {
+      if (!session?.user?.id) {
+          alert("🔐 Silakan login terlebih dahulu sebelum melakukan pemesanan.");
+          router.push('/login');
+          return;
+      }
+
       const userRole = session?.user?.role;
       if (userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') {
           alert("⛔ MAAF AKSES DITOLAK!\n\nAdmin / Super Admin tidak diperbolehkan melakukan pemesanan.\nSilakan gunakan akun Customer untuk melakukan tes order.");
@@ -57,6 +63,7 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
       setIsLoading(true);
 
       const payload = {
+          userId: session.user.id,
           billboardId: billboard.id,
           duration: duration,
           totalPrice: grandTotal,
