@@ -55,6 +55,12 @@ public/uploads/
 # IDE & Tooling
 .continue/
 
+# Setelan izin alat bantu per mesin (`.claude/settings.local.json`) dan worktree
+# sementara yang dibuatnya. Keduanya milik mesin lokal, bukan bagian aplikasi:
+# menyertakannya membuat setelan satu mesin memaksa mesin lain, dan direktori
+# worktree berisi salinan repo yang tidak boleh ikut ter-commit.
+.claude/
+
 # Indeks CodeGraph: hasil turunan dari kode yang sudah ada di repo ini, dibangun
 # ulang per mesin. Isinya juga memuat cuplikan kode apa adanya, jadi tidak ada
 # gunanya ikut dikirim dan hanya membuat setiap commit berisik.

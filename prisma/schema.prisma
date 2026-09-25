@@ -445,10 +445,11 @@ model Payment {
   // seperti kolom JSON di Billboard.
   callbackPayload Json?
 
-  // Kapan tagihan ini kedaluwarsa di sisi gerbang pembayaran. Sesi Xendit
-  // berumur pendek (default 30 menit) sedangkan tagihan pelunasan berumur
-  // beberapa hari sampai tenggat H-3 — jadi satu baris Payment bisa melewati
-  // beberapa sesi pembayaran, dan kolom ini mencatat sesi yang terakhir dibuat.
+  // Kapan sesi pada baris INI kedaluwarsa di sisi gerbang pembayaran. Sesi
+  // Xendit berumur pendek (default 30 menit) sedangkan kewajiban pelunasan
+  // boleh hidup beberapa hari sampai tenggat H-3. Ketika sesi kedaluwarsa,
+  // baris ini menjadi EXPIRED lalu sesi pengganti mendapat baris Payment BARU;
+  // kolom ini tidak pernah dipakai untuk menimpa sesi lama.
   expiresAt DateTime?
   paidAt    DateTime?
 
