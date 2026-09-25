@@ -41,8 +41,10 @@ CREATE TABLE "Payment" (
     "tujuan" "PaymentTujuan" NOT NULL,
     "status" "PaymentStatus" NOT NULL DEFAULT 'PENDING',
     "jumlah" DECIMAL(15,2) NOT NULL,
+    "providerReferenceId" TEXT,
     "providerSessionId" TEXT,
     "providerPaymentId" TEXT,
+    "providerCheckoutUrl" TEXT,
     "callbackPayload" JSONB,
     "expiresAt" TIMESTAMP(3),
     "paidAt" TIMESTAMP(3),
@@ -52,6 +54,10 @@ CREATE TABLE "Payment" (
     CONSTRAINT "Payment_pkey" PRIMARY KEY ("id")
 );
 
+-- Dibuat internal sebelum memanggil Xendit. Jadi bila proses mati sesudah sesi
+-- provider dibuat tapi sebelum ID sesinya tersimpan, webhook tetap bisa mencari
+-- baris Payment melalui `reference_id` ini.
+CREATE UNIQUE INDEX "Payment_providerReferenceId_key" ON "Payment"("providerReferenceId");
 CREATE UNIQUE INDEX "Payment_providerSessionId_key" ON "Payment"("providerSessionId");
 -- Satu Payment ID Xendit = satu transaksi uang nyata. Unik supaya webhook yang
 -- diulang atau salah cocok tidak bisa mencatat pembayaran yang sama dua kali.

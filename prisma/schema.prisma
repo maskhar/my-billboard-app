@@ -421,11 +421,23 @@ model Payment {
   // `@unique` pada id sesi bukan sekadar kerapian: webhook mencari baris
   // Payment berdasarkan nilai ini. Bila dua baris bisa memuat id yang sama,
   // webhook tidak punya cara menentukan mana yang dilunasi.
-  providerSessionId String? @unique
+  // Dibuat SEBELUM memanggil Xendit, lalu dikirim sebagai `reference_id`.
+  // Ini jalur pemulihan bila proses mati setelah Xendit membuat sesi tapi
+  // sebelum `providerSessionId` sempat tersimpan: webhook tetap dapat mencari
+  // tepat satu baris lewat reference ini, bukan membuang pembayaran sah hanya
+  // karena jendela kegagalan beberapa milidetik.
+  providerReferenceId String? @unique
+  providerSessionId   String? @unique
   // Satu Payment ID Xendit merepresentasikan satu transaksi uang nyata. Unik
   // agar webhook yang salah cari/diulang tidak bisa menautkannya ke dua baris
   // internal dan membuat satu pembayaran tercatat dua kali.
-  providerPaymentId String? @unique
+  providerPaymentId   String? @unique
+
+  // Tautan Hosted Checkout milik satu sesi. Disimpan agar pembeli yang menekan
+  // tombol Bayar lagi dibawa ke sesi yang MASIH aktif, bukan dibuatkan tagihan
+  // kedua untuk kewajiban yang sama. URL ini bukan rahasia; ia hanya tetap
+  // diberikan setelah server membuktikan pemanggil adalah pemilik Booking.
+  providerCheckoutUrl String?
 
   // Isi webhook disimpan apa adanya. Saat ada sengketa — "saya sudah bayar",
   // "nominalnya bukan itu" — inilah satu-satunya bukti tentang apa yang
