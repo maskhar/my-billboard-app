@@ -87,6 +87,28 @@ enum DesignOption {
   service
 }
 
+// Untuk apa satu pembayaran ditagihkan. Dipakai `Payment.tujuan`.
+//
+// Dibedakan karena satu pesanan bisa ditagih beberapa kali dengan arti yang
+// berbeda, dan angkanya tidak boleh tercampur: DP adalah sebagian dari
+// `totalPrice`, PELUNASAN adalah sisanya, sedangkan TAMBAHAN berada DI LUAR
+// `totalPrice` (lihat `AdditionalCharge`). Tanpa pembeda ini, menjumlahkan
+// seluruh pembayaran sebuah pesanan menghasilkan angka yang tidak bisa
+// dibandingkan dengan apa pun.
+enum PaymentTujuan {
+  DP         // pembayaran muka, sebagian dari totalPrice
+  FULL       // sekali bayar penuh sebesar totalPrice
+  PELUNASAN  // sisa setelah DP
+  TAMBAHAN   // menagih AdditionalCharge, di luar totalPrice
+}
+
+enum PaymentStatus {
+  PENDING  // tagihan dibuat, uang belum masuk
+  PAID     // uang dipastikan masuk oleh webhook gerbang pembayaran
+  EXPIRED  // lewat tenggat tanpa dibayar
+  VOIDED   // dibatalkan sebelum dibayar (mis. pesanannya batal)
+}
+
 enum ChatSessionStatus {
   OPEN
   AGENT
@@ -121,7 +143,14 @@ model User {
   ktpAddress    String?
   officeAddress String?
   username      String?   @unique
-  
+
+  // ID pelanggan yang dibuat oleh Xendit (`cust-...`). `customer.reference_id`
+  // pada Xendit harus unik: mengirim email/user id yang sama ke endpoint create
+  // customer untuk pembayaran kedua menghasilkan 409 DUPLICATE_ERROR. Karena
+  // itu hasil create pertama disimpan dan dipakai ulang, bukan dibuat ulang
+  // untuk setiap sesi pembayaran.
+  xenditCustomerId String? @unique
+
   // === FITUR BARU ===
   authProvider  AuthProvider @default(EMAIL)
   isVerified    Boolean   @default(false)
@@ -317,12 +346,107 @@ model Booking {
   // -- BARU: BIAYA TAMBAHAN --
   additionalCharges AdditionalCharge[]
 
+  // -- RIWAYAT PEMBAYARAN --
+  payments      Payment[]
+
   // Tiga pola query yang paling sering dipakai:
   // daftar order milik satu user, tab status di dashboard admin,
   // dan pengecekan tanggal bentrok per billboard.
   @@index([userId, status])
   @@index([status])
   @@index([billboardId, startDate, endDate])
+}
+
+// 8. PEMBAYARAN
+//
+// KENAPA TABEL, BUKAN BEBERAPA KOLOM DI BOOKING
+// ---------------------------------------------
+// Sebelum tabel ini ada, "berapa uang yang sudah masuk" tidak pernah disimpan.
+// Ia DITEBAK dari `dpAmount`: kalau kolom itu berisi angka, dianggap yang masuk
+// baru DP; kalau nol, dianggap sudah lunas (lihat `uangYangSudahMasuk` di
+// api/booking/request-refund). Tebakan itu benar hanya selama satu pesanan
+// dibayar tepat satu kali. Begitu ada pelunasan sisa DP, ia langsung salah:
+// pesanan yang sudah lunas penuh tetap dihitung baru menyetor DP, dan refund
+// dihitung dari angka yang lebih kecil daripada uang yang benar-benar diterima.
+//
+// Dua kolom skalar (`paidAmount`, `paidAt`) tidak menyelesaikannya, karena
+// jumlah pembayaran per pesanan memang tidak terbatas: `AdditionalCharge` berada
+// DI LUAR `totalPrice` dan admin boleh menambahkannya SETELAH pelunasan. Jadi
+// satu pesanan bisa punya DP, pelunasan, lalu beberapa tagihan tambahan.
+// Angka tunggal `paidAmount` akan terus ditimpa dan riwayatnya hilang.
+//
+// Dengan tabel ini, uang masuk menjadi HASIL PENJUMLAHAN baris berstatus PAID —
+// fakta yang tercatat, bukan kesimpulan yang ditarik ulang setiap kali dibaca.
+//
+// SATU BARIS = SATU SESI PEMBAYARAN, BUKAN SATU KEWAJIBAN
+// -------------------------------------------------------
+// Aturan ini menentukan seluruh alur di atasnya, jadi ditulis tegas:
+//
+//   - Satu baris Payment mewakili SATU sesi pembayaran di Xendit. Sesi itu
+//     sendiri sudah menampung beberapa percobaan bayar — pembeli yang gagal di
+//     tengah jalan bisa mencoba lagi pada tautan yang sama.
+//   - Sesi yang KEDALUWARSA tidak bisa dihidupkan kembali oleh Xendit. Jadi
+//     ketika pembeli ingin mencoba lagi setelah tenggat sesi lewat, barisnya
+//     ditandai EXPIRED dan dibuatkan baris BARU untuk sesi yang baru.
+//   - Karena itu `providerSessionId` tidak pernah ditimpa. Kalau ia ditimpa,
+//     webhook dari sesi yang lama tidak bisa lagi dicocokkan ke baris mana pun
+//     — dan webhook Xendit bisa tiba terlambat sampai 24 jam, jadi sesi lama
+//     yang ternyata benar-benar dibayar akan hilang tanpa jejak.
+//
+// Yang TIDAK disimpan di tabel ini adalah "kewajiban melunasi". Kewajiban itu
+// bukan baris, melainkan hasil hitungan: `totalPrice` dikurangi jumlah semua
+// baris PAID. Menyimpannya sebagai baris tersendiri berarti ada dua sumber
+// kebenaran yang harus terus disamakan.
+//
+// Indeks unik bersyarat `payment_satu_tagihan_menganggur` (ditulis tangan di
+// migrasi, karena Prisma tidak bisa menyatakannya) menjaga agar hanya ada SATU
+// baris PENDING per (bookingId, tujuan) — itulah yang menegakkan keputusan
+// pemilik proyek bahwa pelunasan dibayar sekali penuh, tidak dicicil.
+model Payment {
+  id        String        @id @default(cuid())
+  bookingId String
+  // `Restrict`, sama alasannya dengan relasi di Booking: baris ini adalah bukti
+  // uang berpindah. Menghapus pesanan tidak boleh diam-diam melenyapkannya.
+  booking   Booking       @relation(fields: [bookingId], references: [id], onDelete: Restrict)
+
+  tujuan    PaymentTujuan
+  status    PaymentStatus @default(PENDING)
+
+  // Lihat catatan Decimal di Billboard.price. Nominal yang DITAGIHKAN pada
+  // tagihan ini — bukan total pesanan.
+  jumlah    Decimal       @db.Decimal(15, 2)
+
+  // -- Kaitan ke gerbang pembayaran (Xendit) --
+  //
+  // `@unique` pada id sesi bukan sekadar kerapian: webhook mencari baris
+  // Payment berdasarkan nilai ini. Bila dua baris bisa memuat id yang sama,
+  // webhook tidak punya cara menentukan mana yang dilunasi.
+  providerSessionId String? @unique
+  // Satu Payment ID Xendit merepresentasikan satu transaksi uang nyata. Unik
+  // agar webhook yang salah cari/diulang tidak bisa menautkannya ke dua baris
+  // internal dan membuat satu pembayaran tercatat dua kali.
+  providerPaymentId String? @unique
+
+  // Isi webhook disimpan apa adanya. Saat ada sengketa — "saya sudah bayar",
+  // "nominalnya bukan itu" — inilah satu-satunya bukti tentang apa yang
+  // sebenarnya dikirim gerbang pembayaran. Jsonb, dengan alasan yang sama
+  // seperti kolom JSON di Billboard.
+  callbackPayload Json?
+
+  // Kapan tagihan ini kedaluwarsa di sisi gerbang pembayaran. Sesi Xendit
+  // berumur pendek (default 30 menit) sedangkan tagihan pelunasan berumur
+  // beberapa hari sampai tenggat H-3 — jadi satu baris Payment bisa melewati
+  // beberapa sesi pembayaran, dan kolom ini mencatat sesi yang terakhir dibuat.
+  expiresAt DateTime?
+  paidAt    DateTime?
+
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  // Riwayat pembayaran satu pesanan, urut waktu.
+  @@index([bookingId, createdAt])
+  // Penyapu tagihan kedaluwarsa menyaring dengan dua kolom ini.
+  @@index([status, expiresAt])
 }
 
 // 7. BIAYA TAMBAHAN
