@@ -9,7 +9,7 @@ import LocationVisualizer from '@/components/LocationVisualizer';
 import AvailabilityCalendar from '@/components/AvailabilityCalendar';
 import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
-import { safeJsonArray } from '@/lib/safe-json';
+import { arrayDariJson } from '@/lib/safe-json';
 import { rupiahSingkat } from '@/lib/money';
 
 // Tipe properti yang diterima dari Server Component
@@ -35,16 +35,21 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
     router.push(`?${params.toString()}`, { scroll: false });
   };
 
-  // Parsing data.
+  // Membaca data.
   //
   // Sebelumnya `JSON.parse` mentah: satu billboard dengan kolom rusak membuat
   // SELURUH halaman produk publik gagal dirender — bukan hanya bagian galeri
   // atau spesifikasinya. Sekarang bagian yang rusak tampil kosong, sisanya
   // tetap terbaca, dan penyebabnya tercatat di log server.
-  const gallery = safeJsonArray<string>(rawData.gallery, `Billboard.gallery id=${rawData.id}`);
-  const specs = safeJsonArray<{ label: string; value: string }>(rawData.specs, `Billboard.specs id=${rawData.id}`);
-  const includes = safeJsonArray<string>(rawData.includes, `Billboard.includes id=${rawData.id}`);
-  const excludes = safeJsonArray<string>(rawData.excludes, `Billboard.excludes id=${rawData.id}`);
+  //
+  // `arrayDariJson`, BUKAN `safeJsonArray`: keempat kolom ini bertipe jsonb dan
+  // Prisma sudah menguraikannya. Menguraikan sekali lagi dengan `JSON.parse`
+  // justru MENGHAPUS datanya — `JSON.parse(["a.jpg"])` melempar dan hasilnya
+  // jatuh ke array kosong, jadi galerinya lenyap tanpa error yang terlihat.
+  const gallery = arrayDariJson<string>(rawData.gallery, `Billboard.gallery id=${rawData.id}`);
+  const specs = arrayDariJson<{ label: string; value: string }>(rawData.specs, `Billboard.specs id=${rawData.id}`);
+  const includes = arrayDariJson<string>(rawData.includes, `Billboard.includes id=${rawData.id}`);
+  const excludes = arrayDariJson<string>(rawData.excludes, `Billboard.excludes id=${rawData.id}`);
   // Dulu `(rawData.price / 1000000).toFixed(0)` — pembagian pada objek
   // Decimal menghasilkan NaN, dan harga di halaman produk terbaca "NaN Jt".
   // `rupiahSingkat` sudah memuat satuannya sendiri ("15 Jt", "1,5 M"), jadi

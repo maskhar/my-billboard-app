@@ -178,14 +178,34 @@ model Billboard {
   publishStatus PublishStatus   @default(DRAFT)
 
   mainImage   String
-  gallery     String 
   videoUrl    String?
   smartsucoUrl String?
 
-  specs       String   
-  includes    String  
-  excludes    String 
-  
+  // Empat kolom di bawah dulu bertipe String dan menyimpan JSON sebagai teks:
+  // setiap penulis memanggil `JSON.stringify`, setiap pembaca `JSON.parse`.
+  // Database karena itu tidak pernah bisa menolak isi yang rusak — teks kosong,
+  // kutip yang hilang, atau data berformat lama tersimpan dengan tenang, dan
+  // baru meledak saat dibaca, di halaman produk publik, jauh dari sumbernya.
+  //
+  // Sekarang jsonb: database yang memvalidasi bentuknya saat ditulis, Prisma
+  // yang menguraikannya saat dibaca. `jsonb` dipilih, bukan `json`, karena ia
+  // tersimpan sudah terurai (dibaca tanpa parse ulang) dan bisa diindeks bila
+  // suatu saat perlu dicari isinya. Kekhawatiran "jsonb mengacak urutan" tidak
+  // berlaku di sini: ia hanya mengurutkan ulang KUNCI di dalam objek, bukan
+  // ELEMEN di dalam array — urutan foto galeri dan urutan baris spesifikasi
+  // tetap terjaga.
+  //
+  // Non-null dengan default `[]`, bukan opsional: kolom Json opsional punya TIGA
+  // keadaan kosong yang tidak bisa dibedakan pembaca (SQL NULL, JSON null, dan
+  // array kosong), dan Prisma bahkan memaksa penulis memilih di antaranya lewat
+  // `Prisma.DbNull`/`Prisma.JsonNull`. Tidak satu pun pembaca di proyek ini
+  // membedakan ketiganya — semuanya hanya menanyakan `.length > 0`.
+  gallery     Json     @default("[]")
+  specs       Json     @default("[]")
+  includes    Json     @default("[]")
+  excludes    Json     @default("[]")
+
+
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 

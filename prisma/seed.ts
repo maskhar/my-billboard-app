@@ -113,22 +113,29 @@ async function main() {
       publishStatus: "PUBLISHED",
       mainImage:
         "https://images.unsplash.com/photo-1604015248272-d901b07287a2?auto=format&fit=crop&w=1000&q=80",
-      specs: JSON.stringify([
+      // Keempat kolom JSON di bawah bertipe jsonb, jadi array ditulis apa
+      // adanya — TANPA `JSON.stringify`. Kalau dibungkus, database tetap
+      // menerimanya dan `tsc` tetap diam (tipe `InputJsonValue` memuat
+      // `string`), tapi yang tersimpan adalah teks JSON di dalam jsonb. Data
+      // seed adalah titik paling mudah terlewat: ia tidak ikut terbuka saat
+      // route diperbaiki, dan hasilnya baru terasa sebagai spesifikasi yang
+      // kosong di halaman produk setelah database di-reset.
+      specs: [
         { label: "Ukuran", value: "5m x 10m" },
         { label: "Luas Area", value: "50 m²" },
         { label: "Layout / Orientasi", value: "Horizontal" },
         { label: "Tampilan", value: "1 Sisi" },
         { label: "Jenis Penerangan", value: "Frontlight" },
         { label: "Material", value: "Vinyl" },
-      ]),
-      includes: JSON.stringify([
+      ],
+      includes: [
         "Sewa Lahan",
         "Biaya Cetak (1x)",
         "Biaya Pasang (1x)",
         "Pajak Reklame",
-      ]),
-      excludes: JSON.stringify(["PPN 11%"]),
-      gallery: JSON.stringify([]),
+      ],
+      excludes: ["PPN 11%"],
+      gallery: [],
       createdById: superAdmin.id,
       updatedById: superAdmin.id,
     },
@@ -145,17 +152,17 @@ async function main() {
       publishStatus: "PUBLISHED",
       mainImage:
         "https://images.unsplash.com/photo-1542662565-7e4b66bae529?auto=format&fit=crop&w=1000&q=80",
-      specs: JSON.stringify([
+      specs: [
         { label: "Ukuran", value: "3m x 4m" },
         { label: "Luas Area", value: "12 m²" },
         { label: "Layout / Orientasi", value: "Vertical" },
         { label: "Tampilan", value: "1 Sisi" },
         { label: "Jenis Penerangan", value: "Videotron / LED" },
         { label: "Material", value: "LED Screen" },
-      ]),
-      includes: JSON.stringify(["Sewa Lahan", "Pajak Reklame", "Listrik"]),
-      excludes: JSON.stringify(["Biaya Produksi Materi Iklan", "PPN 11%"]),
-      gallery: JSON.stringify([]),
+      ],
+      includes: ["Sewa Lahan", "Pajak Reklame", "Listrik"],
+      excludes: ["Biaya Produksi Materi Iklan", "PPN 11%"],
+      gallery: [],
       createdById: superAdmin.id,
       updatedById: superAdmin.id,
     },
@@ -172,17 +179,17 @@ async function main() {
       publishStatus: "DRAFT", // Ini contoh draft
       mainImage:
         "https://images.unsplash.com/photo-1520105072086-65e692263ab4?auto=format&fit=crop&w=1000&q=80",
-      specs: JSON.stringify([
+      specs: [
         { label: "Ukuran", value: "4m x 8m" },
         { label: "Luas Area", value: "32 m²" },
         { label: "Layout / Orientasi", value: "Horizontal" },
         { label: "Tampilan", value: "2 Sisi" },
         { label: "Jenis Penerangan", value: "Backlight" },
         { label: "Material", value: "Vinyl Backlight" },
-      ]),
-      includes: JSON.stringify(["Sewa Lahan", "Pajak Reklame"]),
-      excludes: JSON.stringify(["Listrik", "PPN 11%"]),
-      gallery: JSON.stringify([]),
+      ],
+      includes: ["Sewa Lahan", "Pajak Reklame"],
+      excludes: ["Listrik", "PPN 11%"],
+      gallery: [],
       createdById: superAdmin.id,
       updatedById: superAdmin.id,
     },

@@ -22,16 +22,22 @@ export async function POST(req: Request) {
 
     const body = await req.json();
 
-    // 2. [LOGIC BARU] MENYUSUN SPESIFIKASI JADI RAPI (JSON)
+    // 2. MENYUSUN SPESIFIKASI JADI SATU PAKET
     // Data dari Form (sizeH, sizeW, lighting) kita bungkus jadi satu paket 'specs'
-    const packedSpecs = JSON.stringify([
+    //
+    // TANPA `JSON.stringify`: kolomnya bertipe jsonb, jadi array ini masuk apa
+    // adanya. Membungkusnya dengan `JSON.stringify` TIDAK akan ditolak compiler
+    // — tipe `InputJsonValue` milik Prisma memuat `string` — dan yang tersimpan
+    // jadi sebuah teks JSON di dalam jsonb (ganda-encode). Database menerimanya,
+    // tidak ada error, tapi pembacanya melihat teks alih-alih array.
+    const packedSpecs = [
         { label: "Ukuran", value: `${body.sizeH || 0}m x ${body.sizeW || 0}m` },
         { label: "Luas Area", value: `${(Number(body.sizeH) * Number(body.sizeW)).toFixed(1)} m²` },
         { label: "Layout / Orientasi", value: body.orientation || "-" },
         { label: "Tampilan", value: body.sides ? `${body.sides} Sisi` : "-" },
         { label: "Jenis Penerangan", value: body.lighting || "-" },
         { label: "Material", value: body.material || "-" },
-    ]);
+    ];
 
     // 3. [LOGIC BARU] MEMISAHKAN INCLUDE & EXCLUDE
     // Dari checklist form, kita pisahkan mana yang True (Include) dan False (Exclude)
@@ -46,9 +52,17 @@ export async function POST(req: Request) {
         .filter((opt: any) => opt.included === false)
         .map((opt: any) => opt.name);
 
-    // 4. [LOGIC BARU] SUSUN GALERI
-    // Jika tidak ada galeri tambahan, buat array kosong
-    const galleryJson = JSON.stringify(body.gallery || []);
+    // 4. SUSUN GALERI
+    //
+    // Isinya masuk ke jsonb apa adanya, dan setiap URL di dalamnya kemudian
+    // dirender sebagai atribut `src` gambar di halaman produk publik. `body`
+    // berasal dari `req.json()` dan tidak bertipe apa pun, jadi bentuknya
+    // dipastikan di sini: hanya elemen bertipe teks yang diterima. Tanpa
+    // penyaringan ini, objek atau angka yang diselipkan ke dalam array akan
+    // tersimpan dan baru terasa sebagai gambar rusak di halaman pembeli.
+    const galeri: string[] = Array.isArray(body.gallery)
+        ? body.gallery.filter((u: unknown): u is string => typeof u === 'string' && u.trim() !== "")
+        : [];
 
     // 4b. PERIKSA NILAI DARI FORM SEBELUM MENYENTUH DATABASE
     //
@@ -100,11 +114,12 @@ export async function POST(req: Request) {
             publishStatus,
             mainImage: body.mainImage || "",
             
-            // Masukkan data JSON yang sudah dipacking tadi
+            // Keempat kolom di bawah bertipe jsonb — array masuk apa adanya,
+            // tanpa `JSON.stringify` (lihat catatan di bagian 2).
             specs: packedSpecs,
-            includes: JSON.stringify(includesList),
-            excludes: JSON.stringify(excludesList),
-            gallery: galleryJson,
+            includes: includesList,
+            excludes: excludesList,
+            gallery: galeri,
             
             smartsucoUrl: body.smartsucoUrl, // Link Trafik
             

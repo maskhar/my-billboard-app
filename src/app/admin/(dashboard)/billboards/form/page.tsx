@@ -6,7 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // PERBAIKAN: Menambahkan 'Plus' di sini
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
-import { safeJsonArray } from '@/lib/safe-json';
+import { arrayDariJson } from '@/lib/safe-json';
 import { angkaRupiah } from '@/lib/money';
 
 export default function BillboardFormPage() {
@@ -58,9 +58,17 @@ export default function BillboardFormPage() {
                     // memuat" — admin tidak punya petunjuk bahwa datanyalah yang
                     // cacat, dan tidak bisa membuka form untuk memperbaikinya.
                     // Sekarang bagian rusak jadi kosong dan form tetap terbuka.
-                    const parsedGallery = safeJsonArray<string>(data.gallery, `Billboard.gallery id=${billboardId}`);
-                    const dbIncludes = safeJsonArray<string>(data.includes, `Billboard.includes id=${billboardId}`);
-                    const parsedSpecs = safeJsonArray<{ label: string; value: string }>(data.specs, `Billboard.specs id=${billboardId}`);
+                    //
+                    // `arrayDariJson`, BUKAN `safeJsonArray`: ketiga kolom ini
+                    // bertipe jsonb, jadi yang sampai ke sini lewat `res.json()`
+                    // SUDAH berupa array. Form inilah titik paling berbahaya bila
+                    // salah pembaca: nilai yang gagal dibaca menjadi array kosong,
+                    // lalu tombol Simpan menulis kembali array kosong itu ke
+                    // database — galeri dan daftar fasilitas hilang permanen,
+                    // tanpa satu pun pesan galat ke admin.
+                    const parsedGallery = arrayDariJson<string>(data.gallery, `Billboard.gallery id=${billboardId}`);
+                    const dbIncludes = arrayDariJson<string>(data.includes, `Billboard.includes id=${billboardId}`);
+                    const parsedSpecs = arrayDariJson<{ label: string; value: string }>(data.specs, `Billboard.specs id=${billboardId}`);
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
 

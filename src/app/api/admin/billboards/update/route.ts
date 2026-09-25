@@ -38,19 +38,36 @@ export async function POST(req: Request) {
       if (!oldData) return NextResponse.json({ message: "Data hilang" }, { status: 404 });
 
       // --- LOGIC PACKING DATA BARU (SAMA SEPERTI CREATE) ---
-      const packedSpecs = JSON.stringify([
+      //
+      // TANPA `JSON.stringify`: keempat kolom tujuan bertipe jsonb. Membungkusnya
+      // tidak akan ditolak compiler (tipe `InputJsonValue` memuat `string`) tapi
+      // menyimpan teks JSON di dalam jsonb — ganda-encode, dan pembacanya
+      // melihat teks alih-alih array.
+      const packedSpecs = [
         { label: "Ukuran", value: `${body.sizeH || 0}m x ${body.sizeW || 0}m` },
         { label: "Luas Area", value: `${(Number(body.sizeH) * Number(body.sizeW)).toFixed(1)} m²` },
         { label: "Layout / Orientasi", value: body.orientation || "-" },
         { label: "Tampilan", value: body.sides ? `${body.sides} Sisi` : "-" },
         { label: "Jenis Penerangan", value: body.lighting || "-" },
         { label: "Material", value: body.material || "-" },
-      ]);
+      ];
 
+      // `=== true` / `=== false`, bukan truthy. Ini menyamakan perilakunya dengan
+      // `create/route.ts`: opsi yang datang tanpa field `included` (mis. dari
+      // form versi lain) dulu di sini dihitung sebagai EXCLUDE, sementara di
+      // create ia tidak masuk daftar mana pun. Perbedaan itu membuat satu
+      // billboard bisa berubah daftar fasilitasnya hanya karena disimpan lewat
+      // jalur yang berbeda.
       const options = Array.isArray(body.adminOptions) ? body.adminOptions : [];
-      const includesList = options.filter((o:any) => o.included).map((o:any) => o.name);
-      const excludesList = options.filter((o:any) => !o.included).map((o:any) => o.name);
-      const galleryJson = JSON.stringify(body.gallery || []);
+      const includesList = options.filter((o:any) => o.included === true).map((o:any) => o.name);
+      const excludesList = options.filter((o:any) => o.included === false).map((o:any) => o.name);
+
+      // Bentuk galeri dipastikan sebelum masuk database — setiap elemen nantinya
+      // dirender sebagai `src` gambar di halaman publik. Lihat catatan yang sama
+      // di `create/route.ts`.
+      const galeri: string[] = Array.isArray(body.gallery)
+          ? body.gallery.filter((u: unknown): u is string => typeof u === 'string' && u.trim() !== "")
+          : [];
 
       // PERIKSA NILAI DARI FORM SEBELUM MASUK TRANSAKSI
       //
@@ -93,8 +110,19 @@ export async function POST(req: Request) {
                   price: oldData.price,
                   status: oldData.status,
                   changedById: session.user.id,
-                  // Simpan snapshot data lama
-                  snapshot: JSON.stringify({ ...oldData }) 
+                  // Simpan snapshot data lama.
+                  //
+                  // `snapshot` memang masih bertipe String, jadi `JSON.stringify`
+                  // di sini BENAR — bukan sisa yang terlewat. Tapi perhatikan
+                  // akibatnya: sejak keempat kolom JSON menjadi jsonb, isi
+                  // snapshot berbeda tergantung tanggalnya. Baris lama memuat
+                  // `gallery` sebagai teks (`"[\"a.jpg\"]"`), baris baru sebagai
+                  // array sungguhan (`["a.jpg"]`). Rollback di
+                  // `api/admin/billboards/rollback` hanya menyalin `title`,
+                  // `price`, dan `status`, jadi perbedaan ini tidak
+                  // memengaruhinya — tapi kode apa pun yang nanti membaca
+                  // `gallery` dari snapshot harus menyiapkan kedua bentuk itu.
+                  snapshot: JSON.stringify({ ...oldData })
               }
           }),
           
@@ -114,11 +142,12 @@ export async function POST(req: Request) {
                   status: body.status,
                   publishStatus: body.publishStatus,
                   
-                  // Update data JSON
+                  // Keempat kolom di bawah bertipe jsonb — array masuk apa
+                  // adanya, tanpa `JSON.stringify` (lihat catatan di atas).
                   specs: packedSpecs,
-                  includes: JSON.stringify(includesList),
-                  excludes: JSON.stringify(excludesList),
-                  gallery: galleryJson,
+                  includes: includesList,
+                  excludes: excludesList,
+                  gallery: galeri,
                   smartsucoUrl: body.smartsucoUrl,
                   
                   updatedById: session.user.id

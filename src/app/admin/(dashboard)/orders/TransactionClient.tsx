@@ -7,7 +7,7 @@ import { useState } from 'react';
 import type { Booking, User, Billboard, AdditionalCharge } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
-import { safeJsonArray } from '@/lib/safe-json';
+import { arrayDariJson } from '@/lib/safe-json';
 import { jumlah, rupiah } from '@/lib/money';
 
 type Transaction = Booking & {
@@ -198,10 +198,13 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
     ? jumlah(selected.totalPrice, ...(selected.additionalCharges ?? []).map((c) => c.amount))
     : 0;
 
-  // Diurai sekali, bukan tiga kali di dalam JSX. Selain memboroskan pekerjaan,
+  // Dibaca sekali, bukan tiga kali di dalam JSX. Selain memboroskan pekerjaan,
   // `JSON.parse` mentah di tengah render membuat satu baris DB rusak
   // menjatuhkan seluruh halaman transaksi admin.
-  const specsBillboard = safeJsonArray<{ label: string; value: string }>(
+  //
+  // `arrayDariJson`, BUKAN `safeJsonArray`: kolom `specs` bertipe jsonb dan
+  // Prisma sudah menguraikannya (lihat catatan di `src/lib/safe-json.ts`).
+  const specsBillboard = arrayDariJson<{ label: string; value: string }>(
     selected?.billboard?.specs,
     `Billboard.specs order=${selected?.id ?? '-'}`
   );
