@@ -14,7 +14,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
-    "menu": "node manager.js"
+    "menu": "node manager.js",
+    "test:xendit": "node --conditions=react-server --test tests/xendit.test.cjs"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.36.5",
