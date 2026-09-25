@@ -44,10 +44,13 @@ const JALUR_MODUL = path.join(__dirname, '..', 'src', 'lib', 'xendit.ts');
 // ---------------------------------------------------------------------------
 const KUNCI_PALSU = 'xnd_development_KUNCI_PALSU_TES_0123456789abcdef';
 const TOKEN_PALSU = 'token_callback_palsu_untuk_tes_abcdef';
+const ORIGIN_PALSU = 'https://contoh.test';
 const ENV_DIPAKAI = [
   'XENDIT_SECRET_KEY',
   'XENDIT_CALLBACK_TOKEN',
   'XENDIT_API_BASE_URL',
+  'APP_ORIGIN',
+  'NODE_ENV',
 ];
 
 let envAsli = null;
@@ -147,8 +150,6 @@ function inputSesi(ganti = {}) {
     jumlah: '1500000',
     deskripsi: 'Sewa billboard Jl. Sudirman',
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-    successUrl: 'https://contoh.test/bayar/sukses',
-    cancelUrl: 'https://contoh.test/bayar/batal',
     ...ganti,
   };
 }
@@ -162,14 +163,26 @@ function inputCustomer(ganti = {}) {
   };
 }
 
-const SESI_OK = {
-  payment_session_id: 'ps-1',
-  payment_link_url: 'https://checkout.xendit.co/web/ps-1',
-  status: 'ACTIVE',
-  expires_at: new Date(Date.now() + 3600_000).toISOString(),
-  reference_id: 'pay_01HZ',
-  amount: 1500000,
-};
+/**
+ * Jawaban sesi yang sehat.
+ *
+ * Dibuat lewat fungsi, bukan konstanta bersama: `expires_at` dihitung dari
+ * `Date.now()`, dan satu objek yang dipakai seluruh file akan kedaluwarsa di
+ * tengah rangkaian test yang panjang — kegagalan yang muncul dan hilang sendiri.
+ */
+function sesiOk(ganti = {}) {
+  return {
+    payment_session_id: 'ps-1',
+    status: 'ACTIVE',
+    mode: 'COMPONENTS',
+    expires_at: new Date(Date.now() + 3600_000).toISOString(),
+    reference_id: 'pay_01HZ',
+    customer_id: 'cust_01HZ',
+    amount: 1500000,
+    components_sdk_key: 'csk-palsu-untuk-tes',
+    ...ganti,
+  };
+}
 
 const CUSTOMER_OK = { id: 'cus-1', reference_id: 'user_01HZ' };
 
@@ -178,6 +191,8 @@ beforeEach(() => {
   fetchAsli = globalThis.fetch;
   process.env.XENDIT_SECRET_KEY = KUNCI_PALSU;
   process.env.XENDIT_CALLBACK_TOKEN = TOKEN_PALSU;
+  process.env.APP_ORIGIN = ORIGIN_PALSU;
+  process.env.NODE_ENV = 'test';
   delete process.env.XENDIT_API_BASE_URL;
 });
 
@@ -258,7 +273,7 @@ describe('nominal sesi pembayaran', () => {
   }
 
   it('buatSesiPembayaran mengirim amount sebagai NUMBER JSON', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi({ jumlah: '1500000.00' }));
@@ -281,7 +296,7 @@ describe('nominal sesi pembayaran', () => {
 
   for (const [judul, jumlah] of nominalSesiDitolak) {
     it(`buatSesiPembayaran menolak nominal ${judul} sebelum fetch`, async () => {
-      const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+      const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
       const { GalatXendit, buatSesiPembayaran } = muat();
 
       await assert.rejects(
@@ -297,51 +312,130 @@ describe('nominal sesi pembayaran', () => {
 // URL KEMBALI
 // ===========================================================================
 describe('URL kembali', () => {
-  const urlDitolak = [
-    ['http biasa', 'http://contoh.test/sukses', 'URL_KEMBALI_BUKAN_HTTPS'],
-    ['berisi kredensial', 'https://pengguna:sandi@contoh.test/sukses', 'URL_KEMBALI_BERISI_KREDENSIAL'],
-    ['berisi username saja', 'https://pengguna@contoh.test/sukses', 'URL_KEMBALI_BERISI_KREDENSIAL'],
-    ['javascript:', 'javascript:alert(1)', 'URL_KEMBALI_BUKAN_HTTPS'],
-    ['data:', 'data:text/html,<b>x</b>', 'URL_KEMBALI_BUKAN_HTTPS'],
-    ['bukan URL', 'bukan-url-sama-sekali', 'URL_KEMBALI_TIDAK_VALID'],
-    ['kosong', '', 'URL_KEMBALI_TIDAK_VALID'],
-    ['jalur relatif', '/bayar/sukses', 'URL_KEMBALI_TIDAK_VALID'],
+  it('disusun sendiri dari APP_ORIGIN, bukan dari masukan pemanggil', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    const { buatSesiPembayaran } = muat();
+
+    // Kalau pemanggil masih bisa menentukan URL kembali, kolom-kolom ini akan
+    // terbawa ke badan permintaan. Route yang memegang objek request lalu bisa
+    // mengisinya dari header — yang artinya pengirim permintaan menentukan ke
+    // mana pembeli dipulangkan setelah membayar.
+    await buatSesiPembayaran(
+      inputSesi({
+        returnUrl: 'https://penyerang.example.com/ambil',
+        origins: ['https://penyerang.example.com'],
+      })
+    );
+
+    const isi = badan(panggilan[0].init);
+    assert.equal(
+      isi.components_configuration.return_url,
+      'https://contoh.test/pembayaran/selesai'
+    );
+    assert.deepEqual(isi.components_configuration.origins, ['https://contoh.test']);
+  });
+
+  it('memakai http untuk origin lokal supaya pengembangan tidak tertutup', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    process.env.APP_ORIGIN = 'http://localhost:4000';
+    const { buatSesiPembayaran } = muat();
+
+    await buatSesiPembayaran(inputSesi());
+
+    assert.equal(
+      badan(panggilan[0].init).components_configuration.return_url,
+      'http://localhost:4000/pembayaran/selesai'
+    );
+  });
+
+  it('TIDAK mengirim URL halaman pembayaran milik Xendit', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    const { buatSesiPembayaran } = muat();
+
+    await buatSesiPembayaran(inputSesi());
+
+    const isi = badan(panggilan[0].init);
+    // Kolom ini milik alur tautan pembayaran milik Xendit. Mengirimnya pada mode
+    // COMPONENTS berarti sebagian pembeli tetap bisa terlempar ke halaman
+    // gerbang pembayaran, padahal seluruh titik mode ini adalah halaman sendiri.
+    assert.ok(!('success_return_url' in isi));
+    assert.ok(!('cancel_return_url' in isi));
+  });
+});
+
+// ===========================================================================
+// ORIGIN KOMPONEN PEMBAYARAN
+// ===========================================================================
+describe('APP_ORIGIN', () => {
+  it('meneruskan origin https dari konfigurasi server', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    process.env.APP_ORIGIN = 'https://bayar.contoh.test:8443';
+    const { buatSesiPembayaran } = muat();
+
+    await buatSesiPembayaran(inputSesi());
+
+    assert.deepEqual(badan(panggilan[0].init).components_configuration.origins, [
+      'https://bayar.contoh.test:8443',
+    ]);
+  });
+
+  const lokalDiterima = [
+    ['localhost dengan port', 'http://localhost:4000'],
+    ['127.0.0.1', 'http://127.0.0.1:4000'],
+    ['IPv6 loopback', 'http://[::1]:4000'],
   ];
 
-  for (const [judul, url, kodeGalat] of urlDitolak) {
-    it(`menolak successUrl ${judul} sebelum fetch`, async () => {
-      const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
-      const { GalatXendit, buatSesiPembayaran } = muat();
+  for (const [judul, origin] of lokalDiterima) {
+    it(`menerima http untuk host lokal di luar production: ${judul}`, async () => {
+      const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+      process.env.APP_ORIGIN = origin;
+      const { buatSesiPembayaran } = muat();
 
-      await assert.rejects(
-        () => buatSesiPembayaran(inputSesi({ successUrl: url })),
-        (error) => error instanceof GalatXendit && error.kodeGalat === kodeGalat
-      );
-      assert.equal(panggilan.length, 0);
-    });
+      await buatSesiPembayaran(inputSesi());
 
-    it(`menolak cancelUrl ${judul} sebelum fetch`, async () => {
-      const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
-      const { GalatXendit, buatSesiPembayaran } = muat();
-
-      await assert.rejects(
-        () => buatSesiPembayaran(inputSesi({ cancelUrl: url })),
-        (error) => error instanceof GalatXendit && error.kodeGalat === kodeGalat
-      );
-      assert.equal(panggilan.length, 0);
+      assert.deepEqual(badan(panggilan[0].init).components_configuration.origins, [origin]);
     });
   }
 
-  it('meneruskan URL https apa adanya', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
-    const { buatSesiPembayaran } = muat();
-    const input = inputSesi();
+  const originDitolak = [
+    ['kosong', '', 'ORIGIN_BELUM_DIISI'],
+    ['http bukan host lokal', 'http://contoh.test', 'ORIGIN_BUKAN_HTTPS'],
+    ['http host mirip localhost', 'http://localhost.evil.example.com', 'ORIGIN_BUKAN_HTTPS'],
+    ['javascript:', 'javascript:alert(1)', 'ORIGIN_BUKAN_HTTPS'],
+    ['data:', 'data:text/html,<b>x</b>', 'ORIGIN_BUKAN_HTTPS'],
+    ['berisi kredensial', 'https://pengguna:sandi@contoh.test', 'ORIGIN_BERISI_KREDENSIAL'],
+    ['berisi username saja', 'https://pengguna@contoh.test', 'ORIGIN_BERISI_KREDENSIAL'],
+    ['ada path', 'https://contoh.test/bayar', 'ORIGIN_BUKAN_ORIGIN'],
+    ['ada query', 'https://contoh.test/?a=1', 'ORIGIN_BUKAN_ORIGIN'],
+    ['ada fragmen', 'https://contoh.test/#x', 'ORIGIN_BUKAN_ORIGIN'],
+    ['bukan URL', 'contoh.test', 'ORIGIN_TIDAK_VALID'],
+  ];
 
-    await buatSesiPembayaran(input);
+  for (const [judul, origin, kodeGalat] of originDitolak) {
+    it(`menolak origin ${judul} sebelum fetch`, async () => {
+      const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+      process.env.APP_ORIGIN = origin;
+      const { GalatXendit, buatSesiPembayaran } = muat();
 
-    const isi = badan(panggilan[0].init);
-    assert.equal(isi.success_return_url, input.successUrl);
-    assert.equal(isi.cancel_return_url, input.cancelUrl);
+      await assert.rejects(
+        () => buatSesiPembayaran(inputSesi()),
+        (error) => error instanceof GalatXendit && error.kodeGalat === kodeGalat
+      );
+      assert.equal(panggilan.length, 0, 'origin tidak sah tidak boleh sampai ke jaringan');
+    });
+  }
+
+  it('menolak http lokal di production sebelum fetch', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    process.env.APP_ORIGIN = 'http://localhost:4000';
+    process.env.NODE_ENV = 'production';
+    const { GalatXendit, buatSesiPembayaran } = muat();
+
+    await assert.rejects(
+      () => buatSesiPembayaran(inputSesi()),
+      (error) => error instanceof GalatXendit && error.kodeGalat === 'ORIGIN_BUKAN_HTTPS'
+    );
+    assert.equal(panggilan.length, 0);
   });
 });
 
@@ -350,22 +444,22 @@ describe('URL kembali', () => {
 // ===========================================================================
 describe('reference_id', () => {
   it('menerima 1 karakter', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk({ reference_id: 'a' }) }));
     const { buatSesiPembayaran } = muat();
     await buatSesiPembayaran(inputSesi({ referenceId: 'a' }));
     assert.equal(badan(panggilan[0].init).reference_id, 'a');
   });
 
   it('menerima 64 karakter (batas atas)', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
-    const { buatSesiPembayaran } = muat();
     const ref = 'a'.repeat(64);
+    const panggilan = pasangFetch(jawaban({ body: sesiOk({ reference_id: ref }) }));
+    const { buatSesiPembayaran } = muat();
     await buatSesiPembayaran(inputSesi({ referenceId: ref }));
     assert.equal(badan(panggilan[0].init).reference_id, ref);
   });
 
   it('menolak reference kosong sebelum fetch', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, buatSesiPembayaran } = muat();
     await assert.rejects(
       () => buatSesiPembayaran(inputSesi({ referenceId: '' })),
@@ -375,7 +469,7 @@ describe('reference_id', () => {
   });
 
   it('menolak reference 65 karakter sebelum fetch', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, buatSesiPembayaran } = muat();
     await assert.rejects(
       () => buatSesiPembayaran(inputSesi({ referenceId: 'a'.repeat(65) })),
@@ -389,8 +483,8 @@ describe('reference_id', () => {
 // BENTUK BADAN SESI
 // ===========================================================================
 describe('badan POST /sessions', () => {
-  it('memuat capture_method AUTOMATIC dan allow_save_payment_method DISABLED', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+  it('memakai mode COMPONENTS dengan konfigurasi komponen lengkap', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -400,8 +494,21 @@ describe('badan POST /sessions', () => {
     assert.equal(isi.allow_save_payment_method, 'DISABLED');
     assert.equal(isi.currency, 'IDR');
     assert.equal(isi.country, 'ID');
-    assert.equal(isi.mode, 'PAYMENT_LINK');
+    assert.equal(isi.mode, 'COMPONENTS');
     assert.equal(isi.session_type, 'PAY');
+    assert.deepEqual(isi.components_configuration, {
+      origins: ['https://contoh.test'],
+      return_url: 'https://contoh.test/pembayaran/selesai',
+    });
+  });
+
+  it('mengembalikan components_sdk_key kepada pemanggil tanpa mengubah nilainya', async () => {
+    pasangFetch(jawaban({ body: sesiOk() }));
+    const { buatSesiPembayaran } = muat();
+
+    const sesi = await buatSesiPembayaran(inputSesi());
+
+    assert.equal(sesi.components_sdk_key, sesiOk().components_sdk_key);
   });
 });
 
@@ -410,7 +517,7 @@ describe('badan POST /sessions', () => {
 // ===========================================================================
 describe('expires_at', () => {
   it('mengirim waktu masa depan sebagai ISO 8601', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
     const kapan = new Date(Date.now() + 2 * 60 * 60 * 1000);
 
@@ -420,7 +527,7 @@ describe('expires_at', () => {
   });
 
   it('menolak waktu yang sudah lewat sebelum fetch', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, buatSesiPembayaran } = muat();
     await assert.rejects(
       () => buatSesiPembayaran(inputSesi({ expiresAt: new Date(Date.now() - 1000) })),
@@ -430,7 +537,7 @@ describe('expires_at', () => {
   });
 
   it('menolak Date tidak sah (NaN) sebelum fetch', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, buatSesiPembayaran } = muat();
     await assert.rejects(
       () => buatSesiPembayaran(inputSesi({ expiresAt: new Date('bukan tanggal') })),
@@ -445,7 +552,7 @@ describe('expires_at', () => {
 // ===========================================================================
 describe('host tujuan', () => {
   it('memakai https://api.xendit.co bila XENDIT_API_BASE_URL tidak diisi', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -459,7 +566,7 @@ describe('host tujuan', () => {
   for (const base of ['https://api.xendit.co', 'https://api.xendit.co/']) {
     it(`menerima XENDIT_API_BASE_URL resmi ${JSON.stringify(base)}`, async () => {
       process.env.XENDIT_API_BASE_URL = base;
-      const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+      const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
       const { buatSesiPembayaran } = muat();
 
       await buatSesiPembayaran(inputSesi());
@@ -488,7 +595,7 @@ describe('host tujuan', () => {
   for (const [judul, base, kodeGalat] of hostDitolak) {
     it(`menolak XENDIT_API_BASE_URL ${judul} sebelum fetch`, async () => {
       process.env.XENDIT_API_BASE_URL = base;
-      const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+      const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
       const { GalatXendit, buatSesiPembayaran } = muat();
 
       await assert.rejects(
@@ -505,7 +612,7 @@ describe('host tujuan', () => {
 // ===========================================================================
 describe('perilaku fetch', () => {
   it('melarang redirect diikuti otomatis (redirect: error)', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -518,7 +625,7 @@ describe('perilaku fetch', () => {
   });
 
   it('tidak menyimpan jawaban di cache', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -527,7 +634,7 @@ describe('perilaku fetch', () => {
   });
 
   it('memasang batas waktu (AbortSignal)', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -599,7 +706,7 @@ describe('perilaku fetch', () => {
   });
 
   it('memasang HTTP Basic dengan kunci sebagai username dan password kosong', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -615,7 +722,7 @@ describe('perilaku fetch', () => {
 // ===========================================================================
 describe('idempotency', () => {
   it('TIDAK mengirim idempotency-key pada POST /sessions (tidak didokumentasikan Xendit)', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { buatSesiPembayaran } = muat();
 
     await buatSesiPembayaran(inputSesi());
@@ -932,7 +1039,7 @@ describe('galat tidak membocorkan apa pun', () => {
 
   it('KUNCI_BELUM_DIISI dan tidak ada fetch bila env kunci kosong', async () => {
     delete process.env.XENDIT_SECRET_KEY;
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, buatSesiPembayaran } = muat();
 
     await assert.rejects(
@@ -1054,7 +1161,7 @@ describe('tokenWebhookCocok', () => {
 // ===========================================================================
 describe('ambilSesi', () => {
   it('menolak sessionId kosong sebelum fetch', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { GalatXendit, ambilSesi } = muat();
 
     await assert.rejects(
@@ -1065,7 +1172,7 @@ describe('ambilSesi', () => {
   });
 
   it('meneruskan sessionId berisi spasi setelah di-encode', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { ambilSesi } = muat();
 
     await ambilSesi('   ');
@@ -1074,7 +1181,7 @@ describe('ambilSesi', () => {
 
 
   it('meng-encode sessionId pada jalur URL', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { ambilSesi } = muat();
 
     await ambilSesi('ps 1/../customers');
@@ -1087,7 +1194,7 @@ describe('ambilSesi', () => {
   });
 
   it('memakai GET dan tidak membawa badan', async () => {
-    const panggilan = pasangFetch(jawaban({ body: SESI_OK }));
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
     const { ambilSesi } = muat();
 
     await ambilSesi('ps-1');
@@ -1104,5 +1211,185 @@ describe('ambilSesi', () => {
 
     await assert.rejects(() => ambilSesi('ps-1'));
     assert.equal(panggilan.length, 1);
+  });
+
+  it('membaca sesi COMPLETED tanpa menuntut kunci SDK maupun tenggat', async () => {
+    pasangFetch(
+      jawaban({
+        body: sesiOk({
+          status: 'COMPLETED',
+          expires_at: new Date(Date.now() - 1000).toISOString(),
+          components_sdk_key: null,
+          payment_id: 'pay-xnd-1',
+        }),
+      })
+    );
+    const { ambilSesi } = muat();
+
+    const sesi = await ambilSesi('ps-1');
+
+    assert.equal(sesi.status, 'COMPLETED');
+    assert.equal(sesi.components_sdk_key, null);
+    assert.equal(sesi.payment_id, 'pay-xnd-1');
+  });
+});
+
+// ===========================================================================
+// VALIDASI JAWABAN SESI
+// ===========================================================================
+//
+// `panggilXendit` ditutup dengan `data as T` — cast, bukan pemeriksaan. Tanpa
+// suite ini, jawaban berbentuk lain (proxy yang menyisip, kontrak API yang
+// berubah, sesi milik tagihan lain) lolos sebagai "sukses" dan baris Payment
+// ditautkan ke sesi yang salah.
+describe('validasi jawaban POST /sessions', () => {
+  const jawabanDitolak = [
+    ['bukan objek', 'bukan-json-objek'],
+    ['null', null],
+    ['payment_session_id hilang', sesiOk({ payment_session_id: undefined })],
+    ['payment_session_id kosong', sesiOk({ payment_session_id: '' })],
+    ['status hilang', sesiOk({ status: undefined })],
+    ['reference_id hilang', sesiOk({ reference_id: undefined })],
+    ['reference_id milik tagihan lain', sesiOk({ reference_id: 'pay_ORANG_LAIN' })],
+    ['customer_id milik orang lain', sesiOk({ customer_id: 'cust_ORANG_LAIN' })],
+    ['customer_id hilang', sesiOk({ customer_id: undefined })],
+    ['amount berbeda dari yang dikirim', sesiOk({ amount: 1 })],
+    ['amount sebagai string', sesiOk({ amount: '1500000' })],
+    ['amount NaN', sesiOk({ amount: Number.NaN })],
+    ['mode bukan COMPONENTS', sesiOk({ mode: 'PAYMENT_LINK' })],
+    ['mode hilang', sesiOk({ mode: undefined })],
+    ['status bukan ACTIVE', sesiOk({ status: 'EXPIRED' })],
+    ['components_sdk_key hilang', sesiOk({ components_sdk_key: undefined })],
+    ['components_sdk_key kosong', sesiOk({ components_sdk_key: '' })],
+    ['components_sdk_key null', sesiOk({ components_sdk_key: null })],
+    ['expires_at hilang', sesiOk({ expires_at: undefined })],
+    ['expires_at bukan tanggal', sesiOk({ expires_at: 'kapan-kapan' })],
+    ['expires_at sudah lewat', sesiOk({ expires_at: new Date(Date.now() - 1000).toISOString() })],
+  ];
+
+  for (const [judul, body] of jawabanDitolak) {
+    it(`menolak sesi baru dengan ${judul}`, async () => {
+      pasangFetch(jawaban({ body }));
+      const { GalatXendit, buatSesiPembayaran } = muat();
+
+      await assert.rejects(
+        () => buatSesiPembayaran(inputSesi()),
+        (error) => error instanceof GalatXendit && error.kodeGalat === 'SESI_TIDAK_SESUAI'
+      );
+    });
+  }
+
+  it('galat penolakan tidak memuat kunci SDK dari jawaban', async () => {
+    const kunciSdk = 'csk-BOCOR-JANGAN-DICATAT';
+    pasangFetch(jawaban({ body: sesiOk({ status: 'EXPIRED', components_sdk_key: kunciSdk }) }));
+    const { buatSesiPembayaran } = muat();
+
+    const galat = await buatSesiPembayaran(inputSesi()).then(
+      () => null,
+      (error) => error
+    );
+
+    assert.ok(galat, 'sesi EXPIRED harus ditolak');
+    assert.ok(
+      !galat.message.includes(kunciSdk),
+      `kunci SDK ikut pada pesan galat: ${galat.message}`
+    );
+  });
+
+  it('meneruskan nilai jawaban yang sah tanpa mengubahnya', async () => {
+    pasangFetch(jawaban({ body: sesiOk() }));
+    const { buatSesiPembayaran } = muat();
+
+    const sesi = await buatSesiPembayaran(inputSesi());
+
+    assert.equal(sesi.payment_session_id, 'ps-1');
+    assert.equal(sesi.status, 'ACTIVE');
+    assert.equal(sesi.mode, 'COMPONENTS');
+    assert.equal(sesi.reference_id, 'pay_01HZ');
+    assert.equal(sesi.customer_id, 'cust_01HZ');
+    assert.equal(sesi.amount, 1500000);
+  });
+});
+
+// ===========================================================================
+// PEMULIHAN SESI AKTIF
+// ===========================================================================
+describe('ambilSesiAktifUntukKomponen', () => {
+  const harapan = { referenceId: 'pay_01HZ', customerId: 'cust_01HZ', nominal: 1500000 };
+
+  it('memberi sesi beserta kunci SDK bila masih aktif', async () => {
+    pasangFetch(jawaban({ body: sesiOk() }));
+    const { ambilSesiAktifUntukKomponen } = muat();
+
+    const sesi = await ambilSesiAktifUntukKomponen('ps-1', harapan);
+
+    assert.ok(sesi);
+    assert.equal(sesi.components_sdk_key, 'csk-palsu-untuk-tes');
+  });
+
+  // Tiap keadaan ini berarti sesi lama TIDAK bisa dipakai lagi. `null` menyuruh
+  // pemanggil menutup baris lama dan membuat sesi baru; melempar akan membuat
+  // pembeli terjebak pada tagihan yang tidak pernah bisa diselesaikan.
+  const memberiNull = [
+    ['status COMPLETED', sesiOk({ status: 'COMPLETED' })],
+    ['status EXPIRED', sesiOk({ status: 'EXPIRED' })],
+    ['status CANCELED', sesiOk({ status: 'CANCELED' })],
+    ['kunci SDK sudah tidak ada', sesiOk({ components_sdk_key: null })],
+    ['mode bukan COMPONENTS', sesiOk({ mode: 'PAYMENT_LINK' })],
+    ['tenggat sudah lewat', sesiOk({ expires_at: new Date(Date.now() - 1000).toISOString() })],
+    ['tenggat bukan tanggal', sesiOk({ expires_at: 'kapan-kapan' })],
+    ['tenggat hilang', sesiOk({ expires_at: undefined })],
+  ];
+
+  for (const [judul, body] of memberiNull) {
+    it(`memberi null bila ${judul}`, async () => {
+      pasangFetch(jawaban({ body }));
+      const { ambilSesiAktifUntukKomponen } = muat();
+
+      assert.equal(await ambilSesiAktifUntukKomponen('ps-1', harapan), null);
+    });
+  }
+
+  // Identitas yang tidak cocok BUKAN "sesi tidak bisa dipakai" — ia berarti
+  // jawabannya milik tagihan lain. Memberi `null` di sini akan menyembunyikan
+  // kekeliruan itu di balik pembuatan sesi baru yang terlihat normal.
+  const melempar = [
+    ['reference milik tagihan lain', sesiOk({ reference_id: 'pay_LAIN' })],
+    ['customer milik orang lain', sesiOk({ customer_id: 'cust_LAIN' })],
+    ['nominal berbeda', sesiOk({ amount: 1 })],
+  ];
+
+  for (const [judul, body] of melempar) {
+    it(`melempar bila ${judul}`, async () => {
+      pasangFetch(jawaban({ body }));
+      const { GalatXendit, ambilSesiAktifUntukKomponen } = muat();
+
+      await assert.rejects(
+        () => ambilSesiAktifUntukKomponen('ps-1', harapan),
+        (error) => error instanceof GalatXendit && error.kodeGalat === 'SESI_TIDAK_SESUAI'
+      );
+    });
+  }
+
+  it('memakai GET tanpa badan dan meng-encode sessionId', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    const { ambilSesiAktifUntukKomponen } = muat();
+
+    await ambilSesiAktifUntukKomponen('ps 1/../customers', harapan);
+
+    assert.equal(panggilan[0].init.method, 'GET');
+    assert.equal(panggilan[0].init.body, undefined);
+    assert.ok(!panggilan[0].url.includes('/../'), `jalur tidak di-encode: ${panggilan[0].url}`);
+  });
+
+  it('menolak nominal tidak sah sebelum fetch', async () => {
+    const panggilan = pasangFetch(jawaban({ body: sesiOk() }));
+    const { GalatXendit, ambilSesiAktifUntukKomponen } = muat();
+
+    await assert.rejects(
+      () => ambilSesiAktifUntukKomponen('ps-1', { ...harapan, nominal: 0 }),
+      (error) => error instanceof GalatXendit
+    );
+    assert.equal(panggilan.length, 0);
   });
 });

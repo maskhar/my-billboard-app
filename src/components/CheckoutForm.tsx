@@ -310,8 +310,20 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                     <div className="text-3xl font-bold mt-1 text-utero">
                         Rp {mustPayNow.toLocaleString('id-ID')}
                     </div>
+                    {/*
+                      LABEL MENGIKUTI APA YANG BENAR-BENAR TERJADI.
+                      Tombol ini baru membuat pesanan lalu memulangkan pembeli ke
+                      dashboard; belum ada sesi pembayaran yang dibuka. Label lama
+                      ("Bayar via ...") menyebut nama gerbang pembayaran sekaligus
+                      menjanjikan pembayaran yang tidak pernah dimulai — pembeli
+                      menekannya, tidak ditagih apa pun, dan menyangka sudah bayar.
+                      Nama gerbang pembayaran tidak pernah tampil ke pembeli; di
+                      layar namanya "Pembayaran Otomatis". Ganti label ini menjadi
+                      "Lanjut ke Pembayaran Otomatis" pada fase yang menyambungkan
+                      halaman pembayaran, bukan sebelumnya.
+                    */}
                     <button onClick={handlePayment} disabled={isLoading} className="w-full bg-utero hover:bg-white hover:text-utero font-bold py-3 rounded-xl mt-6 transition duration-300 ring-2 ring-utero shadow-lg shadow-utero/50 disabled:opacity-50">
-                        {isLoading ? 'Sedang Memproses...' : 'Bayar via Xendit'}
+                        {isLoading ? 'Membuat pesanan...' : 'Buat Pesanan'}
                     </button>
                 </div>
             </div>

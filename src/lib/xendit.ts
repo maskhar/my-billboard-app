@@ -331,6 +331,28 @@ export function nominalUntukXendit(jumlah: NilaiUang): number {
   return bulat;
 }
 
+/** Host yang boleh memakai `http://` sebagai origin komponen pembayaran. */
+const HOST_LOKAL = ['localhost', '127.0.0.1', '[::1]'];
+
+/**
+ * Satu kebijakan `http://` untuk origin dan untuk URL kembali.
+ *
+ * Kedua nilai itu menunjuk halaman yang SAMA, jadi kebijakannya tidak boleh
+ * berbeda: origin yang lolos tapi URL kembalinya ditolak membuat pembuatan sesi
+ * gagal dengan galat yang seolah-olah salah konfigurasi, padahal aturannya
+ * memang saling bertentangan.
+ *
+ * `http://` hanya boleh untuk host lokal (`localhost`, `127.0.0.1`, `[::1]`) dan
+ * hanya di luar production. Di mesin pengembang tidak ada TLS dan lalu lintasnya
+ * tidak keluar dari mesin itu. Di luar itu `http://` berarti halaman pembayaran
+ * yang bisa disadap dan diganti isinya.
+ */
+function bolehHttpDiSini(url: URL): boolean {
+  if (url.protocol !== 'http:') return false;
+  if (process.env.NODE_ENV === 'production') return false;
+  return HOST_LOKAL.includes(url.hostname.toLowerCase());
+}
+
 /**
  * Pastikan URL kembali aman dipakai.
  *
@@ -345,8 +367,12 @@ function periksaUrlKembali(url: string, nama: string): string {
   } catch {
     throw new GalatXendit(0, 'URL_KEMBALI_TIDAK_VALID', `${nama} bukan URL yang sah.`);
   }
-  if (hasil.protocol !== 'https:') {
-    throw new GalatXendit(0, 'URL_KEMBALI_BUKAN_HTTPS', `${nama} harus memakai https.`);
+  if (hasil.protocol !== 'https:' && !bolehHttpDiSini(hasil)) {
+    throw new GalatXendit(
+      0,
+      'URL_KEMBALI_BUKAN_HTTPS',
+      `${nama} harus memakai https, kecuali host lokal di luar production.`
+    );
   }
   if (hasil.username || hasil.password) {
     throw new GalatXendit(
@@ -358,11 +384,112 @@ function periksaUrlKembali(url: string, nama: string): string {
   return hasil.toString();
 }
 
+/**
+ * Origin aplikasi ini, dibaca dari `APP_ORIGIN`.
+ *
+ * ===================== KENAPA DARI ENV, BUKAN DARI PERMINTAAN =====================
+ * Nilai ini dikirim sebagai `components_configuration.origins`, dan daftar itu
+ * menentukan halaman MANA yang boleh memasang komponen pembayaran dengan kunci
+ * SDK sesi ini. Kalau nilainya diambil dari permintaan masuk — `Host`,
+ * `X-Forwarded-Host`, `Origin`, atau `new URL(req.url).origin` — maka pengirim
+ * permintaanlah yang menentukan halaman siapa yang berhak memasang komponen
+ * pembayaran kita. Header itu dikendalikan klien dan proxy, jadi ia bukan
+ * identitas; ia masukan.
+ *
+ * Karena itu origin TIDAK menjadi parameter `buatSesiPembayaran`: parameter
+ * berarti ada route yang boleh mengisinya, dan route-lah yang memegang objek
+ * request. Satu-satunya sumbernya adalah konfigurasi server.
+ * ==================================================================================
+ *
+ * Yang dikirim hanya ORIGIN (skema + host + port). Path, query, kredensial, dan
+ * fragmen ditolak: origin bukan alamat halaman, dan sisa URL di situ hanya
+ * membuat pencocokan di sisi Xendit gagal secara membingungkan.
+ *
+ * `http://` hanya diizinkan untuk host lokal (`localhost`, `127.0.0.1`, `[::1]`)
+ * dan hanya di luar production. Di mesin pengembang tidak ada TLS dan lalu
+ * lintasnya tidak keluar dari mesin itu. Untuk host lain `http://` ditolak:
+ * halaman pembayaran yang bisa disadap sama artinya dengan komponen pembayaran
+ * yang bisa diganti isinya.
+ *
+ * `APP_ORIGIN` sengaja variabel sendiri, tidak menumpang `NEXTAUTH_URL`.
+ * `NEXTAUTH_URL` di `.env.example` masih `http://localhost:3000` sementara
+ * `npm run dev` menyalakan port 4000; menumpang nilai yang sudah tidak cocok
+ * akan membuat komponen pembayaran ditolak dengan galat CORS yang menyesatkan.
+ */
+export function originAplikasi(): string {
+  const dariEnv = (process.env.APP_ORIGIN || '').trim();
+  if (!dariEnv) {
+    throw new GalatXendit(
+      0,
+      'ORIGIN_BELUM_DIISI',
+      'APP_ORIGIN belum diisi. Pembuatan sesi pembayaran dihentikan.'
+    );
+  }
+
+  let url: URL;
+  try {
+    url = new URL(dariEnv);
+  } catch {
+    throw new GalatXendit(0, 'ORIGIN_TIDAK_VALID', 'APP_ORIGIN bukan URL yang sah.');
+  }
+
+  if (url.protocol !== 'https:' && !bolehHttpDiSini(url)) {
+    throw new GalatXendit(
+      0,
+      'ORIGIN_BUKAN_HTTPS',
+      'APP_ORIGIN harus https, kecuali host lokal di luar production.'
+    );
+  }
+  if (url.username || url.password) {
+    throw new GalatXendit(
+      0,
+      'ORIGIN_BERISI_KREDENSIAL',
+      'APP_ORIGIN tidak boleh memuat username/password.'
+    );
+  }
+  if (url.pathname !== '/' || url.search || url.hash) {
+    throw new GalatXendit(
+      0,
+      'ORIGIN_BUKAN_ORIGIN',
+      'APP_ORIGIN hanya boleh berisi skema, host, dan port — tanpa path, query, atau fragmen.'
+    );
+  }
+  return url.origin;
+}
+
+/**
+ * Halaman tempat pembeli mendarat setelah kanal yang MENGALIHKAN keras selesai.
+ *
+ * Mode Components menanam pembayaran di halaman sendiri, tapi sebagian kanal
+ * (3DS kartu, pindah ke aplikasi e-wallet) tetap membawa pembeli keluar dari
+ * halaman. Tanpa `return_url`, Xendit memulangkan mereka ke halaman miliknya —
+ * tepat hal yang mode ini dipilih untuk dihindari.
+ */
+const JALUR_KEMBALI = '/pembayaran/selesai';
+
 // ============================================================================
 // CUSTOMER
 // ============================================================================
 
 export type CustomerXendit = { id: string; reference_id: string };
+
+function periksaCustomer(data: unknown, referenceId: string): CustomerXendit {
+  if (!data || typeof data !== 'object') {
+    throw new GalatXendit(0, 'CUSTOMER_TIDAK_SESUAI', 'Jawaban customer Xendit bukan objek.');
+  }
+  const customer = data as Record<string, unknown>;
+  if (typeof customer.id !== 'string' || customer.id.length === 0) {
+    throw new GalatXendit(0, 'CUSTOMER_TIDAK_SESUAI', 'Jawaban customer Xendit tidak memuat id.');
+  }
+  if (customer.reference_id !== referenceId) {
+    throw new GalatXendit(
+      0,
+      'CUSTOMER_TIDAK_SESUAI',
+      'Jawaban customer Xendit bukan milik pengguna ini.'
+    );
+  }
+  return { id: customer.id, reference_id: referenceId };
+}
 
 /**
  * Cari customer Xendit berdasarkan `reference_id` milik kita.
@@ -380,12 +507,19 @@ export type CustomerXendit = { id: string; reference_id: string };
  */
 export async function cariCustomer(referenceId: string): Promise<CustomerXendit | null> {
   periksaReference(referenceId);
-  const hasil = await panggilXendit<{ data?: CustomerXendit[] }>(
+  const hasil = await panggilXendit<unknown>(
     'GET',
     `/customers?reference_id=${encodeURIComponent(referenceId)}`
   );
-  const daftar = Array.isArray(hasil?.data) ? hasil.data : [];
-  return daftar.find((c) => c?.reference_id === referenceId && typeof c?.id === 'string') ?? null;
+  const data = hasil && typeof hasil === 'object' ? (hasil as Record<string, unknown>).data : null;
+  const daftar = Array.isArray(data) ? data : [];
+  const cocok = daftar.find(
+    (customer) =>
+      customer &&
+      typeof customer === 'object' &&
+      (customer as Record<string, unknown>).reference_id === referenceId
+  );
+  return cocok ? periksaCustomer(cocok, referenceId) : null;
 }
 
 /**
@@ -427,7 +561,7 @@ export async function pastikanCustomer(input: {
   periksaReference(input.referenceId);
 
   try {
-    return await panggilXendit<CustomerXendit>(
+    const data = await panggilXendit<unknown>(
       'POST',
       '/customers',
       {
@@ -447,6 +581,7 @@ export async function pastikanCustomer(input: {
       // menghasilkan dua customer.
       `customer-${input.referenceId}`
     );
+    return periksaCustomer(data, input.referenceId);
   } catch (error) {
     if (error instanceof GalatXendit && error.status === 409) {
       const adaSebelumnya = await cariCustomer(input.referenceId);
@@ -462,20 +597,111 @@ export async function pastikanCustomer(input: {
 
 export type SesiXendit = {
   payment_session_id: string;
-  payment_link_url: string | null;
   status: string;
-  expires_at: string | null;
+  mode: string;
   reference_id: string;
+  customer_id: string | null;
   amount: number;
+  expires_at: string | null;
+  /**
+   * Kunci berumur pendek dan khusus untuk sesi ini. Hanya boleh diteruskan ke
+   * browser pembeli yang memiliki pesanan; jangan simpan di DB, URL, atau log.
+   * `null` pada sesi yang sudah tidak aktif.
+   */
+  components_sdk_key: string | null;
+  /** Ada pada sesi yang telah menyelesaikan pembayaran. */
+  payment_id?: string | null;
 };
 
+/** Apa yang KITA minta, untuk dicocokkan dengan apa yang dijawab. */
+type HarapanSesi = { referenceId: string; customerId: string; nominal: number };
+
+function tolakSesi(sebab: string): never {
+  // Sebab ditulis sebagai kategori, BUKAN nilai yang dijawab Xendit. Jawaban
+  // sesi memuat `components_sdk_key`; mencetak isinya untuk menjelaskan galat
+  // berarti menuliskan kunci itu ke log.
+  throw new GalatXendit(0, 'SESI_TIDAK_SESUAI', `Jawaban sesi Xendit tidak sesuai: ${sebab}.`);
+}
+
+function teksIsi(nilai: unknown): string | null {
+  return typeof nilai === 'string' && nilai.length > 0 ? nilai : null;
+}
+
 /**
- * Buat sesi pembayaran mode PAYMENT_LINK.
+ * Periksa jawaban sesi sebelum ia dipercaya.
+ *
+ * `panggilXendit` ditutup dengan `data as T` — cast, bukan pemeriksaan. Tanpa
+ * fungsi ini, jawaban yang bentuknya lain (proxy yang menyisip, endpoint yang
+ * salah, kontrak API yang berubah) lolos sebagai "sukses" dan baris `Payment`
+ * diperbarui dengan `undefined`.
+ *
+ * Yang dicocokkan bukan cuma bentuk, tapi ISInya terhadap apa yang kita minta.
+ * Sesi yang `reference_id`-nya bukan milik kita adalah sesi orang lain: menautkan
+ * baris ledger ke sana berarti pembayaran satu orang menutup tagihan orang lain.
+ */
+function periksaSesi(data: unknown, harapan: HarapanSesi | null, buatBaru: boolean): SesiXendit {
+  if (!data || typeof data !== 'object') tolakSesi('bukan objek');
+  const o = data as Record<string, unknown>;
+
+  const id = teksIsi(o.payment_session_id);
+  if (!id) tolakSesi('payment_session_id kosong');
+
+  const status = teksIsi(o.status);
+  if (!status) tolakSesi('status kosong');
+
+  const referenceId = teksIsi(o.reference_id);
+  if (!referenceId) tolakSesi('reference_id kosong');
+
+  if (typeof o.amount !== 'number' || !Number.isFinite(o.amount)) {
+    tolakSesi('amount bukan angka');
+  }
+
+  if (harapan) {
+    if (referenceId !== harapan.referenceId) tolakSesi('reference_id bukan milik tagihan ini');
+    if (o.customer_id !== harapan.customerId) tolakSesi('customer_id bukan pemilik tagihan ini');
+    if (o.amount !== harapan.nominal) tolakSesi('amount berbeda dari nominal yang dikirim');
+  }
+
+  const mode = teksIsi(o.mode);
+  const expiresAt = teksIsi(o.expires_at);
+  const sdkKey = teksIsi(o.components_sdk_key);
+
+  if (buatBaru) {
+    // Sesi yang baru dibuat harus siap dipakai. Sesi yang lahir dalam keadaan
+    // lain berarti pembeli akan menatap komponen pembayaran yang tidak bisa
+    // dipakai, sementara ledger mencatatnya sebagai tagihan yang menunggu.
+    if (mode !== 'COMPONENTS') tolakSesi('mode bukan COMPONENTS');
+    if (status !== 'ACTIVE') tolakSesi('sesi baru tidak berstatus ACTIVE');
+    if (!sdkKey) tolakSesi('components_sdk_key kosong');
+    const tenggat = expiresAt ? Date.parse(expiresAt) : NaN;
+    if (Number.isNaN(tenggat)) tolakSesi('expires_at bukan tanggal yang sah');
+    if (tenggat <= Date.now()) tolakSesi('sesi baru sudah kedaluwarsa');
+  }
+
+  return {
+    payment_session_id: id,
+    status,
+    mode: mode ?? '',
+    reference_id: referenceId,
+    customer_id: teksIsi(o.customer_id),
+    amount: o.amount,
+    expires_at: expiresAt,
+    components_sdk_key: sdkKey,
+    payment_id: teksIsi(o.payment_id),
+  };
+}
+
+/**
+ * Buat sesi pembayaran mode COMPONENTS untuk ditanam di halaman aplikasi.
  *
  * Satu sesi menampung beberapa percobaan bayar: pembeli yang gagal di tengah
- * jalan bisa mengulang pada tautan yang sama. Sesi yang KEDALUWARSA tidak bisa
+ * jalan bisa mengulang pada komponen yang sama. Sesi yang KEDALUWARSA tidak bisa
  * dihidupkan lagi oleh Xendit — karena itu pemanggil harus membuat sesi baru,
  * bukan menyegarkan yang lama (lihat catatan pada model `Payment`).
+ *
+ * `components_sdk_key` pada jawaban sengaja tidak mendapat tempat penyimpanan di
+ * model `Payment`. Route server hanya boleh meneruskannya sekali kepada pembeli
+ * yang terautentikasi dan memiliki pesanan itu.
  *
  * TIDAK ADA `idempotency-key` di sini. Dokumentasi resmi `POST /sessions` tidak
  * menyebutkan header itu, jadi ia tidak boleh dijadikan pengaman terhadap klik
@@ -489,17 +715,18 @@ export async function buatSesiPembayaran(input: {
   jumlah: NilaiUang;
   deskripsi: string;
   expiresAt: Date;
-  successUrl: string;
-  cancelUrl: string;
 }): Promise<SesiXendit> {
   periksaReference(input.referenceId);
   const nominal = nominalUntukXendit(input.jumlah);
-  const successUrl = periksaUrlKembali(input.successUrl, 'success_return_url');
-  const cancelUrl = periksaUrlKembali(input.cancelUrl, 'cancel_return_url');
+  const origin = originAplikasi();
+  const returnUrl = periksaUrlKembali(
+    new URL(JALUR_KEMBALI, origin).toString(),
+    'components_configuration.return_url'
+  );
 
-  // Tenggat yang sudah lewat akan membuat sesi mati sejak lahir: pembeli
-  // dialihkan ke halaman pembayaran yang langsung kedaluwarsa, dan barisnya
-  // menganggur sampai penyapu membereskannya.
+  // Tenggat yang sudah lewat akan membuat sesi mati sejak lahir: komponen
+  // pembayaran langsung kedaluwarsa dan barisnya menganggur sampai penyapu
+  // membereskannya.
   if (!(input.expiresAt instanceof Date) || Number.isNaN(input.expiresAt.getTime())) {
     throw new GalatXendit(0, 'TENGGAT_TIDAK_VALID', 'expiresAt bukan tanggal yang sah.');
   }
@@ -511,11 +738,11 @@ export async function buatSesiPembayaran(input: {
     );
   }
 
-  return panggilXendit<SesiXendit>('POST', '/sessions', {
+  const data = await panggilXendit<unknown>('POST', '/sessions', {
     reference_id: input.referenceId,
     customer_id: input.customerId,
     session_type: 'PAY',
-    mode: 'PAYMENT_LINK',
+    mode: 'COMPONENTS',
     currency: 'IDR',
     country: 'ID',
     amount: nominal,
@@ -530,9 +757,13 @@ export async function buatSesiPembayaran(input: {
     description: input.deskripsi,
     expires_at: input.expiresAt.toISOString(),
     locale: 'id',
-    success_return_url: successUrl,
-    cancel_return_url: cancelUrl,
+    components_configuration: {
+      origins: [origin],
+      return_url: returnUrl,
+    },
   });
+
+  return periksaSesi(data, { referenceId: input.referenceId, customerId: input.customerId, nominal }, true);
 }
 
 /**
@@ -547,7 +778,49 @@ export async function ambilSesi(sessionId: string): Promise<SesiXendit> {
   if (!sessionId) {
     throw new GalatXendit(0, 'SESSION_ID_KOSONG', 'sessionId wajib diisi.');
   }
-  return panggilXendit<SesiXendit>('GET', `/sessions/${encodeURIComponent(sessionId)}`);
+  const data = await panggilXendit<unknown>(
+    'GET',
+    `/sessions/${encodeURIComponent(sessionId)}`
+  );
+  // GET dipakai untuk membaca sesi COMPLETED/EXPIRED juga, jadi status, key
+  // kosong, dan tenggat lewat bukan galat di fungsi umum ini.
+  return periksaSesi(data, null, false);
+}
+
+/**
+ * Ambil ulang kunci SDK sesi yang masih aktif setelah respons browser hilang.
+ *
+ * Hanya sesi milik tagihan yang sama boleh dipakai kembali. Status akhir,
+ * tenggat lewat, atau kunci yang sudah tidak tersedia menghasilkan `null` —
+ * pemanggil lalu menutup baris lama dan membuat sesi baru, bukan menebak.
+ */
+export async function ambilSesiAktifUntukKomponen(
+  sessionId: string,
+  harapan: HarapanSesi
+): Promise<SesiXendit | null> {
+  periksaReference(harapan.referenceId);
+  const nominal = nominalUntukXendit(harapan.nominal);
+  const data = await panggilXendit<unknown>(
+    'GET',
+    `/sessions/${encodeURIComponent(sessionId)}`
+  );
+  const sesi = periksaSesi(
+    data,
+    { ...harapan, nominal },
+    false
+  );
+
+  const tenggat = sesi.expires_at ? Date.parse(sesi.expires_at) : NaN;
+  if (
+    sesi.mode !== 'COMPONENTS' ||
+    sesi.status !== 'ACTIVE' ||
+    !sesi.components_sdk_key ||
+    Number.isNaN(tenggat) ||
+    tenggat <= Date.now()
+  ) {
+    return null;
+  }
+  return sesi;
 }
 
 // ============================================================================
