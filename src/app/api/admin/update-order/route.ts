@@ -6,6 +6,7 @@ import { sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, kurang, lebihKecil, nol, rupiah } from "@/lib/money";
+import { Prisma } from "@prisma/client";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -33,6 +34,13 @@ export async function POST(req: Request) {
       );
   }
 
+  // `orderId` dulu diteruskan ke Prisma tanpa diperiksa tipenya. Nilai selain
+  // teks membuat query gagal dengan galat yang jatuh ke "Gagal Update" — pesan
+  // yang tidak memberitahu admin apa pun tentang penyebabnya.
+  if (typeof orderId !== 'string' || orderId.trim() === "") {
+      return NextResponse.json({ message: "ID pesanan tidak valid." }, { status: 400 });
+  }
+
   try {
       // Pesanan dibaca SEKALI di sini, lalu dipakai ulang untuk pemeriksaan
       // transisi dan pengisian timestamp di bawah. Sebelumnya baris yang sama
@@ -57,13 +65,51 @@ export async function POST(req: Request) {
           );
       }
 
-      const updateData: any = {
+      // `updateData` dulu bertipe `any` dan menyebar nilai body apa adanya:
+      // apa pun yang dikirim klien — angka, objek, teks sepanjang apa pun —
+      // ikut ditulis. Dua di antaranya (`refundProof`, `installationProof`)
+      // adalah URL gambar yang kemudian dirender di dashboard pelanggan sebagai
+      // bukti transfer dan bukti pemasangan, jadi isinya bukan hal sepele.
+      //
+      // Tipenya kini mengikuti `Prisma.BookingUpdateInput`, sehingga kolom
+      // salah ketik tertangkap `tsc` alih-alih baru ketahuan sebagai "Gagal
+      // Update" saat dipakai.
+      const updateData: Prisma.BookingUpdateInput = {
           status: newStatus,
-          ...(reason && { cancelReason: reason }),
-          ...(refundProof && { refundProof: refundProof }),
-          ...(installationProof && { installationProof: installationProof }),
-          ...(isLocked !== undefined && { isLocked: isLocked })
       };
+
+      const teksOpsional = (nilai: unknown, batas: number): string | null => {
+          if (typeof nilai !== 'string') return null;
+          const rapi = nilai.trim();
+          return rapi === "" ? null : rapi.slice(0, batas);
+      };
+
+      const alasan = teksOpsional(reason, 1000);
+      if (alasan) updateData.cancelReason = alasan;
+
+      // Kedua kolom bukti hanya menerima URL http/https. Tanpa pemeriksaan ini,
+      // teks apa pun bisa masuk ke atribut `src` gambar di dashboard pelanggan
+      // — termasuk skema `javascript:` dan `data:`.
+      const urlBukti = (nilai: unknown): string | null => {
+          const teks = teksOpsional(nilai, 2000);
+          if (!teks) return null;
+          try {
+              const url = new URL(teks);
+              return url.protocol === 'http:' || url.protocol === 'https:' ? teks : null;
+          } catch {
+              return null;
+          }
+      };
+
+      const buktiRefund = urlBukti(refundProof);
+      if (buktiRefund) updateData.refundProof = buktiRefund;
+
+      const buktiPasang = urlBukti(installationProof);
+      if (buktiPasang) updateData.installationProof = buktiPasang;
+
+      // Hanya boolean asli yang diterima; string "false" dari form akan
+      // terbaca sebagai `true` kalau dibiarkan lewat.
+      if (typeof isLocked === 'boolean') updateData.isLocked = isLocked;
 
       if (newStatus === 'REFUNDED' && !currentOrder.refundedAt) {
           updateData.refundedAt = new Date();

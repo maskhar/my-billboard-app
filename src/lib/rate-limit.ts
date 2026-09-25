@@ -24,6 +24,11 @@
 // Antarmuka `rateLimit()` di bawah sengaja dibuat sederhana agar penggantian
 // implementasinya tidak mengubah kode pemanggil.
 // ===================================================================
+//
+// SALINAN KEMBAR: `chat-server/rate-limit.js` memuat implementasi yang sama
+// dalam bentuk CommonJS, karena chat-server adalah proses Node terpisah tanpa
+// langkah build dan tidak bisa memuat modul TypeScript dari `src/`. Kalau
+// perilaku di sini diubah, ubah juga di sana.
 
 type Bucket = {
   /** Jumlah permintaan yang sudah tercatat dalam jendela berjalan. */

@@ -6,7 +6,8 @@ import { sendEmail } from "@/lib/mail";
 import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
 import { addMonths, isBefore, startOfDay } from "date-fns";
 import { Prisma } from "@prisma/client";
-import { jumlah, kali, keAngka, keDecimal, persen, rupiah } from "@/lib/money";
+import { jumlah, kali, keAngka, keDecimal, kurang, persen, rupiah } from "@/lib/money";
+import { adalahBentrokTanggal } from "@/lib/db-error";
 import {
   STATUS_MENGUNCI_TANGGAL,
   hitungTenggatPembayaran,
@@ -213,13 +214,14 @@ export async function POST(req: Request) {
                 throw new TanggalBentrok(bentrok.startDate, bentrok.endDate);
             }
 
-            // BATAS YANG DIAKUI: transaksi ini memakai tingkat isolasi bawaan
-            // PostgreSQL (read committed), jadi dua permintaan yang tiba pada
-            // detik yang sama bisa sama-sama lolos pemeriksaan di atas sebelum
-            // salah satunya menyimpan. Penutup celah itu adalah constraint
-            // `EXCLUDE USING gist` di tingkat database — pekerjaan Fase 3.
-            // Sampai itu ada, jendela balapannya beberapa milidetik, jauh lebih
-            // sempit daripada gerbang yang sebelumnya tidak pernah menutup.
+            // Transaksi ini memakai tingkat isolasi bawaan PostgreSQL (read
+            // committed), jadi dua permintaan yang tiba pada detik yang sama
+            // bisa sama-sama lolos pemeriksaan di atas sebelum salah satunya
+            // menyimpan. Yang menutup celah itu adalah constraint
+            // `EXCLUDE USING gist` bernama `booking_tanpa_tumpang_tindih` di
+            // tingkat database: ia menolak penulisan kedua, dan penolakan itu
+            // ditangkap di bawah lalu diterjemahkan menjadi jawaban 409 yang
+            // sama dengan `TanggalBentrok`.
             return tx.booking.create({
                 data: {
                     userId: session.user.id,
@@ -249,7 +251,19 @@ export async function POST(req: Request) {
             });
         });
     } catch (error) {
-        if (error instanceof TanggalBentrok) {
+        // Dua jalan menuju jawaban yang sama.
+        //
+        // `TanggalBentrok` dilempar pemeriksaan di atas — kasus biasa, dan satu-
+        // satunya yang tahu tanggal mana yang bentrok.
+        //
+        // `adalahBentrokTanggal` menangkap penolakan constraint database. Itu
+        // kasus balapan: dua permintaan lolos pemeriksaan bersamaan, database
+        // menolak yang kedua. Sebelumnya galat itu dilempar ulang dan jatuh ke
+        // penanganan 500 umum, sehingga pembeli membaca "Error Server" —
+        // padahal penyebabnya persis sama dan pesan yang benar sudah ditulis di
+        // sini. Justru pada kasus yang paling mungkin terjadi di titik populer,
+        // pesan yang tepat tidak pernah sampai.
+        if (error instanceof TanggalBentrok || adalahBentrokTanggal(error)) {
             return NextResponse.json(
                 {
                     message:
@@ -281,7 +295,7 @@ export async function POST(req: Request) {
                 ? `Halo ${session.user.name}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Total nilai pesanan: <b>${rupiah(totalPrice)}</b><br/>` +
                   `Yang perlu dibayar sekarang (DP ${PERSEN_DP}%): <b>${rupiah(dpAmount)}</b><br/>` +
-                  `Sisa <b>${rupiah(totalPrice.minus(dpAmount))}</b> dibayarkan H-3 sebelum tayang.`
+                  `Sisa <b>${rupiah(kurang(totalPrice, dpAmount))}</b> dibayarkan H-3 sebelum tayang.`
                 : `Halo ${session.user.name}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Yang perlu dibayar sekarang (lunas): <b>${rupiah(totalPrice)}</b>`,
             orderDetail: {

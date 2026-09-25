@@ -124,10 +124,26 @@ export async function POST(req: Request) {
   // API key hanya ditulis bila client benar-benar mengirim nilai baru.
   // Karena GET tidak lagi mengembalikan key utuh, field yang dibiarkan kosong
   // di form berarti "jangan ubah" — bukan "hapus key yang tersimpan".
-  const data: Record<string, string | null> = {
-      siteName: body.siteName,
-      siteDesc: body.siteDesc,
+  // `siteName` dan `siteDesc` dulu ditulis apa adanya dari body. Keduanya
+  // kolom `String` yang tidak boleh null: kalau client mengirim angka, objek,
+  // atau tidak mengirim apa-apa, Prisma menolak dengan galat yang jatuh ke 500
+  // tanpa penjelasan. Keduanya juga tampil di judul halaman untuk semua
+  // pengunjung, jadi teks sepanjang apa pun akan ikut dirender.
+  const data: Record<string, string | null> = {};
+
+  const bersihkanTeks = (nilai: unknown, batas: number): string | null => {
+      if (typeof nilai !== 'string') return null;
+      const rapi = nilai.trim();
+      return rapi === "" ? null : rapi.slice(0, batas);
   };
+
+  const siteName = bersihkanTeks(body.siteName, 100);
+  const siteDesc = bersihkanTeks(body.siteDesc, 300);
+
+  // Field yang tidak dikirim berarti "jangan ubah", sama seperti perlakuan
+  // API key di bawah — bukan "kosongkan".
+  if (siteName !== null) data.siteName = siteName;
+  if (siteDesc !== null) data.siteDesc = siteDesc;
 
   const adaKeyBaru =
       (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim() !== "") ||
@@ -155,10 +171,28 @@ export async function POST(req: Request) {
       data.googleMapsApiKey = enkripsi(body.googleMapsApiKey.trim());
   }
 
-  await prisma.systemSetting.update({
-      where: { id: "default_config" },
-      data
-  });
+  // `update` dulu dipakai di sini, padahal GET di atas memakai `upsert` untuk
+  // baris yang sama. Bedanya baru terasa di instalasi baru: selama baris
+  // `default_config` belum pernah dibuat, `update` gagal dengan P2025 ("Record
+  // to update not found") yang tidak ditangkap siapa pun — admin menempel API
+  // key, menekan Simpan, dan hanya menerima 500 tanpa keterangan. Ia akan
+  // mengira key-nya yang salah dan mencobanya berulang kali.
+  //
+  // `upsert` membuat baris itu bila belum ada, jadi urutan pemakaian halaman
+  // tidak lagi menentukan berhasil atau tidaknya penyimpanan.
+  try {
+      await prisma.systemSetting.upsert({
+          where: { id: "default_config" },
+          update: data,
+          create: { id: "default_config", ...data },
+      });
+  } catch (error) {
+      console.error("Gagal menyimpan pengaturan sistem:", error);
+      return NextResponse.json(
+          { message: "Pengaturan gagal disimpan. Coba lagi beberapa saat." },
+          { status: 500 }
+      );
+  }
 
   return NextResponse.json({ message: "Pengaturan Disimpan" });
 }

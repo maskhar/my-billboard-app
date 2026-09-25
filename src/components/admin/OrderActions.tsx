@@ -74,6 +74,39 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
       if(reason) updateStatus('WAITING_BANK', { reason });
   };
 
+  // Tombol "Tolak" dulu selalu mengirim `CANCELLED`, baik pesanannya sudah
+  // dibayar maupun belum — dan itu menjebak uang pembeli. `CANCELLED` adalah
+  // status buntu yang juga bukan titik awal pengajuan refund, jadi pesanan
+  // `PAID_CONFIRMED` yang ditolak berakhir tanpa satu pun jalur pengembalian
+  // dana: uangnya ada di rekening perusahaan, tapi tidak ada tombol mana pun
+  // yang bisa mengeluarkannya lagi. Lihat catatan di src/lib/transisi-status.ts.
+  //
+  // Sekarang jalurnya ditentukan oleh ada-tidaknya uang yang sudah masuk:
+  // pesanan yang belum dibayar benar-benar dibatalkan, pesanan yang sudah
+  // dibayar masuk ke alur refund yang sudah ada.
+  const handleReject = () => {
+      const sudahDibayar = order.status === 'PAID_CONFIRMED';
+
+      const reason = prompt(
+          sudahDibayar
+              ? 'Pesanan ini SUDAH DIBAYAR. Menolaknya berarti dananya harus dikembalikan.\n\nAlasan penolakan?'
+              : 'Alasan tolak?'
+      );
+      if (!reason) return;
+
+      if (sudahDibayar) {
+          if (!confirm(
+              'Pesanan akan masuk alur pengembalian dana: pembeli diminta mengisi ' +
+              'rekening, lalu Anda mentransfer 90% dari uang yang sudah diterima ' +
+              '(dipotong biaya admin 10%).\n\nLanjutkan?'
+          )) return;
+          updateStatus('WAITING_BANK', { reason });
+          return;
+      }
+
+      updateStatus('CANCELLED', { reason });
+  };
+
   // --- HANDLER PROSES PRODUKSI (ALUR BARU) ---
   
   // 1. TERIMA BAYAR
@@ -130,8 +163,9 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
                     {isPaid && <span className="text-[10px] font-bold">Verifikasi</span>}
                 </button>
                 
-                {/* Tombol Tolak hanya muncul jika belum lunas banget */}
-                <button onClick={() => { const r = prompt('Alasan tolak?'); if(r) updateStatus('CANCELLED', { reason:r }); }} className="bg-red-50 text-red-700 p-1.5 rounded hover:bg-red-600 hover:text-white transition" title="Tolak">
+                {/* Pesanan yang sudah dibayar diarahkan ke alur refund, bukan
+                    dihanguskan — lihat `handleReject`. */}
+                <button onClick={handleReject} className="bg-red-50 text-red-700 p-1.5 rounded hover:bg-red-600 hover:text-white transition" title={isPaid ? "Tolak & Kembalikan Dana" : "Tolak"}>
                     <XCircle size={16} />
                 </button>
             </div>

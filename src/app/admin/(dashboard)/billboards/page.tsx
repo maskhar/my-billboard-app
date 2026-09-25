@@ -45,14 +45,20 @@ async function getAdminBillboards(halaman: number): Promise<{ data: BillboardWit
   }
 }
 
+// Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
+// dulu. Sebelumnya `searchParams?.halaman` dibaca langsung dari objek Promise
+// dan selalu `undefined`, jadi paginasi inventori tidak pernah berlaku:
+// halaman 2 ke atas menampilkan isi yang sama dengan halaman 1.
 export default async function AdminBillboardsPage({
   searchParams,
 }: {
-  searchParams?: { halaman?: string };
+  searchParams?: Promise<{ halaman?: string }>;
 }) {
+  const paramsQuery = await searchParams;
+
   // `Number("abc")` menghasilkan NaN dan `Number("-5")` menghasilkan skip
   // negatif — keduanya membuat query gagal. Dinormalkan ke 1.
-  const halamanMentah = Number(searchParams?.halaman);
+  const halamanMentah = Number(paramsQuery?.halaman);
   const halaman = Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
 
   const { data: billboards, total } = await getAdminBillboards(halaman);

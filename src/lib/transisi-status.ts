@@ -41,23 +41,39 @@ export const TRANSISI_SAH: Record<BookingStatus, readonly BookingStatus[]> = {
 
   // Uang sudah masuk, menunggu admin menekan "Verifikasi". Percabangan ke
   // DESIGN_RECEIVED / IN_PRODUCTION ditentukan `designOption`.
+  //
+  // `CANCELLED` SENGAJA TIDAK ADA di sini dan di dua status berikutnya, dan ini
+  // perbaikan atas jebakan uang yang nyata. Ketiga status ini berarti uang
+  // pembeli sudah diterima, sementara `CANCELLED` adalah status buntu yang juga
+  // BUKAN titik awal pengajuan refund (lihat `STATUS_BOLEH_AJUKAN_REFUND` di
+  // bawah). Jadi satu klik tombol "Tolak" di dashboard admin memindahkan
+  // pesanan yang uangnya sudah di rekening perusahaan ke keadaan tanpa satu pun
+  // jalur pengembalian: tidak bisa maju, tidak bisa refund, tidak bisa
+  // dikembalikan ke status sebelumnya. Uang pembeli terkunci permanen.
+  //
+  // Penggantinya `WAITING_BANK` — jalur batal paksa oleh admin yang memang
+  // sudah dipakai dari `ACTIVE` (`OrderActions.handleForceCancel`). Dari sana
+  // pesanan hanya bisa ke PROCESS_REFUND lalu REFUNDED, dan
+  // `booking/request-refund` STEP B menghitung nominal kembalian dari uang yang
+  // benar-benar diterima. Membatalkan pesanan yang sudah dibayar karena itu
+  // selalu berujung pada pengembalian dana, bukan pada uang yang menggantung.
   PAID_CONFIRMED: [
     BookingStatus.DESIGN_RECEIVED,
     BookingStatus.IN_PRODUCTION,
     BookingStatus.REVIEW_REFUND,
-    BookingStatus.CANCELLED,
+    BookingStatus.WAITING_BANK,
   ],
 
   DESIGN_RECEIVED: [
     BookingStatus.IN_PRODUCTION,
     BookingStatus.REVIEW_REFUND,
-    BookingStatus.CANCELLED,
+    BookingStatus.WAITING_BANK,
   ],
 
   IN_PRODUCTION: [
     BookingStatus.INSTALLATION,
     BookingStatus.REVIEW_REFUND,
-    BookingStatus.CANCELLED,
+    BookingStatus.WAITING_BANK,
   ],
 
   // Sudah di lapangan. Pembatalan di titik ini lewat jalur refund, bukan
@@ -108,6 +124,15 @@ export const STATUS_BOLEH_AJUKAN_REFUND: readonly BookingStatus[] = (
  * Dipakai pemeriksaan tumpang-tindih tanggal di `booking/create`. Yang tidak
  * masuk daftar hanya `CANCELLED` dan `REFUNDED`: dua-duanya berarti pesanan
  * sudah lepas, jadi tanggalnya kembali bisa dijual.
+ *
+ * PENTING: daftar ini harus sama persis dengan daftar status di constraint
+ * `booking_tanpa_tumpang_tindih` (lihat migrasi
+ * `20260923140000_samakan_status_pengunci_tanggal`). Daftar di sini diturunkan
+ * otomatis dari `TRANSISI_SAH`, daftar di SQL ditulis tangan — jadi setiap
+ * status baru yang ditambahkan ke `TRANSISI_SAH` masuk ke sini dengan
+ * sendirinya, tapi HARUS ditambahkan ke migrasi baru secara manual. Kalau
+ * tidak, status itu mengunci tanggal di aplikasi tapi tidak di database, dan
+ * celah balapan yang ditutup constraint itu terbuka lagi persis di sana.
  */
 export const STATUS_MENGUNCI_TANGGAL: readonly BookingStatus[] = (
   Object.keys(TRANSISI_SAH) as BookingStatus[]

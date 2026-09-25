@@ -16,7 +16,7 @@ node_modules/
 
 
 # testing
-/
+/coverage
 
 # next.js
 /.next/
@@ -54,6 +54,11 @@ public/uploads/
 
 # IDE & Tooling
 .continue/
+
+# Indeks CodeGraph: hasil turunan dari kode yang sudah ada di repo ini, dibangun
+# ulang per mesin. Isinya juga memuat cuplikan kode apa adanya, jadi tidak ada
+# gunanya ikut dikirim dan hanya membuat setiap commit berisik.
+.codegraph/
 
 # vercel
 .vercel

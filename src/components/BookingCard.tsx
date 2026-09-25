@@ -167,11 +167,18 @@ export default function BookingCard({ order }: { order: any }) {
 
   // E. Bayar Online (BELUM AKTIF)
   //
-  // Route /api/payment/notify sengaja dinonaktifkan (WEBHOOK_AKTIF = false) dan
-  // membalas 503 sampai verifikasi signature payment gateway selesai ditulis.
-  // Selama itu tombol ini TIDAK BOLEH mengklaim pembayaran berhasil: dulu
-  // respons non-OK diabaikan diam-diam, jadi user yang gagal bayar tidak
-  // melihat apa pun sementara statusnya tidak berubah.
+  // CATATAN: alamat yang dipanggil di bawah SALAH SECARA BENTUK, dan akan
+  // diganti saat Xendit dipasang. `/api/payment/notify` adalah endpoint webhook
+  // — tujuannya menerima panggilan dari SERVER payment gateway, bukan dari
+  // browser pembeli. Ia mensyaratkan header token rahasia yang tidak boleh
+  // pernah ada di kode browser, jadi panggilan ini selalu ditolak 401 dan alert
+  // "belum aktif" di bawah selalu yang muncul. Tidak ada yang bisa
+  // disalahgunakan hari ini justru KARENA penolakan itu.
+  //
+  // Penggantinya nanti: memanggil route pembuatan sesi pembayaran, lalu
+  // mengarahkan pembeli ke halaman bayar Xendit. Konfirmasi pembayaran tetap
+  // datang lewat webhook ke server, tidak pernah dari browser — browser tidak
+  // boleh jadi sumber kebenaran soal uang yang sudah masuk.
   const handlePaySimulation = async () => {
        // Nominal yang ditagih sekarang adalah DP bila pembeli memilih DP,
        // bukan nilai penuh pesanan. Sebelumnya dialog ini selalu menyebut
@@ -272,6 +279,23 @@ export default function BookingCard({ order }: { order: any }) {
   const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'ACTIVE'].includes(order.status);
   const isImageProof = order.refundProof?.startsWith('data:image');
 
+  // Apakah pesanan ini dibayar dengan skema DP, dan berapa sisanya?
+  //
+  // `dpAmount` bernilai 0 pada pesanan lunas, jadi "bukan nol DAN lebih kecil
+  // dari total" adalah tanda skema DP. Keduanya diperiksa lewat money.ts, bukan
+  // `!==` dan `<`, karena nominal bisa berupa objek Decimal — lihat catatan di
+  // kepala berkas ini.
+  const pakaiDp =
+      !!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice);
+  const sisaTagihan = pakaiDp ? kurang(order.totalPrice, order.dpAmount) : null;
+
+  // Pesanan yang uangnya sudah keluar lagi, atau tidak akan pernah masuk, tidak
+  // punya sisa tagihan yang perlu ditagih. Menampilkan "sisa" pada pesanan yang
+  // sedang direfund berarti menagih orang yang justru sedang menunggu uangnya
+  // kembali.
+  const tagihanSudahSelesai = ['CANCELLED', 'REFUNDED', 'REVIEW_REFUND', 'WAITING_BANK', 'PROCESS_REFUND']
+      .includes(order.status);
+
   // Badge Status Warna-warni
   let statusBadge = <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-[10px] font-bold uppercase">{order.status.replace('_', ' ')}</span>;
   if (order.status === 'PENDING_PAYMENT') statusBadge = <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${isExpired ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-700'}`}>{isExpired ? 'EXPIRED' : 'MENUNGGU PEMBAYARAN'}</span>;
@@ -320,10 +344,8 @@ export default function BookingCard({ order }: { order: any }) {
                       Pesanan DP: yang harus dibayar SEKARANG bukan totalnya.
                       Tanpa baris ini pembeli hanya melihat nilai penuh dan
                       mengira itulah tagihannya — padahal ia memilih DP 60%.
-                      `dpAmount` bernilai 0 pada pesanan lunas, dan 0 memang
-                      berarti "tidak ada tagihan DP terpisah" di sini.
                     */}
-                    {order.status === 'PENDING_PAYMENT' && !!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice) && (
+                    {pakaiDp && order.status === 'PENDING_PAYMENT' && (
                         <div className="mt-1 bg-orange-50 border border-orange-100 rounded px-2 py-1">
                             <p className="text-[9px] text-orange-600 font-bold uppercase">Dibayar Sekarang (DP)</p>
                             <p className="text-sm font-bold text-orange-700">Rp {angkaRupiah(order.dpAmount)}</p>
@@ -337,7 +359,28 @@ export default function BookingCard({ order }: { order: any }) {
                               apa-apa karena `order` bertipe `any`. `kurang`
                               dari money.ts benar pada kedua bentuk.
                             */}
-                            <p className="text-[9px] text-orange-500">Sisa Rp {angkaRupiah(kurang(order.totalPrice, order.dpAmount))} dibayar H-3 tayang</p>
+                            <p className="text-[9px] text-orange-500">Sisa Rp {angkaRupiah(sisaTagihan)} dibayar H-3 tayang</p>
+                        </div>
+                    )}
+
+                    {/*
+                      Sisa tagihan setelah DP diterima.
+
+                      Panel di atas hanya hidup saat status PENDING_PAYMENT, jadi
+                      begitu DP masuk dan statusnya menjadi PAID_CONFIRMED,
+                      pembeli DP TIDAK PERNAH melihat sisa tagihannya lagi
+                      sepanjang sisa alur pesanan — sampai billboard-nya tayang
+                      dan selesai. Satu-satunya tempat angka itu pernah muncul
+                      lagi adalah email "sudah tayang". Panel ini membuat
+                      kewajiban yang masih menggantung itu terlihat di setiap
+                      tahap, karena pembeli tidak bisa melunasi sesuatu yang
+                      tidak pernah ditagihkan kepadanya.
+                    */}
+                    {pakaiDp && order.status !== 'PENDING_PAYMENT' && !tagihanSudahSelesai && (
+                        <div className="mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                            <p className="text-[9px] text-amber-700 font-bold uppercase">Sisa Yang Harus Dilunasi</p>
+                            <p className="text-sm font-bold text-amber-800">Rp {angkaRupiah(sisaTagihan)}</p>
+                            <p className="text-[9px] text-amber-600">DP Rp {angkaRupiah(order.dpAmount)} sudah diterima. Pelunasan paling lambat H-3 sebelum tanggal tayang.</p>
                         </div>
                     )}
                 </div>

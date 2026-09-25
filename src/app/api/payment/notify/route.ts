@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { timingSafeEqual } from "crypto";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mail";
-import { keAngka, keDecimal, lebihKecil, nol, rupiah } from "@/lib/money";
+import { keAngka, keDecimal, kurang, lebihKecil, nol, rupiah } from "@/lib/money";
 import { BookingStatus } from "@prisma/client";
 import { transisiSah } from "@/lib/transisi-status";
 
@@ -238,7 +238,21 @@ export async function POST(req: Request) {
     // pernah menagihnya.
     const bayarDp = !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice);
     const labelBayar = bayarDp ? "DP" : "LUNAS";
+    const sisaTagihan = kurang(order.totalPrice, order.dpAmount);
 
+    // Pengiriman email TIDAK di-`await` sebelum respons.
+    //
+    // Gateway pembayaran menunggu jawaban webhook ini dalam hitungan detik;
+    // lewat dari itu ia menganggap notifikasinya gagal dan mengirim ulang.
+    // Sebelumnya respons baru dikirim setelah dua koneksi SMTP selesai plus
+    // jeda satu detik yang ditulis langsung di kode — saat server SMTP lambat,
+    // totalnya mudah melewati ambang itu. Gateway lalu mengulang notifikasi,
+    // dan tiap pengulangan membayar jeda dan SMTP yang sama lagi.
+    //
+    // Yang menentukan pembayaran diterima adalah penulisan database di atas,
+    // dan itu sudah selesai. Email hanya pemberitahuan: kegagalannya tidak
+    // boleh membuat gateway mengira pembayarannya gagal.
+    const kirimNotifikasi = async () => {
     if (adminEmail) {
         const successAdmin = await sendEmail({
             to: adminEmail,
@@ -247,7 +261,7 @@ export async function POST(req: Request) {
             message: bayarDp
                 ? `User <b>${order.user.name}</b> membayar <b>DP</b> sebesar ${rupiah(nominalDibayar)} ` +
                   `dari total ${rupiah(order.totalPrice)}.<br/>` +
-                  `Sisa <b>${rupiah(keDecimal(order.totalPrice).minus(keDecimal(order.dpAmount)))}</b> ditagihkan H-3 tayang.<br/>` +
+                  `Sisa <b>${rupiah(sisaTagihan)}</b> ditagihkan H-3 tayang.<br/>` +
                   `Segera cek dashboard dan Klik Terima.`
                 : `User <b>${order.user.name}</b> sudah membayar lunas. Total: ${rupiah(nominalDibayar)}.<br/>` +
                   `Segera cek dashboard dan Klik Terima.`,
@@ -266,7 +280,9 @@ export async function POST(req: Request) {
         console.error("⚠️ ADMIN_EMAIL di file .env kosong/tidak terbaca!");
     }
 
-    // Jeda 1 detik biar SMTP tidak ngambek (Rate Limit Prevention)
+    // Jeda 1 detik biar SMTP tidak ngambek (Rate Limit Prevention).
+    // Kini jeda ini terjadi SETELAH respons dikirim, jadi ia tidak lagi
+    // menahan jawaban ke gateway.
     await new Promise(resolve => setTimeout(resolve, 1000));
 
     // 6. KIRIM EMAIL KE USER (CONFIRMATION)
@@ -279,7 +295,7 @@ export async function POST(req: Request) {
             title: bayarDp ? "DP Telah Diterima" : "Dana Telah Diterima",
             message: bayarDp
                 ? `Terima kasih! DP sebesar ${rupiah(nominalDibayar)} sudah masuk ke sistem kami. ` +
-                  `Sisa pembayaran <b>${rupiah(keDecimal(order.totalPrice).minus(keDecimal(order.dpAmount)))}</b> ` +
+                  `Sisa pembayaran <b>${rupiah(sisaTagihan)}</b> ` +
                   `dibayarkan H-3 sebelum tayang. Tim Admin akan memverifikasi dalam waktu singkat.`
                 : `Terima kasih! Dana sebesar ${rupiah(nominalDibayar)} sudah masuk ke sistem kami. ` +
                   `Tim Admin akan memverifikasi dalam waktu singkat.`,
@@ -294,6 +310,19 @@ export async function POST(req: Request) {
         });
         console.log("📨 Konfirmasi terkirim ke User:", order.user.email);
     }
+    };
+
+    // `void` dengan penangkap galat sendiri: tanpa `.catch()`, kegagalan di
+    // dalam promise yang tidak di-`await` menjadi unhandled rejection yang bisa
+    // menghentikan proses Node.
+    //
+    // CATATAN: pada platform serverless, proses bisa dibekukan segera setelah
+    // respons dikirim, sehingga email belum sempat terkirim. Bila aplikasi ini
+    // di-deploy ke Vercel/Lambda, ganti baris ini dengan `waitUntil()` dari
+    // runtime yang bersangkutan, atau pindahkan pengiriman email ke antrean.
+    void kirimNotifikasi().catch((error) => {
+        console.error("⚠️ Gagal mengirim notifikasi pembayaran:", error);
+    });
 
     return NextResponse.json({ status: 'ok' });
 

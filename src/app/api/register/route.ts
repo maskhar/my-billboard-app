@@ -18,6 +18,7 @@
 import { NextResponse } from 'next/server';
 import { hash } from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
+import { adalahDuplikatUnik } from '@/lib/db-error';
 
 // Normalisasi nomor Indonesia: 08xx / +628xx / 628xx → 628xx.
 // Tanpa ini, satu orang bisa terdaftar tiga kali dengan nomor yang sama.
@@ -91,18 +92,42 @@ export async function POST(req: Request) {
 
     const hashedPassword = await hash(password, 12);
 
-    const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        whatsapp: phone ? normalisasiWhatsapp(phone) : null,
-        role: 'USER',          // selalu USER; tidak pernah dari body
-        authProvider: 'EMAIL',
-        isVerified: false,
-      },
-      select: { id: true, name: true, email: true },
-    });
+    // Pemeriksaan di atas menangkap kasus biasa, tapi tidak menutup celah
+    // balapan: `hash(password, 12)` sengaja lambat (ratusan milidetik), dan
+    // selama itu permintaan kedua dengan email yang sama bisa lewat
+    // pemeriksaan yang sama — keduanya lolos, keduanya menulis. Ini bukan
+    // kasus langka: klik ganda pada tombol Daftar sudah cukup.
+    //
+    // Yang menolak penulisan kedua adalah unique index pada kolom `email`.
+    // Sebelumnya penolakan itu jatuh ke catch umum di bawah dan pengguna
+    // membaca "Terjadi kesalahan pada server" — padahal pesan yang benar sudah
+    // ditulis beberapa baris di atas, hanya tidak pernah sampai.
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          whatsapp: phone ? normalisasiWhatsapp(phone) : null,
+          role: 'USER',          // selalu USER; tidak pernah dari body
+          authProvider: 'EMAIL',
+          isVerified: false,
+        },
+        select: { id: true, name: true, email: true },
+      });
+    } catch (error) {
+      if (adalahDuplikatUnik(error, 'email')) {
+        // Pesan dan status disamakan persis dengan jalur di atas, supaya
+        // pengguna tidak bisa membedakan mana yang tertangkap pemeriksaan dan
+        // mana yang tertangkap database.
+        return NextResponse.json(
+          { message: 'Email sudah terdaftar. Silakan login.' },
+          { status: 409 }
+        );
+      }
+      throw error;
+    }
 
     return NextResponse.json(
       { user, message: 'Pendaftaran berhasil' },

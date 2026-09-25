@@ -7,17 +7,22 @@ import UserClientPage from './UserClientPage';
 
 const PER_HALAMAN = 25;
 
+// Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
+// dulu. Sebelumnya `searchParams?.halaman` dibaca langsung dari objek Promise
+// dan selalu `undefined`, jadi paginasi di bawah tidak pernah berlaku: tombol
+// "Berikutnya" mengubah URL tapi daftar tetap menampilkan halaman 1.
 export default async function ManageUsersPage({
   searchParams,
 }: {
-  searchParams?: { halaman?: string };
+  searchParams?: Promise<{ halaman?: string }>;
 }) {
+  const paramsQuery = await searchParams;
   // Tanpa `take`, halaman ini mengambil SELURUH pengguna beserta SELURUH
   // pesanan masing-masing setiap kali dibuka, lalu menanamkan semuanya ke
   // dalam HTML. Dengan 30 pelanggan itu tidak terasa; dengan 5.000 pelanggan
   // yang punya riwayat panjang, halaman ini yang paling lambat dibuka
   // sekaligus paling sering dipakai admin.
-  const halamanMentah = Number(searchParams?.halaman);
+  const halamanMentah = Number(paramsQuery?.halaman);
   const halaman =
     Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
 

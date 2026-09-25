@@ -6,19 +6,21 @@ import { redirect } from 'next/navigation';
 import DashboardClientPage from './DashboardClientPage'; // Impor komponen client yang baru kita buat
 import { jumlah, keAngka, uangUntukClient } from '@/lib/money';
 import { isRevenueStatus } from '@/lib/revenue';
+import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
 
-// Status yang dianggap "Aktif / Berjalan"
-const activeStatuses = [
-    'PENDING_PAYMENT', 
-    'PAID_CONFIRMED', 
-    'ACTIVE', 
-    'REVIEW_REFUND', 
-    'PROCESS_REFUND', 
-    'WAITING_BANK',
-    'DESIGN_RECEIVED', 
-    'IN_PRODUCTION', 
-    'INSTALLATION'
-];
+// Status yang dianggap "Aktif / Berjalan".
+//
+// Daftarnya dulu disalin tangan di sini sebagai sembilan literal string.
+// Isinya kebetulan sama persis dengan `STATUS_MENGUNCI_TANGGAL` — semua status
+// kecuali CANCELLED dan REFUNDED — dan memang seharusnya: pesanan "masih
+// berjalan" dan pesanan "masih mengunci tanggal" adalah pertanyaan yang sama.
+//
+// Karena disalin, keduanya bisa berbeda tanpa ada yang menyadari. Status baru
+// yang ditambahkan ke `TRANSISI_SAH` masuk ke daftar turunan dengan
+// sendirinya, tapi tidak ke salinan ini: pelanggan lalu membuka dashboard dan
+// pesanannya yang masih berjalan sudah pindah ke tab "Riwayat", seolah sudah
+// selesai. Tidak ada galat, hanya dua daftar yang diam-diam berbeda.
+const activeStatuses: readonly string[] = STATUS_MENGUNCI_TANGGAL;
 
 export default async function DashboardWrapper() {
   const session = await getServerSession(authOptions);

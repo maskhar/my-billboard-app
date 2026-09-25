@@ -1,21 +1,4 @@
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+// src/app/admin/(dashboard)/orders/page.tsx
 import type { ComponentProps } from 'react';
 import { prisma } from '@/lib/prisma';
 import { uangUntukClient } from '@/lib/money';
@@ -26,11 +9,22 @@ import { authOptions } from "@/lib/auth";
 
 const PER_HALAMAN = 25;
 
-export default async function AdminTransactionsPage({ searchParams }: { searchParams: { status?: string; halaman?: string } }) {
+// Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
+// dulu. Sebelumnya propertinya dibaca langsung dari objek Promise, sehingga
+// `searchParams.status` dan `searchParams.halaman` SELALU `undefined`: filter
+// tab jatuh ke 'ALL' dan halaman selalu 1. Tombol "Berikutnya" mengubah URL
+// tapi tidak mengubah isi tabel, dan tab Refund menampilkan semua transaksi.
+// Tidak ada error yang muncul — baik di `tsc` maupun saat dijalankan.
+export default async function AdminTransactionsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ status?: string; halaman?: string }>;
+}) {
+  const paramsQuery = await searchParams;
   const session = await getServerSession(authOptions);
   const currentUserRole = session?.user?.role || 'USER';
 
-  const filterStatus = searchParams.status || 'ALL';
+  const filterStatus = paramsQuery.status || 'ALL';
 
   const whereClause: any = {};
   if (filterStatus === 'PENDING') whereClause.status = { in: ['PENDING_PAYMENT', 'PAID_CONFIRMED'] };
@@ -60,7 +54,7 @@ export default async function AdminTransactionsPage({ searchParams }: { searchPa
   // tambahan per baris. Semuanya lalu diserialisasi dan ditanam ke dalam HTML.
   // Dengan 50 pesanan itu tidak terasa; setelah setahun beroperasi, halaman
   // yang paling sering dipakai admin justru yang paling lambat terbuka.
-  const halamanMentah = Number(searchParams.halaman);
+  const halamanMentah = Number(paramsQuery.halaman);
   const halaman = Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
 
   const [transactions, totalTransaksi] = await prisma.$transaction([

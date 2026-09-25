@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { Server } = require("socket.io");
 const cors = require("cors");
 const { PrismaClient } = require("@prisma/client");
+const { rateLimit } = require("./rate-limit");
 
 // [SECURITY] Daftar origin yang boleh mengakses chat server.
 // Diisi lewat env CHAT_CORS_ORIGINS (dipisah koma). Fallback aman untuk dev lokal.
@@ -188,6 +189,59 @@ io.use(async (socket, next) => {
   return next();
 });
 
+// ---------------------------------------------------------------------------
+// Pembatas laju untuk jalur yang memanggil AI berbayar
+// ---------------------------------------------------------------------------
+//
+// Setiap pesan dari pengunjung memicu satu panggilan Gemini, dan jalur ini
+// terbuka untuk TAMU — siapa pun bisa mengambil token dari /api/chat/start
+// tanpa login. Tanpa pembatas, satu skrip yang mengirim pesan dalam loop
+// menguras kuota berbayar dalam hitungan menit, dan chat untuk pelanggan asli
+// ikut mati bersamanya.
+//
+// Dua lapis, karena keduanya menjawab hal yang berbeda:
+//   - Per sesi: menahan satu pengunjung (atau satu skrip) agar tidak memborong.
+//   - Global: batas atas untuk seluruh server, supaya seribu sesi baru yang
+//     masing-masing masih "sopan" tetap tidak bisa melewati batas tagihan.
+//
+// Angkanya longgar untuk percakapan manusia: 12 pesan per menit jauh di atas
+// kecepatan orang mengetik pertanyaan, tapi jauh di bawah kecepatan loop.
+const BATAS_AI_PER_SESI = 12;
+const JENDELA_AI_PER_SESI_MS = 60 * 1000;
+
+const BATAS_AI_GLOBAL = Number(process.env.CHAT_AI_BATAS_GLOBAL_PER_MENIT) || 120;
+const JENDELA_AI_GLOBAL_MS = 60 * 1000;
+
+/**
+ * Bolehkah pesan ini memicu panggilan AI?
+ *
+ * Mengembalikan `null` bila boleh, atau teks alasan yang layak dibaca
+ * pengunjung bila tidak. Pesan pengunjung TETAP tersimpan dan tersiar apa pun
+ * hasilnya — yang ditahan hanya panggilan AI-nya, supaya percakapan dengan
+ * petugas manusia tidak ikut mati saat jatah AI habis.
+ */
+function tolakanBalasanAI(sessionId) {
+  const perSesi = rateLimit({
+    key: `chat-ai:sesi:${sessionId}`,
+    limit: BATAS_AI_PER_SESI,
+    windowMs: JENDELA_AI_PER_SESI_MS,
+  });
+  if (!perSesi.success) {
+    return `Anda mengirim pesan terlalu cepat. Coba lagi dalam ${perSesi.retryAfterSeconds} detik ya. 🙏`;
+  }
+
+  const global = rateLimit({
+    key: "chat-ai:global",
+    limit: BATAS_AI_GLOBAL,
+    windowMs: JENDELA_AI_GLOBAL_MS,
+  });
+  if (!global.success) {
+    return "Asisten AI sedang sangat sibuk. Pesan Anda sudah kami terima dan akan dibalas petugas kami. 🙏";
+  }
+
+  return null;
+}
+
 // Apakah identitas socket berhak atas room/sesi ini?
 function canAccessSession(identity, sessionId) {
   if (!identity || !sessionId) return false;
@@ -316,15 +370,41 @@ app.post("/api/chat/start", async (req, res) => {
       return res.status(400).json({ error: "Nama, email, dan nomor telepon wajib diisi." });
     }
 
-    const session = await prisma.chatSession.create({
-      data: {
-        guestName: String(name).slice(0, 120),
-        guestEmail: String(email).slice(0, 160),
-        guestPhone: String(phone).slice(0, 40),
-      },
+    // Tanpa batas, endpoint ini bisa dipanggil berulang untuk membuat baris
+    // ChatSession tanpa henti — sekaligus memasok token sesi baru untuk
+    // menyiasati batas AI per sesi di atas. Batasnya per alamat IP dan
+    // longgar: satu orang jarang memulai lebih dari beberapa percakapan.
+    const jatahSesi = rateLimit({
+      key: `chat-start:${req.ip || "tanpa-ip"}`,
+      limit: 5,
+      windowMs: 10 * 60 * 1000,
+    });
+    if (!jatahSesi.success) {
+      res.set("Retry-After", String(jatahSesi.retryAfterSeconds));
+      return res.status(429).json({
+        error: `Terlalu banyak percakapan dimulai. Coba lagi dalam ${jatahSesi.retryAfterSeconds} detik.`,
+      });
+    }
+
+    // `issueGuestToken` melempar bila rahasia penanda tangan belum diatur.
+    // Dulu ia dipanggil SETELAH baris sesi dibuat, jadi kegagalan itu
+    // meninggalkan baris sesi yatim di database sementara pengunjung hanya
+    // melihat 500. Token diterbitkan lebih dulu sekarang: kalau memang tidak
+    // bisa, tidak ada yang perlu ditulis.
+    const session = await prisma.$transaction(async (tx) => {
+      const dibuat = await tx.chatSession.create({
+        data: {
+          guestName: String(name).slice(0, 120),
+          guestEmail: String(email).slice(0, 160),
+          guestPhone: String(phone).slice(0, 40),
+        },
+      });
+      // Dipanggil di dalam transaksi supaya kegagalannya membatalkan
+      // penulisan sesi, bukan menyisakannya.
+      return { id: dibuat.id, guestToken: issueGuestToken(dibuat.id) };
     });
 
-    return res.json({ id: session.id, guestToken: issueGuestToken(session.id) });
+    return res.json(session);
   } catch (error) {
     console.error("Error creating chat session:", error);
     return res.status(500).json({ error: "Gagal memulai sesi chat." });
@@ -393,7 +473,15 @@ io.on("connection", (socket) => {
 
       // 3. [LOGIKA BARU] Jika pengirim adalah USER, panggil AI
       if (sender === "USER") {
-        const aiReplyText = await getGeminiResponse(safeMessage);
+        // Panggilan Gemini menghabiskan kuota berbayar dan jalur ini terbuka
+        // untuk tamu, jadi lajunya dibatasi lebih dulu. Saat jatah habis,
+        // pengunjung tetap mendapat balasan — hanya balasan yang tidak
+        // menghabiskan kuota, dan pesan aslinya sudah tersimpan di atas
+        // sehingga petugas tetap bisa menindaklanjutinya.
+        const alasanTolak = tolakanBalasanAI(sessionId);
+        const aiReplyText = alasanTolak !== null
+          ? alasanTolak
+          : await getGeminiResponse(safeMessage);
 
         // 4. Simpan balasan AI ke database
         const aiMessage = await prisma.chatMessage.create({

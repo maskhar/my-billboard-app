@@ -42,6 +42,43 @@ function uangYangSudahMasuk(order: { totalPrice: NilaiUang; dpAmount: NilaiUang 
   return nol(order.dpAmount) ? order.totalPrice : order.dpAmount;
 }
 
+/**
+ * Ambil teks dari body dengan batas panjang, atau `null` bila bukan teks/kosong.
+ *
+ * Nilai dari body tidak pernah dijamin bertipe apa pun: klien bisa mengirim
+ * angka, objek, atau tidak mengirim sama sekali. Prisma menolak tipe yang salah
+ * dengan galat yang jatuh ke 500 tanpa penjelasan, dan teks tanpa batas panjang
+ * ikut tertulis apa adanya ke database lalu tampil di panel admin.
+ */
+function teksDariBody(nilai: unknown, batas: number): string | null {
+  if (typeof nilai !== 'string') return null;
+  const rapi = nilai.trim();
+  if (rapi === "") return null;
+  return rapi.slice(0, batas);
+}
+
+/**
+ * Bersihkan nomor rekening: hanya angka, strip, dan spasi yang diterima.
+ *
+ * Kolom ini dibaca admin saat MENTRANSFER UANG. Apa pun yang lolos ke sini akan
+ * tampil di layar admin sebagai tujuan transfer, jadi bentuknya dipastikan
+ * dulu — bukan supaya "rapi", tapi supaya yang dibaca admin memang nomor
+ * rekening dan bukan teks sembarang yang menyamar sebagai satu.
+ *
+ * Panjangnya dibatasi longgar (8–34 digit): rekening bank Indonesia umumnya
+ * 10–16 digit, batas atas mengikuti panjang maksimum IBAN.
+ */
+function nomorRekeningSah(nilai: unknown): string | null {
+  const teks = teksDariBody(nilai, 40);
+  if (teks === null) return null;
+  if (!/^[0-9][0-9\s-]*[0-9]$/.test(teks)) return null;
+
+  const digit = teks.replace(/\D/g, "");
+  if (digit.length < 8 || digit.length > 34) return null;
+
+  return teks;
+}
+
 export async function POST(req: Request) {
   // Route ini sebelumnya tidak punya autentikasi sama sekali. Siapa pun bisa
   // mengajukan refund atas order milik orang lain DAN menentukan nomor rekening
@@ -53,8 +90,25 @@ export async function POST(req: Request) {
   const body = await req.json();
   const adminEmail = process.env.ADMIN_EMAIL; // Email Bos
 
+  // `orderId` dulu diteruskan ke Prisma apa adanya. Bila klien mengirim objek
+  // atau angka, query gagal dengan galat yang jatuh ke 500 — bukan pesan yang
+  // bisa dimengerti siapa pun.
+  const orderId = teksDariBody(body.orderId, 64);
+  if (!orderId) {
+      return NextResponse.json({ message: "ID pesanan tidak valid." }, { status: 400 });
+  }
+
   // STEP A: User kirim ALASAN (Tahap Awal)
   if (body.step === 'reason') {
+      // Alasan pembatalan tampil di panel admin dan dikirim lewat email.
+      const alasan = teksDariBody(body.reason, 1000);
+      if (!alasan) {
+          return NextResponse.json(
+              { message: "Alasan pembatalan wajib diisi." },
+              { status: 400 }
+          );
+      }
+
       // Kepemilikan ditegakkan di tingkat query.
       //
       // `status` ikut disaring di sini. Sebelumnya step ini menerima pesanan
@@ -66,13 +120,13 @@ export async function POST(req: Request) {
       // belum ada uang yang masuk untuk dikembalikan, jalurnya `booking/cancel`.
       const { count } = await prisma.booking.updateMany({
           where: {
-              id: body.orderId,
+              id: orderId,
               userId: session.user.id,
               status: { in: [...STATUS_BOLEH_AJUKAN_REFUND] },
           },
           data: {
               status: "REVIEW_REFUND",
-              cancelReason: body.reason,
+              cancelReason: alasan,
           },
       });
 
@@ -82,7 +136,7 @@ export async function POST(req: Request) {
           // user melihat "Pesanan tidak ditemukan" untuk pesanan yang jelas
           // terpampang di layarnya.
           const milikUser = await prisma.booking.findFirst({
-              where: { id: body.orderId, userId: session.user.id },
+              where: { id: orderId, userId: session.user.id },
               select: { status: true },
           });
 
@@ -101,7 +155,7 @@ export async function POST(req: Request) {
       }
 
       const order = await prisma.booking.findUniqueOrThrow({
-          where: { id: body.orderId },
+          where: { id: orderId },
           include: { billboard: true, user: true }
       });
 
@@ -111,7 +165,7 @@ export async function POST(req: Request) {
               to: adminEmail,
               subject: `⚠️ Permintaan Refund: #${order.id.slice(-6).toUpperCase()}`,
               title: "User Minta Batal",
-              message: `User <b>${order.user.name}</b> mengajukan pembatalan untuk billboard <b>${order.billboard.title}</b>.<br/>Alasan: "${body.reason}"`,
+              message: `User <b>${order.user.name}</b> mengajukan pembatalan untuk billboard <b>${order.billboard.title}</b>.<br/>Alasan: "${alasan}"`,
               orderDetail: {
                 id: order.id,
                 total: keAngka(order.totalPrice),
@@ -128,10 +182,36 @@ export async function POST(req: Request) {
 
   // STEP B: User kirim REKENING (Tahap Kedua)
   if (body.step === 'bank') {
+      // Dua field di bawah dulu ditulis ke database apa adanya dari body.
+      // Keduanya adalah tujuan transfer yang dibaca admin sebelum mengirim
+      // uang: nilai apa pun yang lolos ke sini akan tampil di layarnya sebagai
+      // rekening yang sah. Bentuknya dipastikan dulu, dan ditolak dengan pesan
+      // yang bisa dibaca pengguna — bukan dibiarkan gagal sebagai 500 di
+      // lapisan Prisma, atau lebih buruk, tersimpan.
+      const namaBank = teksDariBody(body.bankName, 60);
+      if (!namaBank) {
+          return NextResponse.json(
+              { message: "Nama bank wajib diisi." },
+              { status: 400 }
+          );
+      }
+
+      const nomorRekening = nomorRekeningSah(body.bankAccount);
+      if (!nomorRekening) {
+          return NextResponse.json(
+              {
+                  message:
+                      "Nomor rekening tidak valid. Isi dengan angka saja (8–34 digit), " +
+                      "boleh dipisah spasi atau strip.",
+              },
+              { status: 400 }
+          );
+      }
+
       // Kepemilikan ditegakkan di tingkat query. Ini step yang menentukan
       // rekening tujuan transfer, jadi pemiliknya wajib dipastikan.
       const orderData = await prisma.booking.findFirst({
-          where: { id: body.orderId, userId: session.user.id }
+          where: { id: orderId, userId: session.user.id }
       });
 
       if (!orderData) {
@@ -184,7 +264,7 @@ export async function POST(req: Request) {
 
       const { count } = await prisma.booking.updateMany({
           where: {
-              id: body.orderId,
+              id: orderId,
               userId: session.user.id,
               // Status ikut disyaratkan di query agar dua permintaan yang tiba
               // bersamaan tidak sama-sama lolos pemeriksaan di atas.
@@ -192,8 +272,8 @@ export async function POST(req: Request) {
           },
           data: {
               status: "PROCESS_REFUND",
-              userBankName: body.bankName,
-              userBankAccount: body.bankAccount,
+              userBankName: namaBank,
+              userBankAccount: nomorRekening,
               refundAmount: refundNominal
           },
       });
@@ -203,7 +283,7 @@ export async function POST(req: Request) {
       }
 
       const order = await prisma.booking.findUniqueOrThrow({
-          where: { id: body.orderId },
+          where: { id: orderId },
           include: { billboard: true, user: true }
       });
 
@@ -220,7 +300,7 @@ export async function POST(req: Request) {
                   `Nilai pesanan: ${rupiah(order.totalPrice)}<br/>` +
                   `Uang yang sudah diterima: <b>${rupiah(uangMasuk)}</b>${nol(order.dpAmount) ? ' (lunas)' : ' (DP)'}<br/>` +
                   `Dikembalikan ${PERSEN_REFUND}% dari uang yang diterima: <b>${rupiah(refundNominal)}</b><br/><br/>` +
-                  `Bank: ${body.bankName} - ${body.bankAccount}`,
+                  `Bank: ${namaBank} - ${nomorRekening}`,
               orderDetail: {
                 id: order.id,
                 total: keAngka(refundNominal), // Total yg harus ditransfer
