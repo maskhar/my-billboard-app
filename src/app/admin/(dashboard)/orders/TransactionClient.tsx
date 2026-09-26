@@ -327,6 +327,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                             currentUserRole={currentUserRole}
                             adaUangMasuk={selected.uang.adaUangMasuk}
                             nominalRefund={selected.refundAmount}
+                            sisaPokok={selected.uang.sisaPokok}
                         />
                     </DetailSection>
                     

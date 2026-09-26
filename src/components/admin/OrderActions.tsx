@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import {
     CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud,
-    Eye, Printer, Hammer, Palette, Truck, Banknote
+    Eye, Printer, Hammer, Palette, Truck, Banknote, Wallet
 } from 'lucide-react';
 import Link from 'next/link';
 import { rupiah } from '@/lib/money';
@@ -15,6 +15,7 @@ export default function OrderActions({
   currentUserRole,
   adaUangMasuk,
   nominalRefund,
+  sisaPokok,
 }: {
   order: any;
   currentUserRole: string;
@@ -30,6 +31,14 @@ export default function OrderActions({
   adaUangMasuk: boolean;
   /** Nominal refund yang sudah tercatat server, atau null bila belum ada. */
   nominalRefund: number | null;
+  /**
+   * Sisa tagihan POKOK menurut ledger, dihitung server (`sisaTagihan`).
+   *
+   * Dipakai modal pencatatan pembayaran manual sebagai nominal awal dan sebagai
+   * batas atasnya. Server tetap memeriksanya sendiri di dalam transaksi — angka
+   * di sini hanya supaya admin tidak perlu menghitungnya di kepala.
+   */
+  sisaPokok: number;
 }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -38,9 +47,12 @@ export default function OrderActions({
   const [showTransferModal, setShowTransferModal] = useState(false); // Buat upload bukti trf
   const [showInstallModal, setShowInstallModal] = useState(false); // BUAT UPLOAD BUKTI TAYANG
   const [showDesignModal, setShowDesignModal] = useState(false); // BUAT LIHAT DESAIN USER
+  const [showCatatModal, setShowCatatModal] = useState(false); // CATAT PEMBAYARAN MANUAL
 
   const [proofData, setProofData] = useState<string>("");
   const [installData, setInstallData] = useState<string>(""); // Data Foto Tayang
+  const [nominalCatat, setNominalCatat] = useState<string>("");
+  const [keteranganCatat, setKeteranganCatat] = useState<string>("");
 
   useEffect(() => {
       setProofData(order.refundProof || "");
@@ -120,10 +132,88 @@ export default function OrderActions({
       updateStatus('CANCELLED', { reason });
   };
 
+  // CATAT PEMBAYARAN MANUAL — uang yang masuk di luar gerbang pembayaran.
+  //
+  // Satu-satunya cara menulis `Payment PAID` selain webhook Xendit. Ada karena
+  // tombol "Terima Manual" di bawah hanya memindahkan STATUS: sebelum route
+  // pencatatan ini ada, pesanan yang dibayar lewat transfer langsung memasuki
+  // tahap cetak dengan pembukuan kosong — uangnya tidak punya jejak, tidak masuk
+  // laporan, dan tidak bisa dikembalikan lewat alur refund.
+  //
+  // `router.refresh()` dipanggil setelah berhasil supaya `adaUangMasuk` dan
+  // `sisaPokok` yang dihitung server ikut diperbarui sebelum admin menekan
+  // "Terima Manual".
+  const handleCatatPembayaran = async () => {
+      const nominal = Number(nominalCatat);
+      if (!Number.isFinite(nominal) || nominal <= 0) {
+          return alert("Nominal pembayaran harus angka lebih dari nol.");
+      }
+      if (!Number.isInteger(nominal)) {
+          return alert("Nominal harus rupiah bulat, tanpa pecahan sen.");
+      }
+      if (nominal > sisaPokok) {
+          return alert(
+              `Nominal ${rupiah(nominal)} melebihi sisa tagihan pokok ${rupiah(sisaPokok)}.`
+          );
+      }
+
+      if (!confirm(
+          `Catat pembayaran masuk sebesar ${rupiah(nominal)}?\n\n` +
+          `Nominal ini akan tercatat sebagai uang yang sudah diterima perusahaan ` +
+          `dan menjadi batas atas pengembalian dana bila pesanan ini direfund. ` +
+          `Pastikan uangnya benar-benar sudah ada di rekening.`
+      )) return;
+
+      setLoading(true);
+      try {
+          const res = await fetch('/api/admin/orders/record-payment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  orderId: order.id,
+                  amount: nominalCatat,
+                  keterangan: keteranganCatat,
+              }),
+          });
+          const data = await res.json().catch(() => ({} as any));
+          if (!res.ok) {
+              alert('Gagal mencatat pembayaran: ' + (data.message || `Server menolak (${res.status}).`));
+              return;
+          }
+          alert(data.message || 'Pembayaran tercatat.');
+          setShowCatatModal(false);
+          setNominalCatat("");
+          setKeteranganCatat("");
+          router.refresh();
+      } catch {
+          alert('Error Server: pembayaran tidak tercatat.');
+      } finally {
+          setLoading(false);
+      }
+  };
+
   // --- HANDLER PROSES PRODUKSI (ALUR BARU) ---
-  
+
   // 1. TERIMA BAYAR
+  //
+  // Tombol ini hanya memindahkan TAHAP, tidak mencatat uang. Server menolak
+  // perpindahan dari `PENDING_PAYMENT` ke tahap sesudah pembayaran bila belum ada
+  // `Payment PAID` (422 `UANG_BELUM_TERCATAT`), jadi jalurnya diperiksa di sini
+  // lebih dulu — supaya admin diberi tahu langkah yang benar, bukan sekadar
+  // ditolak setelah menekan `confirm()`.
   const handleApprovePayment = () => {
+      if (order.status === 'PENDING_PAYMENT' && !adaUangMasuk) {
+          alert(
+              'Pesanan ini belum punya pembayaran yang tercatat, jadi belum bisa ' +
+              'dipindahkan ke tahap produksi.\n\n' +
+              'Bila uangnya sudah diterima di luar gerbang pembayaran (mis. transfer ' +
+              'langsung), catat dulu lewat tombol "Catat Pembayaran Manual" agar ' +
+              'nominalnya masuk pembukuan dan bisa dikembalikan lewat alur refund ' +
+              'bila perlu.'
+          );
+          return;
+      }
+
       if(!confirm('Verifikasi pembayaran diterima?')) return;
       // Jika user pilih "Jasa Desain", langsung masuk Produksi.
       // Jika user "Upload Sendiri", masuk status menunggu desain / review desain.
@@ -189,6 +279,16 @@ export default function OrderActions({
 
 
   if (loading) return <Loader2 className="animate-spin text-gray-400 mx-auto" size={18} />;
+
+  // Daftar yang sama dipakai server (`STATUS_BOLEH_BAYAR_LANJUTAN` di
+  // `src/lib/pembayaran.ts`) untuk memutuskan bolehkah setoran dicatat. Ditulis
+  // ulang di sini sebagai teks karena komponen client tidak pernah menerima enum
+  // Prisma; server tetap yang memutuskan — ini hanya menyembunyikan tombol yang
+  // pasti ditolak.
+  const bolehCatatSetoran =
+      sisaPokok > 0 &&
+      ['PENDING_PAYMENT', 'PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION', 'ACTIVE']
+          .includes(order.status);
 
   // ===============================================
   // BAGIAN UI TOMBOL DINAMIS
@@ -297,7 +397,22 @@ export default function OrderActions({
     <>
         <div className="flex items-center justify-center gap-2">
             {renderButtons()}
-            
+
+            {/* Tersedia di SETIAP tahap yang masih menerima pembayaran, bukan
+                hanya `PENDING_PAYMENT`: pembeli DP yang melunasi sisanya lewat
+                transfer langsung bisa melakukannya kapan saja selama pesanannya
+                berjalan, dan tanpa tombol ini uang itu tidak punya jalur masuk
+                pembukuan. */}
+            {bolehCatatSetoran && (
+                <button
+                    onClick={() => { setNominalCatat(String(sisaPokok)); setShowCatatModal(true); }}
+                    className="p-1.5 rounded bg-amber-50 text-amber-700 hover:bg-amber-600 hover:text-white transition"
+                    title={`Catat Pembayaran Manual (sisa ${rupiah(sisaPokok)})`}
+                >
+                    <Wallet size={16} />
+                </button>
+            )}
+
             {order.status !== 'CANCELLED' && (
                 <div className="h-6 w-px bg-gray-200 mx-1"></div>
             )}
@@ -376,6 +491,82 @@ export default function OrderActions({
                             className="w-full bg-green-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-green-700 disabled:bg-gray-300 transition"
                         >
                             Tandai Refund Selesai
+                        </button>
+                    </div>
+                </div>
+            </div>
+        )}
+
+        {/* MODAL CATAT PEMBAYARAN MANUAL
+            Menulis `Payment PAID` untuk uang yang masuk di luar gerbang
+            pembayaran. Tidak memindahkan status pesanan: pencatatan uang dan
+            perpindahan tahap adalah dua keputusan berbeda, dan menyatukannya di
+            satu tombol adalah sebab pesanan bisa memasuki produksi dengan
+            pembukuan kosong. */}
+        {showCatatModal && (
+            <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
+                <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-0 overflow-hidden">
+                    <div className="bg-amber-50 px-4 py-3 border-b flex justify-between items-center text-amber-900 font-bold">
+                        <span><Wallet size={16} className='inline mr-2'/>Catat Pembayaran Manual</span>
+                        <button onClick={() => setShowCatatModal(false)}>✕</button>
+                    </div>
+                    <div className="p-5 space-y-4">
+                        <p className="text-[11px] leading-relaxed text-gray-500">
+                            Untuk uang yang diterima <b>di luar</b> gerbang pembayaran — mis. transfer
+                            langsung ke rekening perusahaan. Nominal yang dicatat di sini menjadi
+                            batas atas pengembalian dana bila pesanan direfund, jadi isi sesuai uang
+                            yang benar-benar masuk.
+                        </p>
+
+                        <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-xs space-y-1 text-gray-600">
+                            <div className="flex justify-between">
+                                <span>Harga pokok</span>
+                                <span className="font-bold text-gray-900">{rupiah(order.totalPrice)}</span>
+                            </div>
+                            <div className="flex justify-between">
+                                <span>Sisa tagihan pokok</span>
+                                <span className="font-bold text-gray-900">{rupiah(sisaPokok)}</span>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                                Nominal diterima (Rp)
+                            </label>
+                            <input
+                                type="number"
+                                min={1}
+                                max={sisaPokok}
+                                step={1}
+                                value={nominalCatat}
+                                onChange={(e) => setNominalCatat(e.target.value)}
+                                className="w-full border rounded-md p-2 text-sm font-mono"
+                            />
+                            <p className="mt-1 text-[10px] text-gray-400">
+                                Rupiah bulat, tanpa pecahan sen. Setoran sebagian akan tercatat sebagai
+                                DP dan sisanya otomatis diterbitkan tagihan pelunasannya.
+                            </p>
+                        </div>
+
+                        <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-1">
+                                Keterangan (opsional)
+                            </label>
+                            <input
+                                type="text"
+                                value={keteranganCatat}
+                                onChange={(e) => setKeteranganCatat(e.target.value)}
+                                placeholder="Transfer BCA a/n Budi, 27 Sep"
+                                className="w-full border rounded-md p-2 text-xs"
+                            />
+                        </div>
+
+                        <button
+                            onClick={handleCatatPembayaran}
+                            disabled={!nominalCatat.trim()}
+                            className="w-full bg-amber-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-amber-700 disabled:bg-gray-300 transition"
+                        >
+                            Catat Pembayaran
                         </button>
                     </div>
                 </div>

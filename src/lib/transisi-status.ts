@@ -33,6 +33,12 @@ export const TRANSISI_SAH: Record<BookingStatus, readonly BookingStatus[]> = {
   // Belum ada uang masuk. Admin bisa menerima pembayaran manual dan langsung
   // melompat ke tahap produksi (lihat OrderActions.handleApprovePayment), atau
   // menolak pesanannya.
+  //
+  // Jalur ke tahap sesudah pembayaran SAH di sini, tapi tidak cukup: peta ini
+  // menjawab "apakah perpindahan ini masuk akal", bukan "apakah uangnya sudah
+  // ada". Pemeriksaan pembukuannya terpisah, di `admin/update-order` lewat
+  // `mengandaikanUangMasuk` — tanpa itu satu klik memindahkan pesanan yang
+  // pembukuannya kosong ke tahap cetak.
   PENDING_PAYMENT: [
     BookingStatus.PAID_CONFIRMED,
     BookingStatus.DESIGN_RECEIVED,

@@ -131,6 +131,17 @@ const JALUR_ROUTE_ADD_CHARGE = path.join(
   'add-charge',
   'route.ts'
 );
+const JALUR_ROUTE_RECORD_PAYMENT = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'admin',
+  'orders',
+  'record-payment',
+  'route.ts'
+);
 const JALUR_ROUTE_SUBMIT_DESIGN = path.join(
   __dirname,
   '..',
@@ -3795,6 +3806,72 @@ describe('ledger pembayaran', () => {
     assert.equal(tenggatPelunasanLewat(tayang, new Date(tenggat.getTime() + 1)), true);
     assert.equal(tenggatPelunasanLewat(tayang, new Date(2026, 9, 1)), false);
   });
+
+  it('mengandaikanUangMasuk: hanya tahap sesudah pembayaran', () => {
+    const { BookingStatus } = require('@prisma/client');
+    const { mengandaikanUangMasuk, STATUS_MENGANDAIKAN_UANG_MASUK } = require(JALUR_LEDGER);
+
+    for (const status of [
+      BookingStatus.PAID_CONFIRMED,
+      BookingStatus.DESIGN_RECEIVED,
+      BookingStatus.IN_PRODUCTION,
+      BookingStatus.INSTALLATION,
+      BookingStatus.ACTIVE,
+    ]) {
+      assert.equal(mengandaikanUangMasuk(status), true, status);
+    }
+
+    // `PENDING_PAYMENT` justru tahap SEBELUM uang masuk — kalau ia masuk daftar,
+    // gerbangnya menolak keadaan awal setiap pesanan.
+    assert.equal(mengandaikanUangMasuk(BookingStatus.PENDING_PAYMENT), false);
+
+    // Jalur refund sengaja di luar daftar: pesanan bisa masuk `REVIEW_REFUND`
+    // lewat pengajuan pembeli, dan menuntut pembukuan terisi di sana akan
+    // mengunci pengajuan pesanan lama yang pembukuannya memang kosong.
+    for (const status of [
+      BookingStatus.REVIEW_REFUND,
+      BookingStatus.WAITING_BANK,
+      BookingStatus.PROCESS_REFUND,
+      BookingStatus.REFUNDED,
+      BookingStatus.CANCELLED,
+    ]) {
+      assert.equal(mengandaikanUangMasuk(status), false, status);
+    }
+
+    // Daftarnya tidak boleh punya anggota di luar enum: salah ketik satu nama
+    // status membuat gerbangnya diam-diam tidak pernah menyala di tahap itu.
+    for (const status of STATUS_MENGANDAIKAN_UANG_MASUK) {
+      assert.ok(Object.values(BookingStatus).includes(status), status);
+    }
+  });
+
+  it('tujuanSetoranPokok: DP bila sebagian, FULL bila menutup kontrak, PELUNASAN bila sudah ada uang', () => {
+    const { tujuanSetoranPokok } = require(JALUR_LEDGER);
+
+    assert.equal(tujuanSetoranPokok('1000000', [], '400000'), PaymentTujuan.DP);
+    assert.equal(tujuanSetoranPokok('1000000', [], '1000000'), PaymentTujuan.FULL);
+
+    // Tagihan `PENDING` bukan uang masuk, jadi setoran pertama tetap DP/FULL —
+    // bukan PELUNASAN atas kewajiban yang belum pernah dibayar sepeser pun.
+    assert.equal(
+      tujuanSetoranPokok('1000000', [baris(PaymentTujuan.FULL, PaymentStatus.PENDING, '1000000')], '400000'),
+      PaymentTujuan.DP
+    );
+
+    // Biaya tambahan yang dibayar bukan uang pokok: setoran pokok pertama tetap DP.
+    assert.equal(
+      tujuanSetoranPokok('1000000', [baris(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000')], '400000'),
+      PaymentTujuan.DP
+    );
+
+    // Sudah ada uang pokok masuk → apa pun nominalnya, ini pelunasan.
+    for (const nominal of ['600000', '100000']) {
+      assert.equal(
+        tujuanSetoranPokok('1000000', [baris(PaymentTujuan.DP, PaymentStatus.PAID, '400000')], nominal),
+        PaymentTujuan.PELUNASAN
+      );
+    }
+  });
 });
 
 // ===========================================================================
@@ -4567,6 +4644,661 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
 
     // Bukan 350.000. Biaya tambahan bukan pembayaran pokok.
     assert.match(emails[0].message, /Sisa <b>Rp\s?600\.000<\/b>/);
+  });
+
+  // =========================================================================
+  // TAHAP SESUDAH PEMBAYARAN MENUNTUT UANG YANG BENAR-BENAR TERCATAT
+  // =========================================================================
+  //
+  // Tombol "Terima Manual" memindahkan pesanan `PENDING_PAYMENT` langsung ke
+  // tahap cetak atas dasar satu `confirm()`, tanpa menulis baris `Payment` mana
+  // pun. Pesanan itu lalu berjalan dengan pembukuan KOSONG: `uangMasuk` nol,
+  // yang berarti plafon refund nol, `adaUangMasuk` salah, dan sisa tagihan
+  // sebesar seluruh nilai kontrak ditagihkan kepada pembeli yang sudah
+  // membayar.
+  for (const tujuan of ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION']) {
+    it(`menolak PENDING_PAYMENT → ${tujuan} bila pembukuannya kosong`, async () => {
+      const fake = buatDbAdmin({ status: BookingStatus.PENDING_PAYMENT, payments: [] });
+      const { route, emails } = buatRouteAdmin(fake);
+
+      const response = await route.POST(permintaan({ newStatus: tujuan }));
+      const isi = await response.json();
+
+      assert.equal(response.status, 422);
+      assert.match(isi.message, /belum punya pembayaran yang tercatat/);
+      assert.match(isi.message, /Catat Pembayaran Manual/);
+
+      // Statusnya tidak bergerak sedikit pun, dan tidak ada surat "sudah tayang"
+      // yang terkirim atas pesanan yang uangnya belum ada.
+      assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+      assert.equal(fake.calls.includes('booking.updateMany'), false);
+      assert.equal(emails.length, 0);
+    });
+  }
+
+  it('tagihan PENDING bukan uang: gerbangnya tetap menolak', async () => {
+    // `PENDING` adalah tagihan, bukan setoran. Kalau gerbangnya membaca seluruh
+    // baris `Payment` alih-alih yang `PAID`, pesanan yang baru dibukakan
+    // checkout lolos — dan itu justru keadaan yang paling sering terjadi.
+    const fake = buatDbAdmin({
+      status: BookingStatus.PENDING_PAYMENT,
+      payments: [barisPembayaran(PaymentTujuan.DP, PaymentStatus.PENDING, '400000')],
+    });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'IN_PRODUCTION' }));
+
+    assert.equal(response.status, 422);
+    assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+  });
+
+  it('biaya TAMBAHAN yang dibayar bukan pembayaran pokok: gerbangnya tetap menolak', async () => {
+    const fake = buatDbAdmin({
+      status: BookingStatus.PENDING_PAYMENT,
+      payments: [barisPembayaran(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000')],
+    });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'IN_PRODUCTION' }));
+
+    assert.equal(response.status, 422);
+    assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+  });
+
+  it('DP yang sudah tercatat PAID meloloskan perpindahan ke tahap produksi', async () => {
+    const fake = buatDbAdmin({
+      status: BookingStatus.PENDING_PAYMENT,
+      payments: [barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000')],
+    });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'IN_PRODUCTION' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.booking().status, BookingStatus.IN_PRODUCTION);
+    assert.ok(fake.booking().productionStartedAt instanceof Date);
+  });
+
+  it('PENDING_PAYMENT → CANCELLED tidak ikut terjaga', async () => {
+    // Menolak pesanan yang belum dibayar adalah jalan keluar yang benar untuk
+    // keadaan ini. Kalau gerbangnya ikut menutupnya, pesanan tanpa uang tidak
+    // punya jalur apa pun: tidak bisa maju, tidak bisa ditolak.
+    const fake = buatDbAdmin({ status: BookingStatus.PENDING_PAYMENT, payments: [] });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'CANCELLED' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.booking().status, BookingStatus.CANCELLED);
+  });
+
+  it('REVIEW_REFUND → ACTIVE tetap terbuka walau pembukuannya kosong', async () => {
+    // Gerbangnya hanya menjaga perpindahan DARI `PENDING_PAYMENT`. Pesanan lama
+    // yang pembukuannya memang kosong sebelum gerbang ini ada tidak boleh ikut
+    // terkunci — dan `REVIEW_REFUND → ACTIVE` adalah satu-satunya jalan keluar
+    // bagi pengajuan refund yang ditolak admin.
+    const fake = buatDbAdmin({ status: BookingStatus.REVIEW_REFUND, payments: [] });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'ACTIVE' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.booking().status, BookingStatus.ACTIVE);
+  });
+
+  for (const asal of [BookingStatus.PAID_CONFIRMED, BookingStatus.DESIGN_RECEIVED, BookingStatus.IN_PRODUCTION]) {
+    it(`${asal} → tahap berikutnya tidak ikut terjaga walau pembukuannya kosong`, async () => {
+      const berikutnya = {
+        [BookingStatus.PAID_CONFIRMED]: 'IN_PRODUCTION',
+        [BookingStatus.DESIGN_RECEIVED]: 'IN_PRODUCTION',
+        [BookingStatus.IN_PRODUCTION]: 'INSTALLATION',
+      }[asal];
+      const fake = buatDbAdmin({ status: asal, payments: [] });
+      const { route } = buatRouteAdmin(fake);
+
+      const response = await route.POST(permintaan({ newStatus: berikutnya }));
+
+      assert.equal(response.status, 200, `${asal} → ${berikutnya}`);
+      assert.equal(fake.booking().status, berikutnya);
+    });
+  }
+});
+
+// ===========================================================================
+// MENCATAT UANG YANG MASUK DI LUAR GERBANG PEMBAYARAN
+// ===========================================================================
+//
+// Gerbang `UANG_BELUM_TERCATAT` di atas menciptakan kewajiban: kalau pesanan
+// tidak boleh maju tanpa baris `Payment PAID`, harus ada cara sah untuk menulis
+// baris itu ketika uangnya benar-benar diterima lewat transfer langsung.
+// `record-payment` adalah cara itu — dan ia penulis `PAID` KEDUA di seluruh
+// sistem setelah webhook, jadi setiap syaratnya diuji di sini.
+describe('POST /api/admin/orders/record-payment', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
+
+  /**
+   * Database stateful dengan transaksi yang benar-benar rollback.
+   *
+   * Sama alasannya seperti `buatDbCharge`: salah satu hal yang diuji di sini
+   * adalah bahwa penolakan 409 tidak meninggalkan baris `Payment` setengah
+   * tertulis — tagihan yang ditutup tanpa setoran yang menggantikannya.
+   */
+  function buatDbCatat(options = {}) {
+    let payments = (options.payments ?? []).map((p) => ({ ...p }));
+    let booking = {
+      id: 'booking-1',
+      status: options.status ?? BookingStatus.PENDING_PAYMENT,
+      duration: 30,
+      totalPrice: new Prisma.Decimal(options.totalPrice ?? '1000000'),
+      updatedAt: new Date('2026-01-01T00:00:00.000Z'),
+    };
+    const calls = [];
+
+    function tabel(ambil, simpan, ambilBooking, simpanBooking) {
+      return {
+        booking: {
+          async findUnique(args) {
+            calls.push('booking.findUnique');
+            if (args.where.id !== 'booking-1') return null;
+            const row = ambilBooking();
+            return {
+              id: row.id,
+              status: row.status,
+              duration: row.duration,
+              totalPrice: row.totalPrice,
+              user: { email: 'pembeli@contoh.test', name: 'Budi Santoso' },
+              billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
+              payments: ambil().map((p) => ({
+                id: p.id,
+                tujuan: p.tujuan,
+                status: p.status,
+                jumlah: p.jumlah,
+                providerSessionId: p.providerSessionId ?? null,
+              })),
+            };
+          },
+          async update(args) {
+            calls.push('booking.update');
+            simpanBooking({ ...ambilBooking(), ...args.data });
+            return { id: 'booking-1' };
+          },
+        },
+        payment: {
+          async updateMany(args) {
+            calls.push('payment.updateMany');
+            const w = args.where;
+            const rows = ambil();
+            const ids = w.id?.in ?? [w.id];
+            const cocok = rows.filter(
+              (row) =>
+                ids.includes(row.id) &&
+                row.status === w.status &&
+                (row.providerSessionId ?? null) === w.providerSessionId
+            );
+            if (cocok.length === 0) return { count: 0 };
+            const idCocok = cocok.map((c) => c.id);
+            simpan(rows.map((row) => (idCocok.includes(row.id) ? { ...row, ...args.data } : row)));
+            return { count: cocok.length };
+          },
+          async create(args) {
+            calls.push('payment.create');
+            const rows = ambil();
+            // Indeks unik bersyarat `payment_satu_tagihan_menganggur`: maksimum
+            // satu baris PENDING per `(bookingId, tujuan)`.
+            if (
+              args.data.status === PaymentStatus.PENDING &&
+              rows.some(
+                (row) => row.tujuan === args.data.tujuan && row.status === PaymentStatus.PENDING
+              )
+            ) {
+              throw new Prisma.PrismaClientKnownRequestError('tagihan menganggur duplikat', {
+                code: 'P2002',
+                clientVersion: 'test',
+                meta: { target: ['bookingId', 'tujuan'] },
+              });
+            }
+            const baris = {
+              id: `pay-baru-${rows.length + 1}`,
+              providerSessionId: null,
+              providerPaymentId: null,
+              paidAt: null,
+              ...args.data,
+            };
+            simpan([...rows, baris]);
+            return { id: baris.id, tujuan: baris.tujuan };
+          },
+        },
+      };
+    }
+
+    const prismaPalsu = {
+      async $transaction(kerja) {
+        let salinanPayment = payments.map((p) => ({ ...p }));
+        let salinanBooking = { ...booking };
+        try {
+          const hasil = await kerja(
+            tabel(
+              () => salinanPayment,
+              (nilai) => {
+                salinanPayment = nilai;
+              },
+              () => salinanBooking,
+              (nilai) => {
+                salinanBooking = nilai;
+              }
+            )
+          );
+          payments = salinanPayment;
+          booking = salinanBooking;
+          calls.push('transaction.commit');
+          return hasil;
+        } catch (error) {
+          calls.push('transaction.rollback');
+          throw error;
+        }
+      },
+    };
+
+    return {
+      prisma: prismaPalsu,
+      calls,
+      payments: () => payments.map((p) => ({ ...p })),
+      booking: () => ({ ...booking }),
+    };
+  }
+
+  function buatRouteCatat(fake, peran = 'ADMIN') {
+    const emails = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_RECORD_PAYMENT, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': mailPalsu(async (args) => { emails.push(args); }),
+    });
+    return { route, emails };
+  }
+
+  function permintaan(isi) {
+    return new Request('https://contoh.test/api/admin/orders/record-payment', {
+      method: 'POST',
+      body: JSON.stringify({ orderId: 'booking-1', amount: '400000', ...isi }),
+    });
+  }
+
+  function tagihan(ganti = {}) {
+    return {
+      id: 'pay-pokok',
+      bookingId: 'booking-1',
+      tujuan: PaymentTujuan.DP,
+      status: PaymentStatus.PENDING,
+      jumlah: new Prisma.Decimal('400000'),
+      providerSessionId: null,
+      ...ganti,
+    };
+  }
+
+  it('menolak pemanggil yang bukan admin tanpa menulis apa pun', async () => {
+    const fake = buatDbCatat();
+    const { route, emails } = buatRouteCatat(fake, 'USER');
+
+    const response = await route.POST(permintaan({}));
+
+    assert.equal(response.status, 401);
+    assert.equal(fake.payments().length, 0);
+    assert.equal(fake.calls.length, 0);
+    assert.equal(emails.length, 0);
+  });
+
+  it('SUPER_ADMIN diterima', async () => {
+    const fake = buatDbCatat();
+    const { route } = buatRouteCatat(fake, 'SUPER_ADMIN');
+
+    const response = await route.POST(permintaan({}));
+
+    assert.equal(response.status, 200);
+  });
+
+  for (const [judul, isi] of [
+    ['orderId bukan teks', { orderId: 12345 }],
+    ['orderId kosong', { orderId: '   ' }],
+    ['nominal nol', { amount: '0' }],
+    ['nominal negatif', { amount: '-400000' }],
+    ['nominal bukan angka', { amount: 'empat ratus ribu' }],
+    ['nominal pecahan sen', { amount: '400000.50' }],
+  ]) {
+    it(`menolak ${judul} tanpa membuka transaksi`, async () => {
+      const fake = buatDbCatat();
+      const { route, emails } = buatRouteCatat(fake);
+
+      const response = await route.POST(permintaan(isi));
+
+      assert.equal(response.status, 400);
+      // Penolakan bentuk terjadi SEBELUM transaksi dibuka. Membuka transaksi
+      // untuk permintaan yang pasti ditolak menahan baris pesanan tanpa alasan.
+      assert.equal(fake.calls.length, 0, judul);
+      assert.equal(emails.length, 0);
+    });
+  }
+
+  it('setoran pertama yang menutup seluruh kontrak tercatat FULL dan tidak menerbitkan tagihan baru', async () => {
+    const fake = buatDbCatat();
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '1000000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.match(isi.message, /lunas/i);
+
+    const baris = fake.payments();
+    assert.equal(baris.length, 1);
+    assert.equal(baris[0].tujuan, PaymentTujuan.FULL);
+    assert.equal(baris[0].status, PaymentStatus.PAID);
+    assert.equal(baris[0].jumlah.toString(), '1000000');
+    // Baris tanpa `providerPaymentId` justru maknanya: uang yang masuk di luar
+    // gerbang pembayaran. `paidAt` yang menjadi jejak waktunya.
+    assert.equal(baris[0].providerPaymentId ?? null, null);
+    assert.ok(baris[0].paidAt instanceof Date);
+    assert.equal(fake.calls.includes('transaction.commit'), true);
+    assert.equal(emails.length, 1);
+  });
+
+  it('setoran sebagian tercatat DP dan sisanya langsung mendapat tagihan PELUNASAN', async () => {
+    const fake = buatDbCatat();
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '400000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.match(isi.message, /DP/);
+
+    const baris = fake.payments();
+    assert.equal(baris.length, 2);
+
+    const setoran = baris.find((p) => p.status === PaymentStatus.PAID);
+    assert.equal(setoran.tujuan, PaymentTujuan.DP);
+    assert.equal(setoran.jumlah.toString(), '400000');
+
+    // Tanpa tagihan ini, pembeli yang menyetor DP lewat transfer tidak punya
+    // jalur apa pun untuk melunasi sisanya: tidak ada baris PENDING, jadi tidak
+    // ada tombol Bayar dan tidak ada sesi yang bisa dibuka.
+    const tagihanBaru = baris.find((p) => p.status === PaymentStatus.PENDING);
+    assert.equal(tagihanBaru.tujuan, PaymentTujuan.PELUNASAN);
+    assert.equal(tagihanBaru.jumlah.toString(), '600000');
+
+    assert.equal(emails.length, 1);
+    assert.match(emails[0].subject, /Pesanan #OOKING-1$/);
+    assert.match(emails[0].message, /Rp\s?400\.000/);
+    assert.match(emails[0].message, /Rp\s?600\.000/);
+  });
+
+  it('setoran kedua tercatat PELUNASAN dan melunasi pokok', async () => {
+    const fake = buatDbCatat({
+      payments: [tagihan({ id: 'pay-dp', status: PaymentStatus.PAID })],
+    });
+    const { route } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '600000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.match(isi.message, /PELUNASAN/);
+
+    const baru = fake.payments().filter((p) => p.id !== 'pay-dp');
+    assert.equal(baru.length, 1);
+    assert.equal(baru[0].tujuan, PaymentTujuan.PELUNASAN);
+    assert.equal(baru[0].status, PaymentStatus.PAID);
+
+    // Pokok lunas, jadi tidak ada tagihan lanjutan yang diterbitkan.
+    assert.equal(fake.payments().filter((p) => p.status === PaymentStatus.PENDING).length, 0);
+  });
+
+  it('nominal di atas sisa pokok DITOLAK, bukan dipangkas diam-diam', async () => {
+    // Memangkasnya membuat baris `Payment` menyebut angka yang berbeda dari uang
+    // yang benar-benar masuk — dan angka di pembukuan itulah plafon refund.
+    // Admin yang salah ketik harus tahu bahwa ia salah ketik.
+    const fake = buatDbCatat();
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '1500000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(isi.message, /melebihi sisa tagihan pokok/);
+    assert.equal(fake.payments().length, 0);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+    assert.equal(fake.calls.includes('transaction.commit'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('pokok yang sudah lunas menolak setoran baru dan mengarahkan ke Biaya Tambahan', async () => {
+    const fake = buatDbCatat({
+      status: BookingStatus.IN_PRODUCTION,
+      payments: [
+        tagihan({ id: 'pay-full', tujuan: PaymentTujuan.FULL, status: PaymentStatus.PAID, jumlah: new Prisma.Decimal('1000000') }),
+      ],
+    });
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '100000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.match(isi.message, /sudah lunas/);
+    assert.match(isi.message, /Biaya Tambahan/);
+    assert.equal(fake.payments().length, 1);
+    assert.equal(emails.length, 0);
+  });
+
+  it('pesanan tidak ditemukan dijawab 404', async () => {
+    const fake = buatDbCatat();
+    const { route } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ orderId: 'booking-hantu' }));
+
+    assert.equal(response.status, 404);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+  });
+
+  for (const status of [
+    BookingStatus.REVIEW_REFUND,
+    BookingStatus.WAITING_BANK,
+    BookingStatus.PROCESS_REFUND,
+    BookingStatus.REFUNDED,
+    BookingStatus.CANCELLED,
+  ]) {
+    it(`pesanan ${status} tidak lagi menerima setoran`, async () => {
+      // Nominal refund yang sudah disetujui admin dihitung dari uang yang
+      // tercatat. Menambah setoran di tengah jalur refund membuat angka yang
+      // sudah dikomunikasikan kepada pembeli tidak lagi cocok dengan pembukuan.
+      const fake = buatDbCatat({ status });
+      const { route, emails } = buatRouteCatat(fake);
+
+      const response = await route.POST(permintaan({}));
+      const isi = await response.json();
+
+      assert.equal(response.status, 409, status);
+      assert.match(isi.message, /tidak lagi menerima pembayaran/);
+      assert.equal(fake.payments().length, 0);
+      assert.equal(emails.length, 0);
+    });
+  }
+
+  it('menerima setoran pada seluruh status yang masih menerima pembayaran', async () => {
+    for (const status of [
+      BookingStatus.PENDING_PAYMENT,
+      BookingStatus.PAID_CONFIRMED,
+      BookingStatus.DESIGN_RECEIVED,
+      BookingStatus.IN_PRODUCTION,
+      BookingStatus.INSTALLATION,
+      BookingStatus.ACTIVE,
+    ]) {
+      const fake = buatDbCatat({ status });
+      const { route } = buatRouteCatat(fake);
+
+      const response = await route.POST(permintaan({ amount: '1000000' }));
+
+      assert.equal(response.status, 200, `status ${status}`);
+      assert.equal(fake.payments().length, 1, `status ${status}`);
+    }
+  });
+
+  it('tagihan pokok yang masih menganggur ditutup VOIDED, di transaksi yang sama', async () => {
+    // Membiarkannya berarti pembeli masih melihat tombol Bayar untuk uang yang
+    // sudah ia transfer — dan kalau ia menekannya, ia membayar dua kali. Baris
+    // itu juga menempati pasangan `(bookingId, tujuan)` pada indeks unik
+    // bersyarat, sehingga tagihan pelunasan atas sisa yang baru tidak bisa
+    // dibuat.
+    const fake = buatDbCatat({
+      payments: [tagihan({ jumlah: new Prisma.Decimal('1000000'), tujuan: PaymentTujuan.FULL })],
+    });
+    const { route } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '400000' }));
+
+    assert.equal(response.status, 200);
+
+    const lama = fake.payments().find((p) => p.id === 'pay-pokok');
+    // `VOIDED`, bukan `EXPIRED`: yang gugur adalah kewajibannya (sudah dibayar
+    // di luar gerbang), bukan hanya sesinya.
+    assert.equal(lama.status, PaymentStatus.VOIDED);
+    // Lease pembuatan sesi ikut dilepas; baris tertutup yang masih memegang
+    // lease terlihat "sedang dikerjakan" oleh pencari claim macet.
+    assert.equal(lama.sesiClaimToken, null);
+    assert.equal(lama.sesiClaimExpiresAt, null);
+
+    // Dan tagihan penggantinya benar-benar terbit atas sisa yang baru.
+    const menganggur = fake.payments().filter((p) => p.status === PaymentStatus.PENDING);
+    assert.equal(menganggur.length, 1);
+    assert.equal(menganggur[0].tujuan, PaymentTujuan.PELUNASAN);
+    assert.equal(menganggur[0].jumlah.toString(), '600000');
+    assert.equal(fake.calls.includes('transaction.commit'), true);
+  });
+
+  it('tagihan TAMBAHAN yang menganggur TIDAK ikut ditutup', async () => {
+    // Biaya tambahan berada di luar `totalPrice` dan punya jalurnya sendiri.
+    // Menutupnya berarti kewajiban yang belum dibayar kehilangan tagihannya.
+    const fake = buatDbCatat({
+      status: BookingStatus.IN_PRODUCTION,
+      payments: [
+        tagihan({ id: 'pay-tambahan', tujuan: PaymentTujuan.TAMBAHAN, jumlah: new Prisma.Decimal('250000') }),
+      ],
+    });
+    const { route } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '1000000' }));
+
+    assert.equal(response.status, 200);
+    const tambahan = fake.payments().find((p) => p.id === 'pay-tambahan');
+    assert.equal(tambahan.status, PaymentStatus.PENDING);
+    assert.equal(tambahan.jumlah.toString(), '250000');
+  });
+
+  it('tagihan pokok yang sesinya sudah dibuka menolak 409 dan tidak menulis apa pun', async () => {
+    // Baris itu mungkin sedang menerima uang di sisi gerbang pada detik ini.
+    // Menutupnya berarti uang yang benar-benar diterima Xendit tidak punya baris
+    // yang bisa menampungnya; membiarkannya terbuka sambil mencatat setoran
+    // manual berarti satu kewajiban dibayar dua kali.
+    const fake = buatDbCatat({
+      payments: [tagihan({ providerSessionId: 'ps-hidup' })],
+    });
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '400000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.match(isi.message, /sedang membayar/);
+
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.payments()[0].status, PaymentStatus.PENDING);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+    assert.equal(fake.calls.includes('transaction.commit'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('pembuatan sesi yang menang balapan membatalkan seluruh penulisan', async () => {
+    const fake = buatDbCatat({
+      // Pembacaan melaporkan `PENDING` + `providerSessionId: null`, tapi CAS di
+      // bawah tidak menemukan pasangannya: sesinya dibuat di antara keduanya.
+      payments: [tagihan({ providerSessionId: 'ps-baru' })],
+    });
+    const aslinya = fake.prisma.$transaction;
+    fake.prisma.$transaction = (kerja) =>
+      aslinya((tx) => {
+        const bookingAsli = tx.booking.findUnique;
+        tx.booking.findUnique = async (args) => {
+          const pesanan = await bookingAsli(args);
+          if (!pesanan) return pesanan;
+          return {
+            ...pesanan,
+            payments: pesanan.payments.map((p) => ({ ...p, providerSessionId: null })),
+          };
+        };
+        return kerja(tx);
+      });
+    const { route, emails } = buatRouteCatat(fake);
+
+    const response = await route.POST(permintaan({ amount: '400000' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.match(isi.message, /baru saja membuka pembayaran/);
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.payments()[0].status, PaymentStatus.PENDING);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+    assert.equal(fake.calls.includes('transaction.commit'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('route ini TIDAK memindahkan status pesanan', async () => {
+    // Pencatatan uang dan perpindahan tahap adalah dua keputusan berbeda, dan
+    // menyatukannya di satu tombol adalah sebab bug yang route ini memperbaiki.
+    const fake = buatDbCatat();
+    const { route } = buatRouteCatat(fake);
+
+    await route.POST(permintaan({ amount: '1000000' }));
+
+    assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+    // `updatedAt` disentuh supaya halaman yang di-cache ikut divalidasi.
+    assert.notEqual(
+      fake.booking().updatedAt.getTime(),
+      new Date('2026-01-01T00:00:00.000Z').getTime()
+    );
+  });
+
+  it('kegagalan SMTP tidak membatalkan pencatatan uang yang sudah sah', async () => {
+    const fake = buatDbCatat();
+    const route = muatDenganModulPalsu(JALUR_ROUTE_RECORD_PAYMENT, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': mailPalsu(async () => {
+        throw new Error('SMTP mati');
+      }),
+    });
+
+    const response = await route.POST(permintaan({ amount: '1000000' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.payments()[0].status, PaymentStatus.PAID);
+  });
+
+  it('keterangan dipotong dan diamankan sebelum masuk surat', async () => {
+    const fake = buatDbCatat();
+    const { route, emails } = buatRouteCatat(fake);
+
+    await route.POST(
+      permintaan({ amount: '1000000', keterangan: '<script>alert(1)</script>Transfer BCA' })
+    );
+
+    assert.equal(emails.length, 1);
+    assert.doesNotMatch(emails[0].message, /<script>/);
+    assert.match(emails[0].message, /Transfer BCA/);
   });
 });
 
@@ -5539,6 +6271,7 @@ describe('semua judul surat lewat judulSurat', () => {
     ['request-refund', JALUR_ROUTE_REFUND],
     ['booking/create', JALUR_ROUTE_BOOKING],
     ['booking/cancel', JALUR_ROUTE_CANCEL],
+    ['record-payment', JALUR_ROUTE_RECORD_PAYMENT],
   ];
 
   function tanpaKomentar(sumber) {
@@ -5581,6 +6314,7 @@ describe('pemanggil sendEmail mengamankan nilai pengguna', () => {
     ['request-refund', JALUR_ROUTE_REFUND],
     ['booking/create', JALUR_ROUTE_BOOKING],
     ['booking/cancel', JALUR_ROUTE_CANCEL],
+    ['record-payment', JALUR_ROUTE_RECORD_PAYMENT],
   ];
 
   function kodeSaja(sumber) {

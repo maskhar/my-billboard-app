@@ -203,6 +203,65 @@ export const STATUS_BOLEH_BAYAR_LANJUTAN: readonly BookingStatus[] = [
 ];
 
 /**
+ * Status yang MENGANDAIKAN uang pembeli sudah diterima.
+ *
+ * Bukan daftar hiasan: memasuki salah satu status ini berarti perusahaan mulai
+ * mengeluarkan biaya nyata — mencetak banner, menurunkan tim ke lapangan — atas
+ * dasar pembayaran yang dianggap sudah ada.
+ *
+ * KENAPA PERLU DIPERIKSA TERPISAH DARI `TRANSISI_SAH`
+ * ---------------------------------------------------
+ * `TRANSISI_SAH` menjawab "apakah perpindahan ini masuk akal", bukan "apakah
+ * uangnya sudah ada". Ia SENGAJA mengizinkan
+ * `PENDING_PAYMENT → IN_PRODUCTION`, karena jalur itu memang dipakai tombol
+ * "Terima Manual" di dashboard admin untuk pembayaran yang masuk di luar gerbang
+ * (transfer langsung). Yang tidak pernah ada adalah pemeriksaan bahwa uangnya
+ * benar-benar tercatat: satu klik pada `confirm()` cukup untuk memindahkan
+ * pesanan yang pembukuannya kosong ke tahap cetak.
+ *
+ * `PENDING_PAYMENT` tidak masuk daftar — itu justru status sebelum uang ada.
+ * `REVIEW_REFUND` dan seluruh jalur refund juga tidak: mereka dicapai DARI
+ * status di daftar ini, jadi uangnya sudah diperiksa saat masuk, dan menuntutnya
+ * lagi di jalur keluar hanya akan mengunci pesanan yang uangnya justru sedang
+ * dikembalikan.
+ */
+export const STATUS_MENGANDAIKAN_UANG_MASUK: readonly BookingStatus[] = [
+  BookingStatus.PAID_CONFIRMED,
+  BookingStatus.DESIGN_RECEIVED,
+  BookingStatus.IN_PRODUCTION,
+  BookingStatus.INSTALLATION,
+  BookingStatus.ACTIVE,
+];
+
+/** Apakah status ini mengandaikan uang pembeli sudah diterima? */
+export function mengandaikanUangMasuk(status: BookingStatus): boolean {
+  return STATUS_MENGANDAIKAN_UANG_MASUK.includes(status);
+}
+
+/**
+ * Tujuan yang pantas untuk setoran POKOK berikutnya pada sebuah pesanan.
+ *
+ * Aturannya sama dengan yang dipakai webhook saat menerbitkan tagihan lanjutan,
+ * dan ditulis di sini supaya pencatatan pembayaran manual tidak menebaknya
+ * sendiri:
+ *
+ * - belum ada pokok yang `PAID` → setoran ini yang pertama. `FULL` bila menutup
+ *   seluruh `totalPrice`, `DP` bila hanya sebagian.
+ * - sudah ada pokok yang `PAID` → apa pun nominalnya, ini `PELUNASAN`.
+ *
+ * `TAMBAHAN` tidak pernah dikembalikan: biaya tambahan berada di luar
+ * `totalPrice` dan punya jalurnya sendiri (`sisaTambahan`).
+ */
+export function tujuanSetoranPokok(
+  totalPrice: Prisma.Decimal | number | string,
+  payments: BarisPembayaran[],
+  nominal: Prisma.Decimal | number | string
+): PaymentTujuan {
+  if (lebihBesar(uangMasuk(payments), 0)) return PaymentTujuan.PELUNASAN;
+  return lebihBesar(totalPrice, nominal) ? PaymentTujuan.DP : PaymentTujuan.FULL;
+}
+
+/**
  * Apakah tagihan ini pembayaran LANJUTAN pada pesanan yang sudah berjalan?
  *
  * Satu predikat untuk dua keputusan yang harus sepakat: aturan kelayakan

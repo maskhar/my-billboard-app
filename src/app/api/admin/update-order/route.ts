@@ -7,7 +7,7 @@ import { judulSurat, sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, lebihBesar, rupiah } from "@/lib/money";
-import { masihAdaSisa, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
+import { masihAdaSisa, mengandaikanUangMasuk, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
 import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { urlBuktiSah } from "@/lib/url-bukti";
 import { Prisma } from "@prisma/client";
@@ -99,6 +99,50 @@ export async function POST(req: Request) {
               return {
                   keadaan: 'TRANSISI_DITOLAK',
                   pesan: pesanTransisiDitolak(currentOrder.status, newStatus),
+              } as const;
+          }
+
+          // TAHAP SESUDAH PEMBAYARAN MENUNTUT UANG YANG BENAR-BENAR TERCATAT.
+          //
+          // Tombol "Terima Manual" di dashboard admin (`OrderActions`
+          // `handleApprovePayment`) memindahkan pesanan `PENDING_PAYMENT`
+          // langsung ke `IN_PRODUCTION` atau `DESIGN_RECEIVED` atas dasar satu
+          // `confirm()` — tanpa menulis baris `Payment` mana pun. Akibatnya
+          // pesanan memasuki tahap cetak dengan pembukuan KOSONG: perusahaan
+          // mengeluarkan biaya bahan dan tim lapangan atas uang yang tidak ada
+          // jejaknya di mana pun.
+          //
+          // Kerusakannya tidak berhenti di situ. `uangMasuk` adalah plafon
+          // nominal refund (gerbang `REFUNDED` di bawah), sumber `adaUangMasuk`
+          // yang menentukan tombol "Tolak" mengarah ke pembatalan atau ke alur
+          // refund, dan dasar `sisaTagihan` yang ditagihkan kepada pembeli. Nol
+          // di sana berarti pesanan yang sudah tayang tetap terbaca "belum
+          // dibayar" oleh setiap pembaca pembukuan.
+          //
+          // Yang diperiksa adalah PEMBUKUAN, bukan status: pembayaran manual
+          // tetap sah, tapi harus dicatat lebih dulu lewat
+          // `POST /api/admin/orders/record-payment` supaya uangnya ada di
+          // pembukuan dan punya jalur refund.
+          //
+          // Hanya perpindahan DARI `PENDING_PAYMENT` yang dijaga, dan itu
+          // disengaja. Status di dalam tahap pembayaran sudah melewati gerbang
+          // ini saat memasukinya; menuntutnya lagi pada setiap langkah
+          // berikutnya akan mengunci pesanan lama yang pembukuannya memang
+          // kosong sebelum gerbang ini ada — termasuk `REVIEW_REFUND → ACTIVE`,
+          // satu-satunya jalan keluar bagi pengajuan refund yang ditolak.
+          if (
+              currentOrder.status === BookingStatus.PENDING_PAYMENT &&
+              mengandaikanUangMasuk(newStatus) &&
+              !lebihBesar(uangMasuk(currentOrder.payments), 0)
+          ) {
+              return {
+                  keadaan: 'UANG_BELUM_TERCATAT',
+                  pesan:
+                      `Pesanan ini belum punya pembayaran yang tercatat, jadi belum bisa ` +
+                      `dipindahkan ke ${newStatus}. Bila uangnya sudah diterima di luar ` +
+                      `gerbang pembayaran (mis. transfer langsung), catat dulu lewat tombol ` +
+                      `"Catat Pembayaran Manual" agar nominalnya masuk pembukuan dan bisa ` +
+                      `dikembalikan lewat alur refund bila perlu.`,
               } as const;
           }
 
@@ -227,6 +271,12 @@ export async function POST(req: Request) {
       }
 
       if (hasil.keadaan === 'REFUND_TAK_LENGKAP') {
+          return NextResponse.json({ message: hasil.pesan }, { status: 422 });
+      }
+
+      // 422, sama seperti gerbang refund: permintaannya berbentuk benar dan
+      // perpindahannya sah, yang belum terpenuhi adalah syarat isinya.
+      if (hasil.keadaan === 'UANG_BELUM_TERCATAT') {
           return NextResponse.json({ message: hasil.pesan }, { status: 422 });
       }
 
