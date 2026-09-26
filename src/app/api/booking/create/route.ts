@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
-import { sendEmail } from "@/lib/mail";
+import { judulSurat, sendEmail } from "@/lib/mail";
 import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
 import { addMonths, isBefore, startOfDay } from "date-fns";
 import { PaymentStatus, PaymentTujuan, Prisma } from "@prisma/client";
@@ -340,10 +340,18 @@ export async function POST(req: Request) {
     if (session.user.email) {
         await sendEmail({
             to: session.user.email,
-            subject: bayarDp
-                ? `Tagihan DP ${PERSEN_DP}% Order #${newBooking.id.slice(-6).toUpperCase()} — ${rupiah(dpAmount)}`
-                : `Tagihan Lunas Order #${newBooking.id.slice(-6).toUpperCase()} — ${rupiah(totalPrice)}`,
-            title: bayarDp ? "Pesanan Diterima — Menunggu DP" : "Pesanan Diterima — Menunggu Pelunasan",
+            subject: judulSurat({
+                // "Tagihan penuh", bukan "Tagihan pelunasan": pelunasan adalah
+                // tagihan SISA pada pesanan DP, dan surat ini justru dikirim
+                // untuk pesanan yang dibayar sekali penuh.
+                topik: bayarDp ? `Tagihan DP ${PERSEN_DP}%` : 'Tagihan penuh',
+                idPesanan: newBooking.id,
+                nominal: bayarDp ? dpAmount : totalPrice,
+            }),
+            // "Menunggu Pembayaran", bukan "Menunggu Pelunasan": di aplikasi ini
+            // "pelunasan" berarti tagihan sisa pada pesanan DP (`PaymentTujuan.PELUNASAN`),
+            // sementara cabang ini justru pesanan yang dibayar sekali penuh.
+            title: bayarDp ? "Pesanan Diterima — Menunggu DP" : "Pesanan Diterima — Menunggu Pembayaran",
             message: bayarDp
                 ? `Halo ${amankanHtml(session.user.name)}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Total nilai pesanan: <b>${rupiah(totalPrice)}</b><br/>` +
@@ -369,8 +377,17 @@ export async function POST(req: Request) {
     if (adminEmail) {
         await sendEmail({
             to: adminEmail,
-            subject: `[ADMIN] Order Masuk (${labelTagihan}): ${targetBillboard.title}`,
-            title: "Ada Cuan Masuk! 💰",
+            // Judul admin dulu memuat `targetBillboard.title` — teks bebas yang
+            // ditulis admin sendiri, tapi tetap membuat panjang baris judul tidak
+            // terduga dan menggeser nomor pesanan keluar dari tampilan kotak masuk.
+            // Nama billboard tetap ada di badan surat dan di kartu ringkasan.
+            subject: judulSurat({
+                topik: `Pesanan baru (${labelTagihan})`,
+                idPesanan: newBooking.id,
+                nominal: tagihanAwal.jumlah,
+                untukAdmin: true,
+            }),
+            title: "Pesanan Baru Masuk",
             message:
                 `User ${amankanHtml(session.user.name)} baru saja membuat pesanan.<br/>` +
                 `Nilai pesanan: <b>${rupiah(totalPrice)}</b> — skema bayar: <b>${labelTagihan}</b>` +

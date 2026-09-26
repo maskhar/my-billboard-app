@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import CS_Dashboard from '../_components/cs/CS_Dashboard';
 import { angkaRupiah, kurang, rupiah } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 import { BookingStatus, PaymentStatus } from '@prisma/client';
 
 // Supaya data selalu fresh
@@ -188,7 +189,7 @@ export default async function AdminDashboard() {
                     <tbody className="divide-y divide-gray-100 text-sm">
                         {recentOrders.map((order) => (
                             <tr key={order.id} className="hover:bg-gray-50 transition">
-                                <td className="px-8 py-4 font-mono text-xs font-bold text-gray-500">#{order.id.slice(-6).toUpperCase()}</td>
+                                <td className="px-8 py-4 font-mono text-xs font-bold text-gray-500">{labelPesanan(order.id)}</td>
                                 <td className="px-6 py-4 font-bold text-gray-800">{order.user.name}</td>
                                 <td className="px-6 py-4">
                                     <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${

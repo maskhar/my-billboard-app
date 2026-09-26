@@ -9,6 +9,7 @@ import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-r
 import OrderActions from '@/components/admin/OrderActions';
 import { arrayDariJson } from '@/lib/safe-json';
 import { rupiah } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 
 /**
  * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
@@ -279,7 +280,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
               className={`w-full text-left p-4 rounded-lg mb-2 transition ${selected?.id === t.id ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
             >
               <div className="flex justify-between items-center mb-1">
-                <span className="font-mono text-xs font-bold text-gray-700">#{t.id.slice(-8).toUpperCase()}</span>
+                <span className="font-mono text-xs font-bold text-gray-700">{labelPesanan(t.id)}</span>
                 <span className="text-xs text-gray-400">{new Date(t.createdAt).toLocaleDateString()}</span>
               </div>
               <p className="text-sm font-semibold text-gray-800 line-clamp-1">{t.billboard.title}</p>
@@ -299,7 +300,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
               <div className="flex justify-between items-start pb-4 border-b mb-6">
                 <div>
                   <p className="font-mono text-gray-500">Transaction ID</p>
-                  <h2 className="text-2xl font-bold text-gray-800">#{selected.id.slice(-8).toUpperCase()}</h2>
+                  <h2 className="text-2xl font-bold text-gray-800">{labelPesanan(selected.id)}</h2>
                   <StatusBadge status={selected.status} />
                 </div>
                 <div className="text-right">

@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
-import { sendEmail } from "@/lib/mail";
+import { judulSurat, sendEmail } from "@/lib/mail";
 import { keAngka, nol, persen, rupiah } from "@/lib/money";
 import { sudahLunas, uangMasuk as uangMasukLedger } from "@/lib/pembayaran";
 import { BookingStatus, Prisma } from "@prisma/client";
@@ -143,7 +143,11 @@ export async function POST(req: Request) {
       if (adminEmail) {
           await sendEmail({
               to: adminEmail,
-              subject: `⚠️ Permintaan Refund: #${order.id.slice(-6).toUpperCase()}`,
+              subject: judulSurat({
+                  topik: 'Permintaan refund',
+                  idPesanan: order.id,
+                  untukAdmin: true,
+              }),
               title: "User Minta Batal",
               // Alasan ditulis pembeli dan dibaca admin sebagai kiriman sistem:
               // tanpa pengamanan, tag di dalamnya dirender sebagai markup.
@@ -278,7 +282,12 @@ export async function POST(req: Request) {
       if (adminEmail) {
           await sendEmail({
               to: adminEmail,
-              subject: `💰 Segera Proses Transfer: #${order.id.slice(-6).toUpperCase()}`,
+              subject: judulSurat({
+                  topik: 'Segera proses transfer refund',
+                  idPesanan: order.id,
+                  nominal: refundNominal,
+                  untukAdmin: true,
+              }),
               title: "Data Rekening Masuk",
               // Dasar perhitungan ikut ditulis supaya admin bisa memeriksa
               // angkanya sebelum mentransfer, bukan hanya mempercayainya.

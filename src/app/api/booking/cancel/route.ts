@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
-import { sendEmail } from "@/lib/mail";
+import { judulSurat, sendEmail } from "@/lib/mail";
 import { keAngka } from "@/lib/money";
 import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { BookingStatus } from "@prisma/client";
@@ -83,7 +83,11 @@ export async function POST(req: Request) {
     if (adminEmail) {
          await sendEmail({
             to: adminEmail,
-            subject: `🚫 Order Dibatalkan User: #${order.id.slice(-6).toUpperCase()}`,
+            subject: judulSurat({
+                topik: 'Dibatalkan pembeli',
+                idPesanan: order.id,
+                untukAdmin: true,
+            }),
             title: "Pesanan Batal",
             message: `User <b>${amankanHtml(order.user.name)}</b> membatalkan pesanan (Fase Pending) untuk billboard <b>${amankanHtml(order.billboard.title)}</b>.`,
             orderDetail: {

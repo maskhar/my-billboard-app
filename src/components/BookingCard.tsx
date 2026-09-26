@@ -23,6 +23,7 @@ import { useRouter } from 'next/navigation';
 //
 // `angkaRupiah` tetap dipakai: ia memformat, bukan menghitung.
 import { angkaRupiah } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 
 /**
  * Bentuk pesanan yang BOLEH menyeberang ke browser.
@@ -375,7 +376,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
         {/* HEADER */}
         <div className="bg-gray-50 px-6 py-3 flex justify-between items-center border-b border-gray-100">
              <div className='flex items-center gap-2'>
-                <span className="text-xs font-bold text-gray-500">ORDER #{order.id.slice(-6).toUpperCase()}</span>
+                <span className="text-xs font-bold text-gray-500">ORDER {labelPesanan(order.id)}</span>
                 <Link href={`/dashboard/order/${order.id}`} className="bg-white border p-1 rounded-md text-utero hover:bg-gray-50 transition" title="Lihat Timeline"><ExternalLink size={12}/></Link>
              </div>
              {statusBadge}

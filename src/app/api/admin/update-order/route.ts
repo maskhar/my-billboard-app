@@ -3,7 +3,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
-import { sendEmail } from "@/lib/mail";
+import { judulSurat, sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, lebihBesar, rupiah } from "@/lib/money";
@@ -268,7 +268,16 @@ export async function POST(req: Request) {
             const sisa = sisaTagihan(updatedOrder.totalPrice, updatedOrder.payments);
             const sudahDibayar = uangMasuk(updatedOrder.payments);
 
-            subject = `📢 Billboard Anda Sudah Tayang - Order #${updatedOrder.id.slice(-6).toUpperCase()}`;
+            // Sisa hanya disebut di judul bila memang masih ada, dan disebut
+            // apa adanya sebagai sisa tagihan. Nominal tanpa keterangan di
+            // baris judul terbaca seperti tagihan baru.
+            subject = judulSurat({
+                topik: belumLunas
+                    ? 'Billboard sudah tayang, sisa tagihan'
+                    : 'Billboard sudah tayang',
+                idPesanan: updatedOrder.id,
+                nominal: belumLunas ? sisa : undefined,
+            });
             title = "Billboard Anda Sudah Tayang!";
             message =
                 // Nama akun dan judul billboard adalah teks bebas; surat ini
@@ -283,9 +292,20 @@ export async function POST(req: Request) {
         }
         // Skenario B: Refund Selesai
         else if (newStatus === 'REFUNDED') {
-            subject = "💰 Dana Refund Dikembalikan";
+            // Judul ini dulu berbunyi "💰 Dana Refund Dikembalikan" tanpa
+            // menyebut pesanan mana pun. Pembeli dengan lebih dari satu pesanan
+            // harus membuka suratnya untuk tahu yang mana — dan nominalnya pun
+            // tidak ada di sana.
+            subject = judulSurat({
+                topik: 'Dana refund sudah ditransfer',
+                idPesanan: updatedOrder.id,
+                nominal: updatedOrder.refundAmount,
+            });
             title = "Pengembalian Dana Selesai";
-            message = `Halo ${amankanHtml(updatedOrder.user.name)}, Admin telah mentransfer pengembalian dana ke rekening Anda. Silakan cek bukti transfer di dashboard website.`;
+            message =
+                `Halo ${amankanHtml(updatedOrder.user.name)}, pengembalian dana sebesar ` +
+                `<b>${rupiah(updatedOrder.refundAmount)}</b> telah kami transfer ke rekening Anda. ` +
+                `Bukti transfernya dapat dilihat di dashboard.`;
         }
 
         // Kirim Email jika Subject terisi

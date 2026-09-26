@@ -18,7 +18,8 @@
 
 import { NextResponse } from 'next/server';
 import { amankanHtml } from '@/lib/html';
-import { sendEmail } from '@/lib/mail';
+import { judulSurat, sendEmail } from '@/lib/mail';
+import { nomorPesanan } from '@/lib/nomor-pesanan';
 import { keAngka, lebihBesar, rupiah } from '@/lib/money';
 import {
   GalatWebhookPembayaran,
@@ -140,7 +141,7 @@ function kalimatSisaPokok(notifikasi: NotifikasiPembayaran): string {
 }
 
 async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> {
-  const nomor = notifikasi.bookingId.slice(-6).toUpperCase();
+  const nomor = nomorPesanan(notifikasi.bookingId);
   const label = labelTujuan(notifikasi.tujuan);
   const nominal = rupiah(notifikasi.jumlah);
   const sisaPokok = lebihBesar(notifikasi.sisaPokok, 0) ? rupiah(notifikasi.sisaPokok) : null;
@@ -157,7 +158,12 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
   if (adminEmail) {
     await sendEmail({
       to: adminEmail,
-      subject: `[${label}] Uang Masuk: ${nominal} — Order #${nomor}`,
+      subject: judulSurat({
+        topik: `Uang masuk (${label})`,
+        idPesanan: notifikasi.bookingId,
+        nominal: notifikasi.jumlah,
+        untukAdmin: true,
+      }),
       title: 'Ada Pembayaran Masuk',
       message:
         `${label} sebesar <b>${nominal}</b> masuk untuk pesanan #${nomor} ` +
@@ -182,7 +188,11 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
   if (notifikasi.emailPembeli) {
     await sendEmail({
       to: notifikasi.emailPembeli,
-      subject: `${label} diterima — Order #${nomor}`,
+      subject: judulSurat({
+        topik: `${label} diterima`,
+        idPesanan: notifikasi.bookingId,
+        nominal: notifikasi.jumlah,
+      }),
       title: `${label} Telah Diterima`,
       message:
         `Terima kasih, ${label.toLowerCase()} sebesar <b>${nominal}</b> sudah masuk ke sistem kami. ` +

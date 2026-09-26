@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { angkaRupiah, jumlah, lebihBesar, nol } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 import {
   sisaTagihan as sisaPokokLedger,
   sisaTambahan as sisaTambahanLedger,
@@ -144,7 +145,7 @@ export default async function InvoicePage(props: Props) {
             <div className="flex justify-between items-center border-b pb-8 mb-8">
                 <div>
                     <h1 className="text-3xl font-bold text-gray-900 mb-2 tracking-tight">INVOICE</h1>
-                    <p className="text-gray-500 text-sm font-mono">#{order.id.slice(-8).toUpperCase()}</p>
+                    <p className="text-gray-500 text-sm font-mono">{labelPesanan(order.id)}</p>
                 </div>
                 <div className="text-right">
                     <h2 className="text-2xl font-extrabold text-utero tracking-tight">Utero<span className='text-gray-800'>Cloud</span></h2>

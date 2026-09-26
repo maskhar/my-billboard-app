@@ -14,6 +14,7 @@ import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { authOptions } from '@/lib/auth';
 import { uangUntukClient } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 import {
   bayarLanjutan,
   periksaKelayakanSesi,
@@ -194,7 +195,7 @@ export default async function PaymentPage({ params }: Props) {
               </div>
               <h1 className="text-2xl font-bold text-gray-900 mb-1">{judulTagihan}</h1>
               <p className="text-sm text-gray-500">
-                {pesanan.billboard?.title ?? `Pesanan #${pesanan.id.slice(-8).toUpperCase()}`}
+                {pesanan.billboard?.title ?? `Pesanan ${labelPesanan(pesanan.id)}`}
               </p>
             </div>
 

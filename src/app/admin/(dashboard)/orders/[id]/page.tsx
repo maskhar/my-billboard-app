@@ -5,6 +5,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation'; // Ingat di Next.js 13+ ini dr navigation
 import ImageUpload from '@/components/ImageUpload';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 import { ArrowLeft, Save } from 'lucide-react';
 
 export default function AdminOrderDetailPage({ params }: { params: { id: string } }) {
@@ -42,7 +43,7 @@ export default function AdminOrderDetailPage({ params }: { params: { id: string 
         <div className='p-6 bg-white rounded-xl border border-gray-200'>
              <button onClick={()=>router.back()} className='flex items-center gap-2 text-sm text-gray-500 mb-6'><ArrowLeft size={16}/> Kembali</button>
              
-             <h1 className='text-2xl font-bold mb-1'>Order #{order.id.slice(-6).toUpperCase()}</h1>
+             <h1 className='text-2xl font-bold mb-1'>Order {labelPesanan(order.id)}</h1>
              <p className='text-sm text-gray-500 mb-8'>Update progres pemasangan untuk klien.</p>
 
              <div className='grid grid-cols-2 gap-10'>

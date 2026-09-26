@@ -36,6 +36,7 @@ import { randomUUID } from 'node:crypto';
 import { prisma as prismaAsli } from './prisma';
 import { uangUntukClient } from './money';
 import { bayarLanjutan, periksaKelayakanSesi } from './pembayaran';
+import { nomorPesanan } from './nomor-pesanan';
 import { keE164 } from './telepon';
 import {
   GalatXendit,
@@ -252,7 +253,7 @@ function referensiUntuk(paymentId: string): string {
 
 /** Label tagihan untuk pembeli. Nama gerbang pembayaran tidak pernah muncul. */
 function deskripsiTagihan(bookingId: string, tujuan: PaymentTujuan): string {
-  const nomor = bookingId.slice(-6).toUpperCase();
+  const nomor = nomorPesanan(bookingId);
   const bagian =
     tujuan === PaymentTujuan.DP
       ? 'DP'

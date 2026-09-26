@@ -96,6 +96,7 @@ const JALUR_TUTUP_TAGIHAN = path.join(__dirname, '..', 'src', 'lib', 'tutup-tagi
 const JALUR_TRANSISI = path.join(__dirname, '..', 'src', 'lib', 'transisi-status.ts');
 const JALUR_HTML = path.join(__dirname, '..', 'src', 'lib', 'html.ts');
 const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
+const JALUR_NOMOR_PESANAN = path.join(__dirname, '..', 'src', 'lib', 'nomor-pesanan.ts');
 const JALUR_ROUTE_CANCEL = path.join(
   __dirname, '..', 'src', 'app', 'api', 'booking', 'cancel', 'route.ts'
 );
@@ -298,6 +299,21 @@ function muatDenganModulPalsu(jalur, modulPalsu) {
   } finally {
     Module._load = loadAsli;
   }
+}
+
+/**
+ * Palsu untuk `@/lib/mail` yang tetap memakai `judulSurat` ASLI.
+ *
+ * Judul surat adalah satu-satunya tempat nomor pesanan muncul di kotak masuk,
+ * jadi memalsukannya membuat test lulus atas judul yang tidak pernah dipakai
+ * produksi. Hanya SMTP-nya yang dipalsukan: `nodemailer` diganti agar
+ * `require` modulnya tidak membuka koneksi.
+ */
+function mailPalsu(sendEmail = async () => {}) {
+  const { judulSurat } = muatDenganModulPalsu(JALUR_MAIL, {
+    nodemailer: { createTransport: () => ({ sendMail: async () => ({ messageId: 'x' }) }) },
+  });
+  return { sendEmail, judulSurat };
 }
 
 function inputSesi(ganti = {}) {
@@ -2349,7 +2365,7 @@ describe('POST /api/booking/create', () => {
       'next-auth/next': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER', email: null, name: 'Budi' } }) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma },
-      '@/lib/mail': { sendEmail: async () => {} },
+      '@/lib/mail': mailPalsu(),
       '@/lib/transisi-status': {
         STATUS_MENGUNCI_TANGGAL: ['PENDING_PAYMENT'],
         hitungTenggatPembayaran: () => new Date('2026-09-27T12:00:00.000Z'),
@@ -3199,12 +3215,10 @@ describe('POST /api/xendit/webhook', () => {
     const calls = { token: [], uraikan: [], selesaikan: [], email: [] };
     const route = muatDenganModulPalsu(JALUR_ROUTE_WEBHOOK_XENDIT, {
       'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
-      '@/lib/mail': {
-        sendEmail: async (surat) => {
-          calls.email.push(surat);
-          if (gagalEmail) throw new Error('SMTP menolak');
-        },
-      },
+      '@/lib/mail': mailPalsu(async (surat) => {
+        calls.email.push(surat);
+        if (gagalEmail) throw new Error('SMTP menolak');
+      }),
       '@/lib/money': {
         keAngka: (nilai) => Number(nilai),
         rupiah: () => 'Rp1.500.000',
@@ -3807,7 +3821,7 @@ describe('POST /api/booking/request-refund step bank', () => {
       'next-auth': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER' } }) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: fake.prisma },
-      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+      '@/lib/mail': mailPalsu(async (args) => { emails.push(args); }),
     });
     return { route, emails };
   }
@@ -4011,7 +4025,7 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
       'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: fake.prisma },
-      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+      '@/lib/mail': mailPalsu(async (args) => { emails.push(args); }),
     });
     return { route, emails };
   }
@@ -4127,7 +4141,12 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
     assert.equal(fake.booking().refundProof, 'https://bukti.contoh.test/1.png');
     assert.ok(fake.booking().refundedAt instanceof Date);
     assert.equal(emails.length, 1);
-    assert.match(emails[0].subject, /Refund/);
+    // Judul ini dulu berbunyi "💰 Dana Refund Dikembalikan" tanpa menyebut
+    // pesanan mana pun DAN tanpa nominalnya. Yang diuji sekarang adalah ketiga
+    // faktanya, bukan satu kata di dalamnya.
+    assert.match(emails[0].subject, /refund/i);
+    assert.match(emails[0].subject, /Pesanan #OOKING-1$/);
+    assert.match(emails[0].subject, /Rp\s900\.000/);
   });
 
   it('REFUNDED menutup tagihan yang masih menganggur, di transaksi yang sama', async () => {
@@ -4363,7 +4382,7 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
       'next-auth': { getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: fake.prisma },
-      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+      '@/lib/mail': mailPalsu(async (args) => { emails.push(args); }),
     });
     return { route, emails };
   }
@@ -4525,7 +4544,7 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
       'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'SUPER_ADMIN' } }) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: fake.prisma },
-      '@/lib/mail': { sendEmail: async () => { throw new Error('smtp mati'); } },
+      '@/lib/mail': mailPalsu(async () => { throw new Error('smtp mati'); }),
     });
 
     const response = await route.POST(permintaan({}));
@@ -4825,7 +4844,7 @@ describe('sendEmail template', () => {
     assert.equal(html.includes('/invoice/abc/../../admin'), false);
   });
 
-  it('tanpa id tidak ada tautan invoice, dan nomor pesanan menjadi NEW', async () => {
+  it('tanpa id tidak ada tautan invoice, dan nomor pesanan menjadi BARU', async () => {
     const { mail, terkirim } = buatMail();
 
     await kirim(mail, {
@@ -4838,7 +4857,28 @@ describe('sendEmail template', () => {
 
     const html = terkirim[0].html;
     assert.equal(html.includes('/invoice/'), false);
-    assert.ok(html.includes('#NEW'));
+    assert.ok(html.includes('#BARU'));
+  });
+
+  // Judul surat dulu memakai 6 karakter terakhir id sementara kartu di badan
+  // surat memakai 8. Satu surat karena itu memuat DUA nomor untuk pesanan yang
+  // sama, dan pembeli yang menyebut salah satunya ke CS tidak ditemukan.
+  it('nomor di badan surat sama dengan yang dihasilkan nomorPesanan', async () => {
+    const { mail, terkirim } = buatMail();
+    const { nomorPesanan } = require(JALUR_NOMOR_PESANAN);
+    const id = 'clz9q1x2y0000abcd1234efgh';
+
+    await kirim(mail, {
+      to: 'admin@contoh.test',
+      subject: 'Uji',
+      title: 'Judul',
+      message: 'Isi',
+      orderDetail: { id, total: '1000' },
+    });
+
+    assert.ok(terkirim[0].html.includes(`#${nomorPesanan(id)}`));
+    // Potongan 6 karakter tidak boleh muncul lagi sebagai nomor utuh.
+    assert.equal(terkirim[0].html.includes(`#${id.slice(-6).toUpperCase()}<`), false);
   });
 
   it('penerima kosong dibatalkan tanpa melempar dan tanpa menyentuh SMTP', async () => {
@@ -4864,6 +4904,180 @@ describe('sendEmail template', () => {
     assert.equal(catatan.error[0].includes('AUTH PLAIN'), false);
     assert.ok(catatan.error[0].includes('Error'));
   });
+});
+
+// ===========================================================================
+// SATU NOMOR PESANAN UNTUK SELURUH APLIKASI
+// ===========================================================================
+describe('nomorPesanan', () => {
+  const { nomorPesanan, labelPesanan, PANJANG_NOMOR_PESANAN } = require(JALUR_NOMOR_PESANAN);
+
+  it('mengambil delapan karakter terakhir dalam huruf besar', () => {
+    assert.equal(PANJANG_NOMOR_PESANAN, 8);
+    assert.equal(nomorPesanan('clz9q1x2y0000abcd1234efgh'), '1234EFGH');
+    assert.equal(labelPesanan('clz9q1x2y0000abcd1234efgh'), '#1234EFGH');
+  });
+
+  it('id yang lebih pendek dari batas dipakai utuh, bukan dipadati', () => {
+    assert.equal(nomorPesanan('abc'), 'ABC');
+  });
+
+  it('id kosong atau bukan teks menjadi BARU, bukan melempar', () => {
+    // Pemanggilnya adalah template email yang juga dipakai untuk surat tanpa
+    // pesanan. Surat gagal berangkat karena nomor tampilan jauh lebih mahal
+    // daripada nomor yang kosong.
+    assert.equal(nomorPesanan(null), 'BARU');
+    assert.equal(nomorPesanan(undefined), 'BARU');
+    assert.equal(nomorPesanan(''), 'BARU');
+    assert.equal(nomorPesanan('   '), 'BARU');
+    assert.equal(nomorPesanan(123), 'BARU');
+    assert.equal(labelPesanan(null), '#BARU');
+  });
+
+  it('spasi di ujung id tidak ikut menjadi bagian nomor', () => {
+    assert.equal(nomorPesanan('  clz9q1x2y0000abcd1234efgh  '), '1234EFGH');
+  });
+
+  // Modul ini sengaja TIDAK memakai `server-only`: tiga Client Component
+  // (BookingCard, TransactionClient, halaman detail order admin) mengimpornya.
+  it('tidak menandai dirinya server-only', () => {
+    const kode = fs.readFileSync(JALUR_NOMOR_PESANAN, 'utf8');
+    assert.equal(/server-only/.test(kode), false);
+  });
+});
+
+describe('rumus nomor pesanan tidak ditulis ulang di luar modulnya', () => {
+  function berkasSumber(dir) {
+    const hasil = [];
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const jalur = path.join(dir, entri.name);
+      if (entri.isDirectory()) hasil.push(...berkasSumber(jalur));
+      else if (/\.(ts|tsx)$/.test(entri.name)) hasil.push(jalur);
+    }
+    return hasil;
+  }
+
+  // Rumusnya dulu ditulis ulang di 18 tempat dengan DUA panjang berbeda. Test
+  // ini yang menahan salinan kesembilan belas masuk lagi.
+  it('tidak ada `.slice(-n).toUpperCase()` di seluruh src/', () => {
+    const akar = path.join(__dirname, '..', 'src');
+    const pelanggar = berkasSumber(akar).filter((jalur) =>
+      /\.slice\(\s*-\d+\s*\)\s*\.toUpperCase\(\)/.test(fs.readFileSync(jalur, 'utf8'))
+    );
+
+    assert.deepEqual(
+      pelanggar.map((jalur) => path.relative(akar, jalur)),
+      [],
+      'pakai nomorPesanan()/labelPesanan() dari @/lib/nomor-pesanan'
+    );
+  });
+});
+
+// ===========================================================================
+// JUDUL SURAT SELALU MENYEBUT PESANANNYA
+// ===========================================================================
+//
+// Sebelas judul surat ditulis dalam sebelas gaya: pemisah `—`, `-`, `:`, dan
+// tanda kurung bercampur, sebagian memakai emoji, dan hanya satu yang menandai
+// dirinya surat admin. Yang terburuk adalah notifikasi refund selesai: judulnya
+// tidak menyebut pesanan mana pun DAN tidak menyebut nominalnya, sehingga
+// pembeli dengan lebih dari satu pesanan harus membuka suratnya untuk tahu yang
+// mana.
+describe('judulSurat', () => {
+  const { Prisma } = require('@prisma/client');
+
+  function muatMail() {
+    return muatDenganModulPalsu(JALUR_MAIL, {
+      nodemailer: { createTransport: () => ({ sendMail: async () => ({ messageId: 'x' }) }) },
+    });
+  }
+
+  const ID = 'clz9q1x2y0000abcd1234efgh';
+
+  it('selalu menutup dengan nomor pesanan', () => {
+    const { judulSurat } = muatMail();
+    assert.equal(
+      judulSurat({ topik: 'Tagihan DP 60%', idPesanan: ID }),
+      'Tagihan DP 60% — Pesanan #1234EFGH'
+    );
+  });
+
+  it('nominal disisipkan sebagai rupiah bila diberikan', () => {
+    const { judulSurat } = muatMail();
+    // Pemisah antara "Rp" dan angkanya adalah U+00A0 dari `Intl.NumberFormat`,
+    // bukan spasi biasa. Dicocokkan lewat pola, bukan literal, supaya test ini
+    // tidak pecah bila ICU mengubah bentuknya.
+    assert.match(
+      judulSurat({ topik: 'Biaya tambahan', idPesanan: ID, nominal: new Prisma.Decimal('250000') }),
+      /^Biaya tambahan Rp\s250\.000 — Pesanan #1234EFGH$/
+    );
+  });
+
+  it('nominal nol tetap ditulis; hanya null/undefined yang dilewati', () => {
+    const { judulSurat } = muatMail();
+    // Nol adalah fakta ("refund Rp 0" perlu terbaca), jadi `!nominal` tidak
+    // boleh dipakai sebagai syaratnya.
+    assert.match(judulSurat({ topik: 'Refund', idPesanan: ID, nominal: 0 }), /Rp\s?0\s—/);
+    assert.equal(judulSurat({ topik: 'Refund', idPesanan: ID }).includes('Rp'), false);
+    assert.equal(
+      judulSurat({ topik: 'Refund', idPesanan: ID, nominal: null }).includes('Rp'),
+      false
+    );
+  });
+
+  it('surat admin ditandai [ADMIN] di depan, bukan emoji', () => {
+    const { judulSurat } = muatMail();
+    const judul = judulSurat({ topik: 'Uang masuk (DP)', idPesanan: ID, untukAdmin: true });
+    assert.ok(judul.startsWith('[ADMIN] '));
+    assert.match(judul, /Pesanan #1234EFGH$/);
+  });
+
+  it('id kosong tidak membatalkan judul', () => {
+    const { judulSurat } = muatMail();
+    assert.equal(judulSurat({ topik: 'Uji', idPesanan: null }), 'Uji — Pesanan #BARU');
+  });
+});
+
+describe('semua judul surat lewat judulSurat', () => {
+  const PEMANGGIL = [
+    ['webhook', JALUR_ROUTE_WEBHOOK_XENDIT],
+    ['add-charge', JALUR_ROUTE_ADD_CHARGE],
+    ['update-order', JALUR_ROUTE_UPDATE_ORDER],
+    ['request-refund', JALUR_ROUTE_REFUND],
+    ['booking/create', JALUR_ROUTE_BOOKING],
+    ['booking/cancel', JALUR_ROUTE_CANCEL],
+  ];
+
+  function tanpaKomentar(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  for (const [nama, jalur] of PEMANGGIL) {
+    it(`${nama} tidak menyusun subject sebagai string lepas`, () => {
+      const kode = tanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      assert.match(kode, /judulSurat\(/, `${nama} tidak memakai judulSurat`);
+      // Pola lama: `subject: "..."` atau `subject: \`...\`` langsung.
+      assert.doesNotMatch(
+        kode,
+        /subject:\s*['"`]/,
+        `${nama} masih menulis subject sebagai teks langsung`
+      );
+    });
+
+    it(`${nama} tidak memakai emoji di judul surat`, () => {
+      const kode = tanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      // Emoji dirender berbeda di tiap klien, menjadi mojibake di klien lama,
+      // dan menambah bobot heuristik spam.
+      const barisJudul = kode.split('\n').filter((baris) => /topik:/.test(baris));
+      for (const baris of barisJudul) {
+        assert.doesNotMatch(baris, /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u, baris.trim());
+      }
+    });
+  }
 });
 
 describe('pemanggil sendEmail mengamankan nilai pengguna', () => {
@@ -5246,7 +5460,7 @@ describe('penutupan tagihan pada pembatalan mandiri', () => {
       'next-auth': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER' } }) },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: prismaPalsu },
-      '@/lib/mail': { sendEmail: async () => {} },
+      '@/lib/mail': mailPalsu(),
     });
   }
 

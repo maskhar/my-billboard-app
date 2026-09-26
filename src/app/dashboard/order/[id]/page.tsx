@@ -8,6 +8,7 @@ import { Check, CalendarDays, ArrowLeft, MapPin, Download, ImageIcon } from 'luc
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { angkaRupiah } from '@/lib/money';
+import { labelPesanan } from '@/lib/nomor-pesanan';
 
 type Props = {
   params: Promise<{ id: string }>
@@ -105,7 +106,7 @@ export default async function OrderDetailPage(props: Props) {
               <div className="flex justify-between items-start border-b border-gray-100 pb-6 mb-8">
                   <div>
                       <h1 className="text-2xl font-bold text-gray-900 mb-1">Tracking Pesanan</h1>
-                      <p className="text-gray-500 text-sm font-mono">#{order.id.slice(-8).toUpperCase()}</p>
+                      <p className="text-gray-500 text-sm font-mono">{labelPesanan(order.id)}</p>
                   </div>
                   <div className="text-right">
                       <p className="text-xs text-gray-400 font-bold uppercase mb-1">Berakhir Pada</p>

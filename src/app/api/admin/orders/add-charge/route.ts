@@ -15,7 +15,8 @@ import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
 import { keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
 import { sisaTambahan } from "@/lib/pembayaran";
-import { sendEmail } from "@/lib/mail";
+import { judulSurat, sendEmail } from "@/lib/mail";
+import { nomorPesanan } from "@/lib/nomor-pesanan";
 
 /** Penolakan yang sudah punya status HTTP-nya, dilempar dari dalam transaksi. */
 class GalatBiayaTambahan extends Error {
@@ -166,10 +167,14 @@ export async function POST(req: Request) {
     // menunggu jawaban SMTP menahan baris pesanan selama itu.
     if (hasil.pesanan.user?.email && lebihBesar(hasil.sisa, 0)) {
       try {
-        const nomor = hasil.pesanan.id.slice(-6).toUpperCase();
+        const nomor = nomorPesanan(hasil.pesanan.id);
         await sendEmail({
           to: hasil.pesanan.user.email,
-          subject: `Biaya tambahan — Order #${nomor}`,
+          subject: judulSurat({
+            topik: 'Biaya tambahan',
+            idPesanan: hasil.pesanan.id,
+            nominal: hasil.sisa,
+          }),
           title: 'Ada Biaya Tambahan',
           message:
             `Biaya tambahan <b>${amankanHtml(description)}</b> sebesar <b>${rupiah(nominal)}</b> ` +

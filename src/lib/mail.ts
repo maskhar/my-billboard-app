@@ -14,6 +14,7 @@
 import nodemailer from 'nodemailer';
 import { amankanHtml } from '@/lib/html';
 import { rupiah, type NilaiUang } from '@/lib/money';
+import { nomorPesanan } from '@/lib/nomor-pesanan';
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
@@ -58,6 +59,42 @@ export type SuratKeluar = {
   orderDetail?: RingkasanPesananSurat;
 };
 
+/**
+ * Judul surat yang seragam.
+ *
+ * Sebelas judul di aplikasi ini ditulis dengan sebelas gaya: pemisah `—`, `-`,
+ * `:`, dan tanda kurung dipakai bergantian; sebagian berawalan emoji dan
+ * sebagian tidak; hanya satu yang menandai dirinya `[ADMIN]`. Dua akibat
+ * nyatanya: pembeli tidak bisa mengurutkan surat dari satu pesanan di kotak
+ * masuknya, dan surat "Dana Refund Dikembalikan" sama sekali tidak menyebut
+ * pesanan mana — pembeli dengan tiga pesanan harus menebak.
+ *
+ * Nomor pesanan karena itu WAJIB di sini, bukan opsional: setiap surat yang
+ * lewat fungsi ini pasti bisa dilacak ke satu pesanan.
+ *
+ * Emoji sengaja tidak dipakai. Tampilannya berbeda antar-klien email, sebagian
+ * klien lama mencetaknya sebagai mojibake di baris judul, dan beberapa
+ * heuristik spam memberinya bobot. Penanda yang benar-benar dibutuhkan —
+ * surat ini untuk admin atau untuk pembeli — dibawa awalan `[ADMIN]` yang
+ * selalu ada dan bisa dijadikan aturan filter di sisi admin.
+ */
+export function judulSurat(bagian: {
+  /** Inti persoalannya, huruf kapital di awal. Contoh: "Tagihan DP 60%". */
+  topik: string;
+  /** Id pesanan. Nomor tampilannya diturunkan lewat `nomorPesanan`. */
+  idPesanan: string | null | undefined;
+  /** Nominal yang relevan bagi penerima, bila ada. */
+  nominal?: NilaiUang;
+  /** `true` untuk surat ke ADMIN_EMAIL. */
+  untukAdmin?: boolean;
+}): string {
+  const awalan = bagian.untukAdmin ? '[ADMIN] ' : '';
+  const nominal =
+    bagian.nominal === null || bagian.nominal === undefined ? '' : ` ${rupiah(bagian.nominal)}`;
+
+  return `${awalan}${bagian.topik}${nominal} — Pesanan #${nomorPesanan(bagian.idPesanan)}`;
+}
+
 const generateTemplate = (title: string, message: string, orderDetail?: RingkasanPesananSurat) => {
     // Template HTML Invoice Full (Dikembalikan seperti semula)
     //
@@ -66,7 +103,10 @@ const generateTemplate = (title: string, message: string, orderDetail?: Ringkasa
     // (`encodeURIComponent` dulu supaya karakter seperti `/` atau `?` tidak
     // mengubah tujuan tautannya, baru `amankanHtml` karena berada di atribut).
     const idPesanan = orderDetail?.id ?? null;
-    const nomorPesanan = idPesanan ? idPesanan.slice(-8).toUpperCase() : 'NEW';
+    // Satu rumus untuk seluruh aplikasi. Judul surat dulu memakai 6 karakter
+    // sementara kartu di bawah ini memakai 8, jadi satu surat memuat dua nomor
+    // berbeda untuk pesanan yang sama.
+    const nomor = nomorPesanan(idPesanan);
     const tautanInvoice = idPesanan
         ? `${process.env.NEXTAUTH_URL ?? ''}/invoice/${encodeURIComponent(idPesanan)}`
         : null;
@@ -87,7 +127,7 @@ const generateTemplate = (title: string, message: string, orderDetail?: Ringkasa
                 <table style="width: 100%; border-collapse: collapse;">
                     <tr>
                         <td style="padding-bottom: 15px; border-bottom: 1px dashed #ddd; font-size: 13px; color: #888;">Order ID</td>
-                        <td style="padding-bottom: 15px; border-bottom: 1px dashed #ddd; font-size: 13px; font-weight: bold; text-align: right; color: #111;">#${amankanHtml(nomorPesanan)}</td>
+                        <td style="padding-bottom: 15px; border-bottom: 1px dashed #ddd; font-size: 13px; font-weight: bold; text-align: right; color: #111;">#${amankanHtml(nomor)}</td>
                     </tr>
                     <tr>
                         <td colspan="2" style="padding-top: 15px; font-size: 16px; font-weight: bold; color: #000; padding-bottom: 5px;">${amankanHtml(orderDetail.billboardTitle || 'Produk Sewa')}</td>
