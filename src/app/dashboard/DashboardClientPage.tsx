@@ -2,15 +2,25 @@
 'use client'; 
 import { useState } from 'react'; 
 import DashboardLayout from './DashboardLayout'; // Impor layout baru
-import Navbar from '@/components/Navbar';
-import BookingCard from '@/components/BookingCard';
+import BookingCard, { type PesananUntukKartu } from '@/components/BookingCard';
 import { User, Wallet, Briefcase, History } from 'lucide-react';
 import { rupiahSingkat } from '@/lib/money';
 
+/**
+ * Hanya bagian sesi yang benar-benar dipakai kartu profil. Objek sesi NextAuth
+ * memuat lebih banyak dari ini; yang tidak ditampilkan tidak perlu menyeberang.
+ */
+type SesiUntukDashboard = {
+  user?: {
+    name?: string | null;
+    email?: string | null;
+  } | null;
+};
+
 type DashboardPageProps = {
-  session: any;
-  activeOrders: any[];
-  historyOrders: any[];
+  session: SesiUntukDashboard;
+  activeOrders: PesananUntukKartu[];
+  historyOrders: PesananUntukKartu[];
   totalSpent: number;
 };
 
@@ -46,7 +56,13 @@ export default function DashboardClientPage({ session, activeOrders, historyOrde
 // ====================================================================
 // SUB-KOMPONEN 1: KARTU PROFIL (Samping Kanan)
 // ====================================================================
-const ProfileCard = ({ session, activeOrderCount, totalSpent }: any) => {
+type ProfileCardProps = {
+  session: SesiUntukDashboard;
+  activeOrderCount: number;
+  totalSpent: number;
+};
+
+const ProfileCard = ({ session, activeOrderCount, totalSpent }: ProfileCardProps) => {
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 sticky top-24">
       <div className="flex items-center gap-4 mb-6">
@@ -82,7 +98,12 @@ const ProfileCard = ({ session, activeOrderCount, totalSpent }: any) => {
 // ====================================================================
 // SUB-KOMPONEN 2: TABS UNTUK ORDER (Konten Utama Kiri)
 // ====================================================================
-const OrderTabs = ({ activeOrders, historyOrders }: any) => {
+type OrderTabsProps = {
+  activeOrders: PesananUntukKartu[];
+  historyOrders: PesananUntukKartu[];
+};
+
+const OrderTabs = ({ activeOrders, historyOrders }: OrderTabsProps) => {
   const [activeTab, setActiveTab] = useState('active');
 
   const tabs = [
@@ -123,7 +144,7 @@ const OrderTabs = ({ activeOrders, historyOrders }: any) => {
                 </div>
             ) : (
                 <div className="space-y-4">
-                    {currentTabData.map((order: any) => <BookingCard key={order.id} order={order} />)}
+                    {currentTabData.map((order) => <BookingCard key={order.id} order={order} />)}
                 </div>
             )}
         </div>

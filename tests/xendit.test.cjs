@@ -34,9 +34,36 @@ require('ts-node').register({
 
 const { test, describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const Module = require('node:module');
 const path = require('node:path');
 
 const JALUR_MODUL = path.join(__dirname, '..', 'src', 'lib', 'xendit.ts');
+const JALUR_SESI_PEMBAYARAN = path.join(__dirname, '..', 'src', 'lib', 'sesi-pembayaran.ts');
+const JALUR_ROUTE_BOOKING = path.join(__dirname, '..', 'src', 'app', 'api', 'booking', 'create', 'route.ts');
+const JALUR_ROUTE_REGISTER = path.join(__dirname, '..', 'src', 'app', 'api', 'register', 'route.ts');
+const JALUR_ROUTE_SESI = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'booking',
+  '[id]',
+  'payment-session',
+  'route.ts'
+);
+const JALUR_KLIEN_PEMBAYARAN = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'dashboard',
+  'order',
+  '[id]',
+  'payment',
+  'PaymentClient.tsx'
+);
 
 // ---------------------------------------------------------------------------
 // Nilai palsu. Sengaja mirip bentuk aslinya supaya test kebocoran rahasia
@@ -141,6 +168,30 @@ function headerPeta(init) {
 function badan(init) {
   assert.equal(typeof init.body, 'string', 'body harus string JSON');
   return JSON.parse(init.body);
+}
+
+/**
+ * Muat satu modul route dengan dependensi batasnya diganti nilai palsu.
+ * Patch hanya hidup selama evaluasi `require`; test lain tidak melihatnya.
+ */
+function muatDenganModulPalsu(jalur, modulPalsu) {
+  const loadAsli = Module._load;
+  delete require.cache[require.resolve(jalur)];
+  const akarSrc = path.join(__dirname, '..', 'src');
+  Module._load = function (request, parent, isMain) {
+    if (Object.hasOwn(modulPalsu, request)) return modulPalsu[request];
+    // Alias `@/` milik tsconfig tidak dikenali loader CommonJS. Modul yang
+    // tidak dipalsukan tetap dimuat dari sumber aslinya lewat jalur nyata.
+    if (request.startsWith('@/')) {
+      return loadAsli.call(this, path.join(akarSrc, request.slice(2)), parent, isMain);
+    }
+    return loadAsli.call(this, request, parent, isMain);
+  };
+  try {
+    return require(jalur);
+  } finally {
+    Module._load = loadAsli;
+  }
 }
 
 function inputSesi(ganti = {}) {
@@ -916,15 +967,29 @@ describe('given_names', () => {
     assert.equal(isi.mobile_number, '+62812345');
   });
 
+  const hpDinormalisasi = [
+    ['format lokal', '08123456789', '+628123456789'],
+    ['tanpa tanda plus', '628123456789', '+628123456789'],
+    ['berawalan 8', '8123456789', '+628123456789'],
+    ['spasi dan tanda hubung', '+62 812-3456-7890', '+6281234567890'],
+    ['kurung dan titik', '0812.3456 (7890)', '+6281234567890'],
+  ];
+
+  for (const [judul, nomor, harapan] of hpDinormalisasi) {
+    it(`menormalisasi mobile_number untuk nomor ${judul}`, async () => {
+      const isi = await kirimCustomer({ nomorHp: nomor });
+      assert.equal(isi.mobile_number, harapan);
+    });
+  }
+
   const hpDitolak = [
-    ['format lokal', '08123456789'],
     ['tanpa + dan bukan angka', 'nomor saya'],
     ['dimulai nol setelah +', '+0123456789'],
     ['terlalu pendek (7 digit)', '+6281234'],
     ['terlalu panjang (16 digit)', '+6212345678901234'],
     ['hanya tanda +', '+'],
-    ['ada spasi dan tanda hubung', '+62 812-3456-7890'],
     ['ada huruf', '+62812ABC4567'],
+    ['ada simbol tak dikenal', '0812/3456/7890'],
     ['kosong', ''],
     ['null', null],
   ];
@@ -1317,36 +1382,80 @@ describe('validasi jawaban POST /sessions', () => {
 describe('ambilSesiAktifUntukKomponen', () => {
   const harapan = { referenceId: 'pay_01HZ', customerId: 'cust_01HZ', nominal: 1500000 };
 
-  it('memberi sesi beserta kunci SDK bila masih aktif', async () => {
+  it('membedakan sesi aktif dan menjamin kunci SDK serta tenggatnya', async () => {
     pasangFetch(jawaban({ body: sesiOk() }));
     const { ambilSesiAktifUntukKomponen } = muat();
 
-    const sesi = await ambilSesiAktifUntukKomponen('ps-1', harapan);
+    const hasil = await ambilSesiAktifUntukKomponen('ps-1', harapan);
 
-    assert.ok(sesi);
-    assert.equal(sesi.components_sdk_key, 'csk-palsu-untuk-tes');
+    assert.equal(hasil.keadaan, 'AKTIF');
+    assert.equal(hasil.sesi.components_sdk_key, 'csk-palsu-untuk-tes');
+    assert.equal(typeof hasil.sesi.expires_at, 'string');
   });
 
-  // Tiap keadaan ini berarti sesi lama TIDAK bisa dipakai lagi. `null` menyuruh
-  // pemanggil menutup baris lama dan membuat sesi baru; melempar akan membuat
-  // pembeli terjebak pada tagihan yang tidak pernah bisa diselesaikan.
-  const memberiNull = [
+  // Adanya uang selalu menang atas status lain. Webhook bisa belum tiba ketika
+  // browser sudah menyelesaikan pembayaran; keadaan ini tidak pernah memberi izin
+  // membuka tagihan pengganti.
+  const sudahDibayar = [
     ['status COMPLETED', sesiOk({ status: 'COMPLETED' })],
+    ['payment_id sudah ada', sesiOk({ status: 'EXPIRED', payment_id: 'pay-xnd-1' })],
+  ];
+
+  for (const [judul, body] of sudahDibayar) {
+    it(`memberi DIBAYAR bila ${judul}`, async () => {
+      pasangFetch(jawaban({ body }));
+      const { ambilSesiAktifUntukKomponen } = muat();
+
+      const hasil = await ambilSesiAktifUntukKomponen('ps-1', harapan);
+      assert.equal(hasil.keadaan, 'DIBAYAR');
+    });
+  }
+
+  const terbuktiMati = [
     ['status EXPIRED', sesiOk({ status: 'EXPIRED' })],
     ['status CANCELED', sesiOk({ status: 'CANCELED' })],
+    ['status CANCELLED', sesiOk({ status: 'CANCELLED' })],
+    [
+      'tenggat sudah lewat lebih dari masa tenang',
+      sesiOk({
+        status: 'ACTIVE',
+        expires_at: new Date(Date.now() - 10 * 60 * 1000 - 1000).toISOString(),
+      }),
+    ],
+  ];
+
+  for (const [judul, body] of terbuktiMati) {
+    it(`memberi MATI bila ${judul}`, async () => {
+      pasangFetch(jawaban({ body }));
+      const { ambilSesiAktifUntukKomponen } = muat();
+
+      const hasil = await ambilSesiAktifUntukKomponen('ps-1', harapan);
+      assert.equal(hasil.keadaan, 'MATI');
+    });
+  }
+
+  // Tidak bisa dipakai belum tentu aman diganti. Status atau bentuk yang tidak
+  // dikenal harus gagal tertutup agar perubahan kontrak gerbang tidak berubah
+  // menjadi izin menagih pembeli dua kali.
+  const belumPasti = [
     ['kunci SDK sudah tidak ada', sesiOk({ components_sdk_key: null })],
     ['mode bukan COMPONENTS', sesiOk({ mode: 'PAYMENT_LINK' })],
-    ['tenggat sudah lewat', sesiOk({ expires_at: new Date(Date.now() - 1000).toISOString() })],
+    ['status tidak dikenal', sesiOk({ status: 'PROCESSING' })],
+    [
+      'tenggat baru saja lewat',
+      sesiOk({ expires_at: new Date(Date.now() - 1000).toISOString() }),
+    ],
     ['tenggat bukan tanggal', sesiOk({ expires_at: 'kapan-kapan' })],
     ['tenggat hilang', sesiOk({ expires_at: undefined })],
   ];
 
-  for (const [judul, body] of memberiNull) {
-    it(`memberi null bila ${judul}`, async () => {
+  for (const [judul, body] of belumPasti) {
+    it(`memberi TIDAK_PASTI bila ${judul}`, async () => {
       pasangFetch(jawaban({ body }));
       const { ambilSesiAktifUntukKomponen } = muat();
 
-      assert.equal(await ambilSesiAktifUntukKomponen('ps-1', harapan), null);
+      const hasil = await ambilSesiAktifUntukKomponen('ps-1', harapan);
+      assert.equal(hasil.keadaan, 'TIDAK_PASTI');
     });
   }
 
@@ -1391,5 +1500,1057 @@ describe('ambilSesiAktifUntukKomponen', () => {
       (error) => error instanceof GalatXendit
     );
     assert.equal(panggilan.length, 0);
+  });
+});
+
+// ===========================================================================
+// ORKESTRASI SESI: LEASE, PENGGANTIAN, DAN BATAS KEWENANGAN BROWSER
+// ===========================================================================
+// Test HTTP di atas membuktikan kontrak gerbang. Suite ini membuktikan urutan
+// yang lebih penting: claim sebelum POST, HTTP di luar transaksi, dan kunci SDK
+// baru pulang sesudah `providerSessionId` tersimpan.
+describe('siapkanSesiPembayaran', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
+  const SEKARANG = new Date('2026-09-26T09:00:00.000Z');
+  const TENGGAT = new Date(SEKARANG.getTime() + 60 * 60 * 1000);
+  const MASUK = { bookingId: 'booking-1', userId: 'user-1' };
+
+  // `sesi-pembayaran.ts` memakai `instanceof GalatXendit`. Muat service sesudah
+  // instance `xendit.ts` segar supaya galat palsu dan service memakai konstruktor
+  // kelas yang sama.
+  function muatService() {
+    const xendit = muat();
+    delete require.cache[require.resolve(JALUR_SESI_PEMBAYARAN)];
+    return { ...xendit, ...require(JALUR_SESI_PEMBAYARAN) };
+  }
+
+  function buatPayment(ganti = {}) {
+    return {
+      id: 'pay-1',
+      bookingId: 'booking-1',
+      tujuan: PaymentTujuan.FULL,
+      status: PaymentStatus.PENDING,
+      jumlah: new Prisma.Decimal('1500000'),
+      providerReferenceId: null,
+      providerSessionId: null,
+      expiresAt: null,
+      sesiClaimToken: null,
+      sesiClaimedAt: null,
+      sesiClaimExpiresAt: null,
+      createdAt: new Date('2026-09-26T08:00:00.000Z'),
+      ...ganti,
+    };
+  }
+
+  function cocok(row, where) {
+    if (!where) return true;
+    for (const [nama, syarat] of Object.entries(where)) {
+      if (nama === 'OR') {
+        if (!syarat.some((bagian) => cocok(row, bagian))) return false;
+      } else if (
+        syarat &&
+        typeof syarat === 'object' &&
+        !(syarat instanceof Date) &&
+        Object.hasOwn(syarat, 'lte')
+      ) {
+        if (!(row[nama] instanceof Date) || row[nama].getTime() > syarat.lte.getTime()) return false;
+      } else if (row[nama] !== syarat) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Database stateful, bukan mock nilai berurutan. Ia memberi test perlombaan
+   * claim dan rollback transaksi bentuk yang sama seperti database sungguhan.
+   */
+  function buatFake(options = {}) {
+    let rows = (options.payments ?? [buatPayment()]).map((row) => ({ ...row }));
+    const booking = {
+      id: 'booking-1',
+      status: BookingStatus.PENDING_PAYMENT,
+      expiresAt: TENGGAT,
+      ...(options.booking ?? {}),
+    };
+    const user = {
+      id: 'user-1',
+      email: 'pembeli@contoh.test',
+      name: 'Budi Santoso',
+      whatsapp: '081234567890',
+      xenditCustomerId: 'cust-1',
+      ...(options.user ?? {}),
+    };
+    const calls = [];
+    const gerbangCalls = { ambil: [], buat: [], customer: [] };
+    let transaksiAktif = false;
+    let nomorPayment = 2;
+
+    function tabel(ambilRows, simpanRows, nama) {
+      return {
+        async findFirst(args) {
+          calls.push(`${nama}.findFirst`);
+          return ambilRows().find((row) => cocok(row, args.where)) ?? null;
+        },
+        async updateMany(args) {
+          calls.push(`${nama}.updateMany`);
+          let count = 0;
+          simpanRows(
+            ambilRows().map((row) => {
+              if (!cocok(row, args.where)) return row;
+              count += 1;
+              return { ...row, ...args.data };
+            })
+          );
+          return { count };
+        },
+        async create(args) {
+          calls.push(`${nama}.create`);
+          if (typeof options.gagalCreate === 'function') throw options.gagalCreate();
+          if (options.gagalCreate) throw options.gagalCreate;
+          const data = args.data;
+          const kini = ambilRows();
+          if (
+            data.status === PaymentStatus.PENDING &&
+            kini.some(
+              (row) =>
+                row.bookingId === data.bookingId &&
+                row.tujuan === data.tujuan &&
+                row.status === PaymentStatus.PENDING
+            )
+          ) {
+            throw new Error('indeks tagihan menganggur dilanggar');
+          }
+          const baru = buatPayment({
+            ...data,
+            id: `pay-${nomorPayment++}`,
+            createdAt: new Date(SEKARANG.getTime() + nomorPayment),
+          });
+          simpanRows([...kini, baru]);
+          return baru;
+        },
+      };
+    }
+
+    const db = {
+      booking: {
+        async findFirst() {
+          calls.push('booking.findFirst');
+          if (options.bookingHilang) return null;
+          return {
+            ...booking,
+            payments: rows.filter((row) => row.status === PaymentStatus.PENDING),
+          };
+        },
+      },
+      user: {
+        async findUnique() {
+          calls.push('user.findUnique');
+          return options.userHilang ? null : { ...user };
+        },
+        async updateMany(args) {
+          calls.push('user.updateMany');
+          if (user.xenditCustomerId !== null) return { count: 0 };
+          user.xenditCustomerId = args.data.xenditCustomerId;
+          return { count: 1 };
+        },
+      },
+      payment: tabel(
+        () => rows,
+        (nilai) => {
+          rows = nilai;
+        },
+        'payment'
+      ),
+      async $transaction(kerja) {
+        calls.push('transaction.begin');
+        assert.equal(transaksiAktif, false, 'transaksi tidak boleh bertumpuk');
+        const sebelum = rows;
+        let salinan = rows.map((row) => ({ ...row }));
+        transaksiAktif = true;
+        try {
+          const hasil = await kerja({
+            payment: tabel(
+              () => salinan,
+              (nilai) => {
+                salinan = nilai;
+              },
+              'tx.payment'
+            ),
+          });
+          rows = salinan;
+          calls.push('transaction.commit');
+          return hasil;
+        } catch (error) {
+          rows = sebelum;
+          calls.push('transaction.rollback');
+          throw error;
+        } finally {
+          transaksiAktif = false;
+        }
+      },
+    };
+
+    const gerbang = {
+      async pastikanCustomer(arg) {
+        assert.equal(transaksiAktif, false, 'HTTP customer tidak boleh di dalam transaksi');
+        gerbangCalls.customer.push(arg);
+        return { id: 'cust-baru', reference_id: arg.referenceId };
+      },
+      async ambilSesiAktifUntukKomponen(sessionId, harapan) {
+        assert.equal(transaksiAktif, false, 'GET sesi tidak boleh di dalam transaksi');
+        gerbangCalls.ambil.push({ sessionId, harapan });
+        if (options.ambilSesi) return options.ambilSesi(sessionId, harapan);
+        return {
+          keadaan: 'AKTIF',
+          sesi: sesiOk({
+            payment_session_id: sessionId,
+            reference_id: harapan.referenceId,
+            customer_id: harapan.customerId,
+            amount: harapan.nominal,
+          }),
+        };
+      },
+      async buatSesiPembayaran(arg) {
+        assert.equal(transaksiAktif, false, 'POST /sessions tidak boleh di dalam transaksi');
+        calls.push('gerbang.buat');
+        gerbangCalls.buat.push(arg);
+        if (options.buatSesi) return options.buatSesi(arg, { rows });
+        return sesiOk({
+          payment_session_id: 'ps-baru',
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+        });
+      },
+    };
+
+    return {
+      deps: {
+        db,
+        gerbang,
+        sekarang: options.sekarang ?? (() => new Date(SEKARANG)),
+        tokenBaru: options.tokenBaru ?? (() => 'claim-1'),
+      },
+      calls,
+      gerbangCalls,
+      rows: () => rows.map((row) => ({ ...row })),
+      // Untuk memerankan baris yang DIBUAT permintaan lain dan sudah commit di
+      // luar transaksi yang sedang berjalan di sini.
+      sisipkanRow: (row) => {
+        rows = [...rows, { ...row }];
+      },
+    };
+  }
+
+  async function dapatGalat(janji) {
+    try {
+      await janji;
+      return null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  // Penolakan awal dibuktikan di service, bukan hanya di route. Test route
+  // memalsukan service, jadi ia hanya membuktikan pemetaan HTTP; yang penting di
+  // sini: pesanan orang lain, status salah, dan tenggat lewat TIDAK PERNAH
+  // membuka sesi di gerbang pembayaran maupun menyentuh tabel uang.
+  for (const [judul, options, kode, status] of [
+    ['pesanan tidak terbaca (bukan milik pemanggil)', { bookingHilang: true }, 'PESANAN_TIDAK_DITEMUKAN', 404],
+    ['status bukan PENDING_PAYMENT', { booking: { status: BookingStatus.CONFIRMED } }, 'STATUS_TIDAK_MENUNGGU_BAYAR', 409],
+    [
+      'tenggat sudah lewat',
+      { booking: { expiresAt: new Date(SEKARANG.getTime() - 1000) } },
+      'TENGGAT_LEWAT',
+      409,
+    ],
+    [
+      'sisa waktu terlalu tipis untuk dibayar',
+      { booking: { expiresAt: new Date(SEKARANG.getTime() + 60 * 1000) } },
+      'TENGGAT_TERLALU_DEKAT',
+      409,
+    ],
+    ['tidak ada tagihan menganggur', { payments: [] }, 'TIDAK_ADA_TAGIHAN', 409],
+  ]) {
+    it(`menolak ${judul} tanpa menyentuh gerbang`, async () => {
+      const fake = buatFake(options);
+      const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+      const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+      assert.ok(galat instanceof GalatSesiPembayaran);
+      assert.equal(galat.kode, kode);
+      assert.equal(galat.status, status);
+      assert.equal(fake.calls.includes('user.findUnique'), false);
+      assert.equal(fake.calls.includes('payment.updateMany'), false);
+      assert.equal(fake.calls.includes('transaction.begin'), false);
+      assert.equal(fake.gerbangCalls.customer.length, 0);
+      assert.equal(fake.gerbangCalls.ambil.length, 0);
+      assert.equal(fake.gerbangCalls.buat.length, 0);
+    });
+  }
+
+  // Profil kurang ditolak SESUDAH tagihan ditemukan tetapi SEBELUM satu pun
+  // panggilan gerbang: data yang kurang akan ditolak di sana dengan galat yang
+  // tidak menyebut kolom mana, dan penolakan itu bisa datang sesudah sesinya
+  // sempat terbentuk.
+  for (const [judul, user, kurang] of [
+    ['nama kosong', { name: '   ' }, 'nama lengkap'],
+    ['email kosong', { email: '' }, 'email'],
+    ['WhatsApp null', { whatsapp: null }, 'nomor WhatsApp'],
+    ['WhatsApp tercemar huruf', { whatsapp: '+62812ABC4567' }, 'nomor WhatsApp'],
+  ]) {
+    it(`menolak profil kurang (${judul}) sebelum gerbang dipanggil`, async () => {
+      const fake = buatFake({ user });
+      const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+      const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+      assert.ok(galat instanceof GalatSesiPembayaran);
+      assert.equal(galat.kode, 'PROFIL_BELUM_LENGKAP');
+      assert.equal(galat.status, 422);
+      assert.ok(galat.message.includes(kurang), `pesan tidak menyebut ${kurang}: ${galat.message}`);
+      assert.equal(fake.calls.includes('payment.updateMany'), false);
+      assert.equal(fake.gerbangCalls.customer.length, 0);
+      assert.equal(fake.gerbangCalls.buat.length, 0);
+      assert.equal(fake.rows()[0].providerReferenceId, null);
+    });
+  }
+
+  it('menolak tenggat null sebelum membaca profil atau menyentuh gerbang', async () => {
+    const fake = buatFake({ booking: { expiresAt: null } });
+    const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+    const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+    assert.ok(galat instanceof GalatSesiPembayaran);
+    assert.equal(galat.kode, 'TENGGAT_TIDAK_TERSEDIA');
+    assert.equal(fake.calls.includes('user.findUnique'), false);
+    assert.equal(fake.gerbangCalls.buat.length, 0);
+  });
+
+  it('memakai ulang sesi aktif tanpa POST /sessions kedua', async () => {
+    const fake = buatFake({
+      payments: [buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-lama' })],
+    });
+    const { siapkanSesiPembayaran } = muatService();
+
+    const hasil = await siapkanSesiPembayaran(MASUK, fake.deps);
+
+    assert.equal(hasil.paymentId, 'pay-1');
+    assert.equal(hasil.componentsSdkKey, 'csk-palsu-untuk-tes');
+    assert.equal(fake.gerbangCalls.ambil.length, 1);
+    assert.equal(fake.gerbangCalls.buat.length, 0);
+  });
+
+  for (const [keadaan, kode] of [
+    ['DIBAYAR', 'MENUNGGU_KONFIRMASI'],
+    ['TIDAK_PASTI', 'SESI_BELUM_PASTI'],
+  ]) {
+    it(`keadaan ${keadaan} tidak menutup atau mengganti tagihan`, async () => {
+      const lama = buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-lama' });
+      const fake = buatFake({
+        payments: [lama],
+        ambilSesi: async () => ({ keadaan, sesi: sesiOk() }),
+      });
+      const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+      const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+      assert.ok(galat instanceof GalatSesiPembayaran);
+      assert.equal(galat.kode, kode);
+      assert.equal(fake.calls.includes('transaction.begin'), false);
+      assert.equal(fake.gerbangCalls.buat.length, 0);
+      assert.equal(fake.rows()[0].status, PaymentStatus.PENDING);
+      assert.equal(fake.rows()[0].providerSessionId, 'ps-lama');
+    });
+  }
+
+  it('menutup sesi mati dan membuka pengganti secara atomik tanpa menimpa id lama', async () => {
+    const fake = buatFake({
+      payments: [buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-mati' })],
+      ambilSesi: async () => ({ keadaan: 'MATI', sesi: sesiOk({ status: 'EXPIRED' }) }),
+      buatSesi: async (arg, { rows }) => {
+        assert.equal(rows.filter((row) => row.status === PaymentStatus.PENDING).length, 1);
+        return sesiOk({
+          payment_session_id: 'ps-pengganti',
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+        });
+      },
+    });
+    const { siapkanSesiPembayaran } = muatService();
+
+    const hasil = await siapkanSesiPembayaran(MASUK, fake.deps);
+    const rows = fake.rows();
+    const lama = rows.find((row) => row.id === 'pay-1');
+    const baru = rows.find((row) => row.id === hasil.paymentId);
+
+    assert.equal(lama.status, PaymentStatus.EXPIRED);
+    assert.equal(lama.providerSessionId, 'ps-mati');
+    assert.equal(baru.status, PaymentStatus.PENDING);
+    assert.equal(baru.providerSessionId, 'ps-pengganti');
+    assert.ok(
+      fake.calls.indexOf('transaction.commit') < fake.calls.indexOf('gerbang.buat'),
+      `POST terjadi sebelum transaksi commit: ${fake.calls.join(' > ')}`
+    );
+  });
+
+  it('rollback penggantian menjaga tagihan lama tetap menganggur bila create gagal', async () => {
+    const lama = buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-mati' });
+    const fake = buatFake({
+      payments: [lama],
+      ambilSesi: async () => ({ keadaan: 'MATI', sesi: sesiOk({ status: 'EXPIRED' }) }),
+      gagalCreate: new Error('database menolak'),
+    });
+    const { siapkanSesiPembayaran } = muatService();
+
+    await assert.rejects(() => siapkanSesiPembayaran(MASUK, fake.deps), /database menolak/);
+
+    assert.equal(fake.gerbangCalls.buat.length, 0);
+    assert.equal(fake.rows()[0].status, PaymentStatus.PENDING);
+    assert.equal(fake.rows()[0].providerSessionId, 'ps-mati');
+  });
+
+  it('memakai ulang pemenang P2002 beserta nominal dan reference miliknya', async () => {
+    const lama = buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-mati' });
+    const pemenang = buatPayment({
+      id: 'pay-pemenang',
+      jumlah: new Prisma.Decimal('2750000'),
+      providerReferenceId: 'pay_pemenang',
+      createdAt: new Date(SEKARANG.getTime() - 1000),
+    });
+    const bentrok = new Prisma.PrismaClientKnownRequestError('duplikat', {
+      code: 'P2002',
+      clientVersion: 'test',
+    });
+    const fake = buatFake({
+      payments: [lama],
+      ambilSesi: async () => ({ keadaan: 'MATI', sesi: sesiOk({ status: 'EXPIRED' }) }),
+      gagalCreate: () => bentrok,
+      buatSesi: async (arg) => {
+        assert.equal(arg.referenceId, 'pay_pemenang');
+        assert.equal(arg.jumlah, 2750000);
+        return sesiOk({
+          payment_session_id: 'ps-pemenang',
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+        });
+      },
+    });
+    const cariAsli = fake.deps.db.payment.findFirst;
+    const updateAsli = fake.deps.db.payment.updateMany;
+    fake.deps.db.payment.findFirst = async (args) => {
+      fake.deps.db.payment.findFirst = cariAsli;
+      // Transaksi kita sudah rollback. Yang tampak sekarang adalah hasil commit
+      // permintaan lain: baris lama ditutup olehnya, dan penggantinya terbuka.
+      await updateAsli({ where: { id: 'pay-1' }, data: { status: PaymentStatus.EXPIRED } });
+      fake.sisipkanRow(pemenang);
+      return cariAsli(args);
+    };
+    const { siapkanSesiPembayaran } = muatService();
+
+    const hasil = await siapkanSesiPembayaran(MASUK, fake.deps);
+    const rows = fake.rows();
+
+    assert.equal(hasil.paymentId, 'pay-pemenang');
+    assert.equal(hasil.jumlah, 2750000);
+    assert.equal(fake.gerbangCalls.buat.length, 1);
+    // Nominal dan reference milik PEMENANG yang dipakai, bukan milik baris lama.
+    assert.equal(rows.find((row) => row.id === 'pay-pemenang').providerSessionId, 'ps-pemenang');
+    assert.equal(rows.find((row) => row.id === 'pay-1').providerSessionId, 'ps-mati');
+  });
+
+  it('membaca jam baru tepat sebelum CAS claim', async () => {
+    const dibaca = [];
+    const awal = new Date(SEKARANG);
+    const sesudahCustomer = new Date(SEKARANG.getTime() + 30_000);
+    const fake = buatFake({
+      user: { xenditCustomerId: null },
+      sekarang: () => {
+        const nilai = dibaca.length === 0 ? awal : sesudahCustomer;
+        dibaca.push(nilai);
+        return new Date(nilai);
+      },
+    });
+    const updateAsli = fake.deps.db.payment.updateMany;
+    fake.deps.db.payment.updateMany = async (args) => {
+      if (args.data.sesiClaimToken) {
+        assert.equal(dibaca.length, 2);
+        assert.equal(args.data.sesiClaimedAt.getTime(), sesudahCustomer.getTime());
+        assert.equal(args.where.OR[1].sesiClaimExpiresAt.lte.getTime(), sesudahCustomer.getTime());
+      }
+      return updateAsli(args);
+    };
+    const { siapkanSesiPembayaran } = muatService();
+
+    await siapkanSesiPembayaran(MASUK, fake.deps);
+
+    assert.equal(fake.gerbangCalls.customer.length, 1);
+  });
+
+  it('dua permintaan bersamaan hanya membuat satu sesi provider', async () => {
+    let lanjutkan;
+    const tertahan = new Promise((resolve) => {
+      lanjutkan = resolve;
+    });
+    let beriTandaMulai;
+    const mulai = new Promise((resolve) => {
+      beriTandaMulai = resolve;
+    });
+    const fake = buatFake({
+      buatSesi: async (arg) => {
+        beriTandaMulai();
+        await tertahan;
+        return sesiOk({
+          payment_session_id: 'ps-tunggal',
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+        });
+      },
+    });
+    const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+    const pertama = siapkanSesiPembayaran(MASUK, fake.deps);
+    await mulai;
+    const kedua = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+    lanjutkan();
+    await pertama;
+
+    assert.ok(kedua instanceof GalatSesiPembayaran);
+    assert.equal(kedua.kode, 'SEDANG_DISIAPKAN');
+    assert.equal(fake.gerbangCalls.buat.length, 1);
+  });
+
+  // Lease yang habis HARUS bisa diambil alih, kalau tidak satu POST yang
+  // jawabannya hilang akan membuat tagihan itu tidak pernah bisa dibayar lagi.
+  // Yang tidak boleh: pemegang lama kemudian menimpa sesi pemegang baru.
+  it('claim kedaluwarsa bisa diambil alih dan pemegang lama gagal menyimpan', async () => {
+    const fake = buatFake({
+      payments: [
+        buatPayment({
+          providerReferenceId: 'pay_pay-1',
+          sesiClaimToken: 'claim-lama',
+          sesiClaimedAt: new Date(SEKARANG.getTime() - 3 * 60 * 1000),
+          sesiClaimExpiresAt: new Date(SEKARANG.getTime() - 60 * 1000),
+        }),
+      ],
+      tokenBaru: () => 'claim-baru',
+    });
+    const { siapkanSesiPembayaran } = muatService();
+
+    const hasil = await siapkanSesiPembayaran(MASUK, fake.deps);
+
+    assert.equal(hasil.componentsSdkKey, 'csk-palsu-untuk-tes');
+    assert.equal(fake.rows()[0].providerSessionId, 'ps-baru');
+    assert.equal(fake.rows()[0].sesiClaimToken, null);
+
+    // Jawaban POST pemegang LAMA baru tiba sekarang. Simpan bersyarat token wajib
+    // menolaknya; tanpa itu, sesi yang kuncinya sudah dipegang browser ditimpa
+    // oleh sesi yatim.
+    const terlambat = await fake.deps.db.payment.updateMany({
+      where: { id: 'pay-1', sesiClaimToken: 'claim-lama', providerSessionId: null },
+      data: { providerSessionId: 'ps-yatim' },
+    });
+
+    assert.equal(terlambat.count, 0);
+    assert.equal(fake.rows()[0].providerSessionId, 'ps-baru');
+  });
+
+  it('reference tersimpan sebelum POST dan SDK key baru pulang sesudah id sesi tersimpan', async () => {
+    let sedangPost = false;
+    let idSesiTersimpan = false;
+    const fake = buatFake({
+      buatSesi: async (arg, { rows }) => {
+        sedangPost = true;
+        const row = rows[0];
+        assert.equal(row.providerReferenceId, 'pay_pay-1');
+        assert.equal(row.providerSessionId, null);
+        return sesiOk({
+          payment_session_id: 'ps-tercatat',
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+        });
+      },
+    });
+    const updateAsli = fake.deps.db.payment.updateMany;
+    fake.deps.db.payment.updateMany = async (args) => {
+      const hasil = await updateAsli(args);
+      if (args.data.providerSessionId === 'ps-tercatat') idSesiTersimpan = true;
+      return hasil;
+    };
+    const { siapkanSesiPembayaran } = muatService();
+
+    const hasil = await siapkanSesiPembayaran(MASUK, fake.deps);
+
+    assert.equal(sedangPost, true);
+    assert.equal(idSesiTersimpan, true);
+    assert.equal(hasil.componentsSdkKey, 'csk-palsu-untuk-tes');
+    assert.equal(JSON.stringify(hasil).includes('ps-tercatat'), false);
+  });
+
+  it('menahan SDK key bila penyimpanan id sesi kalah', async () => {
+    const fake = buatFake();
+    const updateAsli = fake.deps.db.payment.updateMany;
+    fake.deps.db.payment.updateMany = async (args) => {
+      if (args.data.providerSessionId) return { count: 0 };
+      return updateAsli(args);
+    };
+    const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+    const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+    assert.ok(galat instanceof GalatSesiPembayaran);
+    assert.equal(galat.kode, 'SEDANG_DISIAPKAN');
+    assert.equal(galat.message.includes('csk-'), false);
+  });
+
+  for (const [nama, status, kode] of [
+    ['jawaban bukan JSON', 502, 'JAWABAN_BUKAN_JSON'],
+    ['batas waktu', 0, 'BATAS_WAKTU'],
+    ['jaringan gagal', 0, 'JARINGAN_GAGAL'],
+    ['jawaban terputus', 0, 'JAWABAN_TERPUTUS'],
+    ['HTTP 408', 408, 'XENDIT_HTTP_408'],
+    ['HTTP 429', 429, 'XENDIT_HTTP_429'],
+    ['HTTP 503', 503, 'XENDIT_HTTP_503'],
+  ]) {
+    it(`menahan claim bila hasil POST tidak pasti: ${nama}`, async () => {
+      const { GalatXendit, GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+      const fake = buatFake({
+        buatSesi: async () => {
+          throw new GalatXendit(status, kode, 'detail provider palsu');
+        },
+      });
+
+      const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+      assert.ok(galat instanceof GalatSesiPembayaran);
+      assert.equal(galat.kode, 'GERBANG_MENOLAK');
+      assert.equal(galat.status, 503);
+      assert.equal(fake.rows()[0].sesiClaimToken, 'claim-1');
+      assert.equal(fake.rows()[0].providerSessionId, null);
+      assert.equal(galat.message.includes('detail provider palsu'), false);
+    });
+  }
+
+  it('melepas claim setelah penolakan provider yang pasti', async () => {
+    const { GalatXendit, GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+    const fake = buatFake({
+      buatSesi: async () => {
+        throw new GalatXendit(422, 'XENDIT_HTTP_422', 'detail provider palsu');
+      },
+    });
+
+    const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+    assert.ok(galat instanceof GalatSesiPembayaran);
+    assert.equal(galat.status, 502);
+    assert.equal(fake.rows()[0].sesiClaimToken, null);
+    assert.equal(fake.rows()[0].providerReferenceId, 'pay_pay-1');
+  });
+
+  it('sesi baru tidak lengkap melepas claim dan tidak menyerahkan kunci', async () => {
+    const fake = buatFake({
+      buatSesi: async (arg) =>
+        sesiOk({
+          reference_id: arg.referenceId,
+          customer_id: arg.customerId,
+          amount: arg.jumlah,
+          components_sdk_key: null,
+        }),
+    });
+    const { GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+
+    const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+    assert.ok(galat instanceof GalatSesiPembayaran);
+    assert.equal(galat.kode, 'SESI_TIDAK_LENGKAP');
+    assert.equal(fake.rows()[0].sesiClaimToken, null);
+    assert.equal(fake.rows()[0].providerSessionId, null);
+  });
+
+  it('sesi lama tidak cocok dan gangguan baca ditangani tanpa membuat pengganti', async () => {
+    const { GalatXendit, GalatSesiPembayaran, siapkanSesiPembayaran } = muatService();
+    for (const [kodeProvider, kodeHarapan, statusHarapan] of [
+      ['SESI_TIDAK_SESUAI', 'SESI_TIDAK_COCOK', 409],
+      ['JARINGAN_GAGAL', 'SESI_BELUM_PASTI', 503],
+    ]) {
+      const fake = buatFake({
+        payments: [buatPayment({ providerReferenceId: 'pay_pay-1', providerSessionId: 'ps-lama' })],
+        ambilSesi: async () => {
+          throw new GalatXendit(0, kodeProvider, 'detail internal');
+        },
+      });
+
+      const galat = await dapatGalat(siapkanSesiPembayaran(MASUK, fake.deps));
+
+      assert.ok(galat instanceof GalatSesiPembayaran);
+      assert.equal(galat.kode, kodeHarapan);
+      assert.equal(galat.status, statusHarapan);
+      assert.equal(fake.calls.includes('transaction.begin'), false);
+      assert.equal(fake.gerbangCalls.buat.length, 0);
+    }
+  });
+});
+
+// ===========================================================================
+// BOOKING: TAGIHAN AWAL ATOMIK DAN NOMINAL MILIK SERVER
+// ===========================================================================
+describe('POST /api/booking/create', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan } = require('@prisma/client');
+
+  function buatRouteBooking({ body, harga = '1000000' }) {
+    let createData = null;
+    let pembayaranTerpisah = 0;
+    const prisma = {
+      billboard: {
+        async findUnique() {
+          return { id: 'bb-1', status: 'Available', price: new Prisma.Decimal(harga), title: 'Billboard Tes', address: 'Jl. Tes' };
+        },
+      },
+      async $transaction(kerja) {
+        return kerja({
+          booking: {
+            async findFirst() {
+              return null;
+            },
+            async create(args) {
+              createData = args.data;
+              const payment = {
+                id: 'pay-awal',
+                tujuan: args.data.payments.create.tujuan,
+                jumlah: args.data.payments.create.jumlah,
+              };
+              return { id: 'booking-baru', ...args.data, payments: [payment] };
+            },
+          },
+        });
+      },
+      payment: {
+        async create() {
+          pembayaranTerpisah += 1;
+          throw new Error('Payment harus nested di booking.create');
+        },
+      },
+    };
+    const route = muatDenganModulPalsu(JALUR_ROUTE_BOOKING, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth/next': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER', email: null, name: 'Budi' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+      '@/lib/mail': { sendEmail: async () => {} },
+      '@/lib/transisi-status': {
+        STATUS_MENGUNCI_TANGGAL: ['PENDING_PAYMENT'],
+        hitungTenggatPembayaran: () => new Date('2026-09-27T12:00:00.000Z'),
+        sapuPesananKedaluwarsa: async () => 0,
+      },
+    });
+    return { route, data: () => createData, pembayaranTerpisah: () => pembayaranTerpisah, body };
+  }
+
+  for (const [paymentType, tujuan, tagihan] of [
+    ['dp', PaymentTujuan.DP, 696000],
+    ['full', PaymentTujuan.FULL, 1160000],
+  ]) {
+    it(`membuat tepat satu Payment PENDING ${tujuan} dari nominal server`, async () => {
+      const fake = buatRouteBooking({
+        body: {
+          billboardId: 'bb-1',
+          duration: 1,
+          paymentType,
+          designOption: 'upload',
+          startDateString: '2026-10-01T00:00:00.000Z',
+          totalPrice: 1,
+          dpAmount: 1,
+        },
+      });
+
+      const response = await fake.route.POST(new Request('https://contoh.test/api/booking/create', {
+        method: 'POST',
+        body: JSON.stringify(fake.body),
+      }));
+      const isi = await response.json();
+      const data = fake.data();
+
+      assert.equal(response.status, 200);
+      assert.equal(data.payments.create.tujuan, tujuan);
+      assert.equal(data.payments.create.status, PaymentStatus.PENDING);
+      assert.equal(data.payments.create.jumlah.toString(), String(tagihan));
+      assert.equal(isi.paymentId, 'pay-awal');
+      assert.equal(isi.tagihanSekarang, tagihan);
+      assert.equal(fake.pembayaranTerpisah(), 0);
+      assert.equal(Object.keys(data.payments).join(','), 'create');
+    });
+  }
+});
+
+// ===========================================================================
+// PENDAFTARAN: NOMOR YANG TERSIMPAN HARUS NOMOR YANG DITULIS PEMBELI
+// ===========================================================================
+//
+// Nomor WhatsApp yang tersimpan di sini adalah nomor yang nanti dikirim ke
+// gerbang pembayaran sebagai identitas pembeli. `normalisasiNomorLokal` membuang
+// karakter non-digit, jadi tanpa pembuktian bentuk lebih dulu, `+62812ABC4567`
+// tersimpan sebagai nomor lain yang kelihatan sah — dan pembeli tidak pernah
+// diberi tahu nomornya diubah.
+describe('POST /api/register — nomor WhatsApp', () => {
+  function buatRouteRegister() {
+    const dibuat = [];
+    let jumlahPencarian = 0;
+    let jumlahHash = 0;
+    const prisma = {
+      user: {
+        async findUnique() {
+          jumlahPencarian += 1;
+          return null;
+        },
+        async create(args) {
+          dibuat.push(args.data);
+          return { id: 'user-baru', name: args.data.name, email: args.data.email };
+        },
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_REGISTER, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      bcryptjs: {
+        hash: async () => {
+          jumlahHash += 1;
+          return 'hash-palsu';
+        },
+      },
+      '@/lib/prisma': { prisma },
+      '@/lib/db-error': { adalahDuplikatUnik: () => false },
+    });
+
+    return {
+      route,
+      dibuat: () => dibuat,
+      jumlahPencarian: () => jumlahPencarian,
+      jumlahHash: () => jumlahHash,
+    };
+  }
+
+  async function daftar(route, ganti = {}) {
+    return route.POST(
+      new Request('https://contoh.test/api/register', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Budi Santoso',
+          email: 'budi@contoh.test',
+          phone: '08123456789',
+          password: 'sandirahasia',
+          ...ganti,
+        }),
+      })
+    );
+  }
+
+  const nomorDitolak = [
+    ['tercemar huruf', '+62812ABC4567'],
+    ['simbol tak didukung', '0812/3456/7890'],
+    ['terlalu pendek', '+6281234'],
+    ['berawalan nol setelah +', '+0123456789'],
+    ['hanya tanda plus', '+'],
+    ['kosong', ''],
+  ];
+
+  for (const [judul, phone] of nomorDitolak) {
+    it(`menolak nomor ${judul} tanpa pernah menulis User`, async () => {
+      const fake = buatRouteRegister();
+      const response = await daftar(fake.route, { phone });
+
+      assert.equal(response.status, 400);
+      assert.equal(fake.dibuat().length, 0, 'nomor tidak sah tidak boleh tersimpan');
+      // Penolakan terjadi sebelum database dan bcrypt disentuh: bentuk yang salah
+      // bukan alasan membayar ratusan milidetik hashing, dan bukan alasan
+      // memberi tahu pemanggil apakah email itu sudah terdaftar.
+      assert.equal(fake.jumlahPencarian(), 0, 'nomor tidak sah tidak boleh memicu query User');
+      assert.equal(fake.jumlahHash(), 0, 'nomor tidak sah tidak boleh memicu hashing');
+    });
+  }
+
+  const nomorDiterima = [
+    ['format lokal', '08123456789', '628123456789'],
+    ['tanpa tanda plus', '628123456789', '628123456789'],
+    ['dengan spasi dan tanda hubung', '+62 812-3456-7890', '6281234567890'],
+  ];
+
+  for (const [judul, phone, tersimpan] of nomorDiterima) {
+    it(`menyimpan nomor ${judul} dalam bentuk yang dinormalisasi`, async () => {
+      const fake = buatRouteRegister();
+      const response = await daftar(fake.route, { phone });
+
+      assert.equal(response.status, 201);
+      assert.equal(fake.dibuat().length, 1);
+      assert.equal(fake.dibuat()[0].whatsapp, tersimpan);
+    });
+  }
+
+  it('tidak pernah menyimpan nomor yang berbeda dari yang ditulis pembeli', async () => {
+    const fake = buatRouteRegister();
+    await daftar(fake.route, { phone: '+62812ABC4567' });
+
+    assert.equal(
+      fake.dibuat().length,
+      0,
+      'nomor tebakan hasil membuang huruf tidak boleh menjadi identitas pembayaran'
+    );
+  });
+});
+
+// ===========================================================================
+// HTTP SESI: PEMBATAS KEWENANGAN DAN CACHE KEY SDK
+// ===========================================================================
+describe('POST /api/booking/[id]/payment-session', () => {
+  // Route memakai `instanceof GalatSesiPembayaran`. Kelasnya dibuat SEKALI di
+  // luar factory supaya galat yang dilempar test dan kelas yang dilihat route
+  // benar-benar konstruktor yang sama.
+  class GalatSesiPembayaran extends Error {
+    constructor(status, kode, pesan) {
+      super(pesan);
+      this.name = 'GalatSesiPembayaran';
+      this.status = status;
+      this.kode = kode;
+    }
+  }
+
+  function buatRouteSesi({ session, galat = null, hasil = null }) {
+    const calls = { siapkan: [], rate: [] };
+    const route = muatDenganModulPalsu(JALUR_ROUTE_SESI, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth/next': { getServerSession: async () => session },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/rate-limit': {
+        rateLimit: (input) => {
+          calls.rate.push(input);
+          return { success: true, retryAfterSeconds: 0, remaining: 9, resetAt: Date.now() + 60_000 };
+        },
+        rateLimitHeaders: () => ({ 'X-RateLimit-Limit': '10' }),
+      },
+      '@/lib/sesi-pembayaran': {
+        GalatSesiPembayaran,
+        siapkanSesiPembayaran: async (input) => {
+          calls.siapkan.push(input);
+          if (galat) throw galat;
+          return hasil ?? { paymentId: 'pay-1', tujuan: 'FULL', jumlah: 1500000, componentsSdkKey: 'csk-rahasia-tes', expiresAt: '2026-09-26T12:00:00.000Z' };
+        },
+      },
+    });
+    return { route, calls };
+  }
+
+  async function panggil(route, params = Promise.resolve({ id: 'booking-1' })) {
+    return route.POST(new Request('https://contoh.test/api/booking/booking-1/payment-session', { method: 'POST' }), { params });
+  }
+
+  it('menolak tanpa sesi sebelum limiter dan service', async () => {
+    const fake = buatRouteSesi({ session: null });
+    const response = await panggil(fake.route);
+
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(fake.calls.rate.length, 0);
+    assert.equal(fake.calls.siapkan.length, 0);
+  });
+
+  for (const role of ['ADMIN', 'SUPER_ADMIN']) {
+    it(`menyamarkan admin ${role} sebagai pesanan tidak ditemukan`, async () => {
+      const fake = buatRouteSesi({ session: { user: { id: 'admin-1', role } } });
+      const response = await panggil(fake.route);
+      const isi = await response.json();
+
+      assert.equal(response.status, 404);
+      assert.equal(isi.kode, 'PESANAN_TIDAK_DITEMUKAN');
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      assert.equal(fake.calls.siapkan.length, 0);
+    });
+  }
+
+  for (const [judul, status, kode] of [
+    ['bukan pemilik', 404, 'PESANAN_TIDAK_DITEMUKAN'],
+    ['status tidak layak', 409, 'STATUS_TIDAK_MENUNGGU_BAYAR'],
+    ['tenggat lewat', 409, 'TENGGAT_LEWAT'],
+    ['profil kurang', 422, 'PROFIL_BELUM_LENGKAP'],
+  ]) {
+    it(`meneruskan penolakan ${judul} tanpa membuka sesi provider`, async () => {
+      const fake = buatRouteSesi({
+        session: { user: { id: 'user-1', role: 'USER' } },
+        galat: new GalatSesiPembayaran(status, kode, 'pesan aman untuk pembeli'),
+      });
+
+      const response = await panggil(fake.route);
+      const isi = await response.json();
+
+      assert.equal(response.status, status);
+      assert.equal(isi.kode, kode);
+      assert.equal(isi.message, 'pesan aman untuk pembeli');
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      // Service memang dipanggil; yang dibuktikan di sini adalah route tidak
+      // pernah membocorkan kunci sesi pada jalur penolakan.
+      assert.equal(fake.calls.siapkan.length, 1);
+      assert.equal(JSON.stringify(isi).includes('csk-'), false);
+    });
+  }
+
+  it('selalu memberi no-store saat parameter route ditolak', async () => {
+    const fake = buatRouteSesi({ session: { user: { id: 'user-1', role: 'USER' } } });
+    const response = await panggil(fake.route, Promise.reject(new Error('params rusak')));
+
+    assert.equal(response.status, 500);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  });
+});
+
+// ===========================================================================
+// BATAS BROWSER: KUNCI SDK, EVENT, DAN OTORITAS PENYELESAIAN
+// ===========================================================================
+describe('PaymentClient batas keamanan browser', () => {
+  const sumber = fs.readFileSync(JALUR_KLIEN_PEMBAYARAN, 'utf8');
+
+  it('memasang seluruh listener sebelum membuat komponen SDK', () => {
+    const terakhirListener = sumber.lastIndexOf("instance.addEventListener('fatal-error'");
+    const pertamaKomponen = sumber.indexOf('instance.createChannelPickerComponent()');
+    assert.ok(terakhirListener >= 0 && pertamaKomponen > terakhirListener);
+  });
+
+  it('berbagi promise Strict Mode dan membongkar listener serta komponen', () => {
+    assert.match(sumber, /permintaanRef\.current = \{ nomor: permintaanKe, promise \}/);
+    assert.match(sumber, /tercatat\?\.nomor === permintaanKe\s*\?\s*tercatat\.promise/);
+    assert.equal((sumber.match(/instance\.addEventListener\(/g) ?? []).length, 13);
+    assert.equal((sumber.match(/komponen\.removeEventListener\(/g) ?? []).length, 13);
+    assert.match(sumber, /komponen\.destroyComponent\(elemen\)/);
+  });
+
+  it('tidak menulis kunci SDK ke DOM, URL, storage, atau log', () => {
+    assert.equal(sumber.includes('componentsSdkKey'), true);
+    assert.equal(sumber.includes('localStorage'), false);
+    assert.equal(sumber.includes('sessionStorage'), false);
+    assert.equal(sumber.includes('console.'), false);
+    assert.equal(sumber.includes('URLSearchParams'), false);
+    assert.equal(sumber.includes('paymentSessionId'), false);
+    assert.match(sumber, /new Components\(\{ componentsSdkKey: sesi\.componentsSdkKey \}\)/);
+  });
+
+  it('event selesai hanya menyegarkan UI, tidak pernah menyelesaikan tagihan di browser', () => {
+    const awal = sumber.indexOf('const onLengkap');
+    const akhir = sumber.indexOf('const onKedaluwarsa', awal);
+    const handler = sumber.slice(awal, akhir);
+    assert.match(handler, /router\.refresh\(\)/);
+    assert.match(handler, /menunggu konfirmasi/);
+    assert.doesNotMatch(handler, /fetch\(|PAID|PENDING_PAYMENT|payment\/notify|simulatePayment|lunas/i);
+    assert.doesNotMatch(sumber, /redirectToReturnUrl\(/);
+  });
+
+  it('copy penyelesaian tidak mengklaim pembayaran lunas', () => {
+    assert.match(sumber, /Pembayaran diterima, menunggu konfirmasi/);
+    assert.doesNotMatch(sumber, /Pembayaran lunas/i);
   });
 });

@@ -31,6 +31,7 @@ import 'server-only';
 
 import { timingSafeEqual } from 'node:crypto';
 import { keDecimal, lebihBesar, type NilaiUang } from './money';
+import { keE164 } from './telepon';
 
 const BASE_URL_DEFAULT = 'https://api.xendit.co';
 
@@ -543,9 +544,6 @@ function bersihkanNama(nama: string | null): string {
   return bersih || 'Pelanggan';
 }
 
-/** Nomor dalam format E.164: tanda plus, kode negara, lalu 7–14 digit. */
-const POLA_E164 = /^\+[1-9]\d{7,14}$/;
-
 /**
  * Buat customer Xendit, atau pakai yang sudah ada bila ternyata duplikat.
  *
@@ -560,6 +558,15 @@ export async function pastikanCustomer(input: {
 }): Promise<CustomerXendit> {
   periksaReference(input.referenceId);
 
+  // Nomor HP hanya dikirim bila benar-benar bisa dibentuk menjadi E.164. Format
+  // lokal ("08123...") ditolak Xendit, dan penolakan itu akan menggagalkan
+  // seluruh pembayaran — padahal nomor HP tidak wajib di sini.
+  //
+  // Penafsirannya diserahkan ke `keE164` supaya hanya ada SATU tempat yang
+  // memutuskan bentuk nomor mana yang sah. Ketika pola itu hidup di dua tempat,
+  // nomor yang sama bisa diterima saat pendaftaran lalu diam-diam dibuang di sini.
+  const nomorE164 = keE164(input.nomorHp);
+
   try {
     const data = await panggilXendit<unknown>(
       'POST',
@@ -568,12 +575,7 @@ export async function pastikanCustomer(input: {
         reference_id: input.referenceId,
         type: 'INDIVIDUAL',
         email: input.email,
-        // Nomor HP hanya dikirim bila benar-benar E.164. Format lokal
-        // ("08123...") ditolak Xendit, dan penolakan itu akan menggagalkan
-        // seluruh pembayaran — padahal nomor HP tidak wajib di sini.
-        ...(input.nomorHp && POLA_E164.test(input.nomorHp.trim())
-          ? { mobile_number: input.nomorHp.trim() }
-          : {}),
+        ...(nomorE164 ? { mobile_number: nomorE164 } : {}),
         individual_detail: { given_names: bersihkanNama(input.nama) },
       },
       // Endpoint Customers mendokumentasikan header `idempotency-key`, jadi
@@ -788,39 +790,99 @@ export async function ambilSesi(sessionId: string): Promise<SesiXendit> {
 }
 
 /**
- * Ambil ulang kunci SDK sesi yang masih aktif setelah respons browser hilang.
+ * Selang waktu sesudah tenggat sebelum sesi berani disebut mati.
  *
- * Hanya sesi milik tagihan yang sama boleh dipakai kembali. Status akhir,
- * tenggat lewat, atau kunci yang sudah tidak tersedia menghasilkan `null` —
- * pemanggil lalu menutup baris lama dan membuat sesi baru, bukan menebak.
+ * Sesi yang tenggatnya baru saja lewat belum tentu kosong: pembayaran yang
+ * dimulai pada detik-detik terakhir bisa belum punya `payment_id` ketika kita
+ * bertanya. Mengganti tagihannya saat itu berarti menagih ulang uang yang
+ * sedang berjalan. Sesudah selang ini tidak ada pembayaran baru yang bisa
+ * dimulai pada sesi tersebut, jadi keadaannya sudah tenang.
+ */
+const GRACE_SESI_MATI_MS = 10 * 60 * 1000;
+
+/**
+ * Keadaan satu sesi Components, dilihat dari sisi tagihan pemiliknya.
+ *
+ * ================== KENAPA BUKAN `SesiXendit | null` LAGI ==================
+ * Bentuk lama memetakan COMPLETED, EXPIRED, CANCELED, kunci hilang, dan status
+ * yang tidak dikenal menjadi satu nilai `null` — dan pemanggil mengartikan
+ * `null` sebagai "tutup tagihannya, buka tagihan pengganti".
+ *
+ * Untuk sesi yang SUDAH DIBAYAR, arti itu salah dan mahal: webhook bisa tiba
+ * beberapa detik setelah pembeli selesai, dan pada jeda itu tagihan lamanya
+ * ditandai kedaluwarsa lalu tagihan baru dibuka. Pembeli melihat tagihan yang
+ * masih terbuka untuk kewajiban yang baru saja ia bayar, dan membayarnya dua
+ * kali.
+ *
+ * Karena itu keadaannya dipisah, dan HANYA `MATI` yang mengizinkan penggantian.
+ * Status yang tidak dikenal jatuh ke `TIDAK_PASTI`, bukan ke `MATI`: kontrak API
+ * yang berubah tidak boleh diam-diam berubah menjadi izin menagih ulang.
+ * ==========================================================================
+ */
+export type KeadaanSesiKomponen =
+  /** Masih bisa dipakai. Kunci SDK dan tenggat dijamin ada. */
+  | { keadaan: 'AKTIF'; sesi: SesiXendit & { components_sdk_key: string; expires_at: string } }
+  /** Sudah ada pembayaran pada sesi ini. Tunggu webhook; jangan tagih ulang. */
+  | { keadaan: 'DIBAYAR'; sesi: SesiXendit }
+  /** Terbukti kedaluwarsa/dibatalkan tanpa pembayaran. Boleh diganti. */
+  | { keadaan: 'MATI'; sesi: SesiXendit }
+  /** Belum bisa disimpulkan. Jangan dipakai, jangan diganti. */
+  | { keadaan: 'TIDAK_PASTI'; sesi: SesiXendit };
+
+/**
+ * Periksa keadaan sesi Components milik satu tagihan.
+ *
+ * Hanya sesi milik tagihan yang sama yang diperiksa: `reference_id`, customer,
+ * dan nominal yang tidak cocok tetap MELEMPAR (lihat `periksaSesi`), karena
+ * jawaban milik tagihan lain bukan "keadaan sesi ini", melainkan kekeliruan.
  */
 export async function ambilSesiAktifUntukKomponen(
   sessionId: string,
   harapan: HarapanSesi
-): Promise<SesiXendit | null> {
+): Promise<KeadaanSesiKomponen> {
   periksaReference(harapan.referenceId);
   const nominal = nominalUntukXendit(harapan.nominal);
   const data = await panggilXendit<unknown>(
     'GET',
     `/sessions/${encodeURIComponent(sessionId)}`
   );
-  const sesi = periksaSesi(
-    data,
-    { ...harapan, nominal },
-    false
-  );
+  const sesi = periksaSesi(data, { ...harapan, nominal }, false);
 
+  const status = sesi.status.toUpperCase();
   const tenggat = sesi.expires_at ? Date.parse(sesi.expires_at) : NaN;
-  if (
-    sesi.mode !== 'COMPONENTS' ||
-    sesi.status !== 'ACTIVE' ||
-    !sesi.components_sdk_key ||
-    Number.isNaN(tenggat) ||
-    tenggat <= Date.now()
-  ) {
-    return null;
+  const sudahLewat = !Number.isNaN(tenggat) && tenggat <= Date.now();
+
+  // Uang lebih dulu diperiksa daripada apa pun: satu sesi yang punya pembayaran
+  // tidak boleh diganti, berapa pun status dan tenggatnya.
+  if (sesi.payment_id || status === 'COMPLETED') {
+    return { keadaan: 'DIBAYAR', sesi };
   }
-  return sesi;
+
+  if (
+    sesi.mode === 'COMPONENTS' &&
+    status === 'ACTIVE' &&
+    sesi.components_sdk_key &&
+    !Number.isNaN(tenggat) &&
+    !sudahLewat
+  ) {
+    return {
+      keadaan: 'AKTIF',
+      sesi: sesi as SesiXendit & { components_sdk_key: string; expires_at: string },
+    };
+  }
+
+  // Penyedia menyatakannya berakhir, atau tenggatnya sudah lewat cukup lama
+  // sehingga tidak ada pembayaran baru yang bisa dimulai di sana.
+  if (
+    status === 'EXPIRED' ||
+    status === 'CANCELED' ||
+    status === 'CANCELLED' ||
+    (!Number.isNaN(tenggat) && tenggat + GRACE_SESI_MATI_MS <= Date.now())
+  ) {
+    return { keadaan: 'MATI', sesi };
+  }
+
+  return { keadaan: 'TIDAK_PASTI', sesi };
 }
 
 // ============================================================================

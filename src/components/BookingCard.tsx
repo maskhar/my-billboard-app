@@ -12,9 +12,46 @@ import { useRouter } from 'next/navigation';
 // bernilai benar), dan `-` menghasilkan NaN. Karena prop `order` bertipe
 // `any`, tsc tidak akan memperingatkan apa pun. Pembantu money.ts benar pada
 // kedua bentuk, jadi kesalahan itu tidak bisa muncul lagi.
-import { angkaRupiah, kurang, lebihKecil, nol, persen, rupiah } from '@/lib/money';
+import { angkaRupiah, kurang, lebihKecil, nol, persen } from '@/lib/money';
 
-export default function BookingCard({ order }: { order: any }) {
+/**
+ * Bentuk pesanan yang BOLEH menyeberang ke browser.
+ *
+ * Sebelumnya prop ini bertipe `any` dan halaman induk mengirim seluruh baris
+ * Booking apa adanya. Akibatnya dua hal: kolom baru ikut menyeberang tanpa ada
+ * yang memutuskan, dan salah tulis nama field tidak pernah tertangkap `tsc`.
+ * Sejak tabel pembayaran ada, kolom yang menyeberang tanpa diputuskan bukan lagi
+ * urusan kerapian — id sesi provider dan payload webhook tidak boleh sampai ke
+ * browser. Daftar di bawah adalah kontraknya; menambah field berarti menambahnya
+ * di sini lebih dulu.
+ *
+ * Nominal sudah berupa `number` karena halaman induk mengubahnya dengan
+ * `uangUntukClient`. Tetap gunakan pembantu di `@/lib/money` untuk menghitung,
+ * bukan operator langsung — lihat catatan di kepala berkas ini.
+ */
+export type PesananUntukKartu = {
+  id: string;
+  status: string;
+  /** ISO string; `null` pada pesanan lama yang tenggatnya tidak pernah dicatat. */
+  expiresAt: string | null;
+  totalPrice: number;
+  dpAmount: number | null;
+  designOption: string | null;
+  designFileUrl: string | null;
+  designStatus: string | null;
+  designRejectionReason: string | null;
+  refundProof: string | null;
+  billboard: {
+    slug: string;
+    title: string;
+    address: string;
+    mainImage: string;
+  } | null;
+  /** Hasil kesimpulan server: masih ada tagihan `PENDING` yang dapat dibayar. */
+  adaTagihanPending: boolean;
+};
+
+export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const router = useRouter();
   
   // STATE UI & LOGIC
@@ -165,55 +202,17 @@ export default function BookingCard({ order }: { order: any }) {
       }
   };
 
-  // E. Bayar Online (BELUM AKTIF)
+  // E. Bayar: tautan ke halaman Pembayaran Otomatis milik pembeli.
   //
-  // CATATAN: alamat yang dipanggil di bawah SALAH SECARA BENTUK, dan akan
-  // diganti saat Xendit dipasang. `/api/payment/notify` adalah endpoint webhook
-  // — tujuannya menerima panggilan dari SERVER payment gateway, bukan dari
-  // browser pembeli. Ia mensyaratkan header token rahasia yang tidak boleh
-  // pernah ada di kode browser, jadi panggilan ini selalu ditolak 401 dan alert
-  // "belum aktif" di bawah selalu yang muncul. Tidak ada yang bisa
-  // disalahgunakan hari ini justru KARENA penolakan itu.
+  // Sebelumnya tombol di kartu ini memanggil `/api/payment/notify` — endpoint
+  // WEBHOOK, yang hanya boleh dipanggil server gerbang pembayaran dengan token
+  // rahasia. Panggilan dari browser selalu ditolak, jadi tombolnya tidak pernah
+  // membayar apa pun; yang lebih berbahaya adalah bentuknya, karena ia
+  // memperlakukan browser sebagai sumber kebenaran soal uang masuk.
   //
-  // Penggantinya nanti: memanggil route pembuatan sesi pembayaran, lalu
-  // mengarahkan pembeli ke halaman bayar Xendit. Konfirmasi pembayaran tetap
-  // datang lewat webhook ke server, tidak pernah dari browser — browser tidak
-  // boleh jadi sumber kebenaran soal uang yang sudah masuk.
-  const handlePaySimulation = async () => {
-       // Nominal yang ditagih sekarang adalah DP bila pembeli memilih DP,
-       // bukan nilai penuh pesanan. Sebelumnya dialog ini selalu menyebut
-       // `totalPrice`, jadi pembeli DP diminta menyetujui pembayaran 100%.
-       const tagihanSekarang =
-           order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice)
-               ? order.dpAmount
-               : order.totalPrice;
-       const confirmed = confirm(`Lanjutkan pembayaran tagihan sebesar ${rupiah(tagihanSekarang)}?`);
-       if (!confirmed) return;
-       setLoading(true);
-       try {
-        const res = await fetch('/api/payment/notify', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id })
-        });
-
-        if (!res.ok) {
-            alert(
-              "⚠️ Pembayaran online belum aktif.\n\n" +
-              "Sistem pembayaran otomatis masih dalam proses pemasangan, jadi tagihan ini BELUM terbayar. " +
-              "Silakan lakukan pembayaran manual lalu hubungi Admin untuk konfirmasi — status pesanan akan diperbarui Admin setelah dana diverifikasi."
-            );
-            return;
-        }
-
-        alert("Pembayaran Diterima! Status menunggu verifikasi Admin.");
-        router.refresh();
-       } catch(e) {
-        alert("Tidak dapat menghubungi server pembayaran. Tagihan belum terbayar.");
-       } finally {
-        setLoading(false);
-       }
-  };
+  // Sekarang kartu ini tidak lagi memiliki jalur pembayaran sendiri. Ia hanya
+  // menavigasi ke halaman pembayaran; sesi dibuat server, dan pelunasan tetap
+  // ditetapkan webhook.
 
   // F. Submit Alasan Refund
   const handleSubmitReason = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -385,8 +384,14 @@ export default function BookingCard({ order }: { order: any }) {
                     )}
                 </div>
 
-                {/* Skenario 1: Pending & Belum Expired -> Bayar */}
-                {order.status === 'PENDING_PAYMENT' && !isExpired && (
+                {/* Skenario 1: tagihan aktif -> buka Pembayaran Otomatis.
+                    `adaTagihanPending` berasal dari query server. Browser tidak
+                    boleh menebak bahwa PENDING_PAYMENT selalu punya tagihan yang
+                    masih dapat dibayar. */}
+                {order.status === 'PENDING_PAYMENT' &&
+                  !!order.expiresAt &&
+                  !isExpired &&
+                  order.adaTagihanPending && (
                      <div className='flex flex-col gap-2'>
                         {/* Sisa waktu dibaca dari kolom expiresAt — lihat catatan timer di atas. */}
                         {timeLeft && (
@@ -395,13 +400,14 @@ export default function BookingCard({ order }: { order: any }) {
                             </div>
                         )}
                         <div className='flex gap-2'>
-                            {/* Pembayaran online dinonaktifkan sampai verifikasi
-                                signature gateway selesai; tombol dimatikan agar
-                                tidak menjanjikan sesuatu yang ditolak server. */}
-                            <button onClick={handlePaySimulation} disabled title="Pembayaran online belum aktif" className="flex-1 bg-gray-200 text-gray-500 text-xs py-2 rounded font-bold cursor-not-allowed">Bayar</button>
+                            <Link
+                              href={`/dashboard/order/${encodeURIComponent(order.id)}/payment`}
+                              className="flex-1 bg-utero text-white text-xs py-2 rounded font-bold text-center hover:opacity-90 transition"
+                            >
+                              Bayar
+                            </Link>
                             <button onClick={handleCancelPending} disabled={loading} className="px-3 bg-gray-100 text-gray-500 text-xs py-2 rounded hover:bg-gray-200 font-bold disabled:opacity-50">Batal</button>
                         </div>
-                        <p className="text-[9px] text-gray-500 leading-snug">Pembayaran online belum aktif. Pelunasan dikonfirmasi Admin setelah transfer manual.</p>
                      </div>
                 )}
                 

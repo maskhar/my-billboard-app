@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mail";
 import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
 import { addMonths, isBefore, startOfDay } from "date-fns";
-import { Prisma } from "@prisma/client";
+import { PaymentStatus, PaymentTujuan, Prisma } from "@prisma/client";
 import { jumlah, kali, keAngka, keDecimal, kurang, persen, rupiah } from "@/lib/money";
 import { adalahBentrokTanggal } from "@/lib/db-error";
 import {
@@ -230,6 +230,34 @@ export async function POST(req: Request) {
                     endDate,
                     duration: durasi,
 
+                    // TAGIHAN DIBUAT BERSAMA PESANAN, DALAM SATU TRANSAKSI.
+                    //
+                    // Sebelum ini, "berapa yang harus dibayar sekarang" hanya
+                    // hidup sebagai angka di dalam respons dan di dalam email.
+                    // Tidak ada barisnya di database, jadi halaman pembayaran
+                    // tidak punya apa pun untuk dirujuk: ia harus menghitung
+                    // ulang nominalnya sendiri — dan hitungan kedua adalah
+                    // sumber kebenaran kedua, yang cepat atau lambat berbeda
+                    // dari yang pertama.
+                    //
+                    // Dibuat bersarang di dalam `booking.create` supaya Prisma
+                    // menjalankannya di transaksi yang sama: tidak pernah ada
+                    // pesanan PENDING_PAYMENT tanpa tagihannya, dan tidak
+                    // pernah ada tagihan tanpa pesanannya.
+                    //
+                    // Kaitan ke gerbang pembayaran (`providerReferenceId`,
+                    // `providerSessionId`, sesi, kunci SDK) SENGAJA belum diisi.
+                    // Sesi pembayaran berumur pendek, sedangkan pesanan ini bisa
+                    // menganggur berjam-jam sebelum pembeli menekan Bayar; sesi
+                    // dibuat nanti, saat halaman pembayaran benar-benar dibuka.
+                    payments: {
+                        create: {
+                            tujuan: bayarDp ? PaymentTujuan.DP : PaymentTujuan.FULL,
+                            jumlah: tagihanSekarang,
+                            status: PaymentStatus.PENDING,
+                        },
+                    },
+
                     // Rincian tagihan, semuanya hasil hitungan server.
                     unitPrice,
                     basePrice,
@@ -247,7 +275,17 @@ export async function POST(req: Request) {
                     expiresAt: hitungTenggatPembayaran(),
 
                     designOption,
-                }
+                },
+                // Tagihan dibaca kembali dari baris yang baru tersimpan, bukan
+                // dari variabel di memori. Respons dan email di bawah karena itu
+                // mengutip nominal yang BENAR-BENAR tercatat; kalau suatu saat
+                // ada nilai bawaan atau pemicu database yang mengubahnya, yang
+                // dilihat pembeli ikut berubah, bukan diam-diam berbeda.
+                include: {
+                    payments: {
+                        select: { id: true, tujuan: true, jumlah: true },
+                    },
+                },
             });
         });
     } catch (error) {
@@ -274,6 +312,20 @@ export async function POST(req: Request) {
             );
         }
         throw error;
+    }
+
+    // Baris tagihan yang baru dibuat. Nested create di atas selalu menghasilkan
+    // tepat satu, dan pesanan ini baru lahir jadi tidak ada baris lain — tapi
+    // dibaca lewat pencarian bertujuan agar tetap benar bila kelak ada tagihan
+    // kedua yang dibuat bersamaan.
+    const tagihanAwal = newBooking.payments.find(
+        (p) => p.tujuan === (bayarDp ? PaymentTujuan.DP : PaymentTujuan.FULL)
+    );
+    if (!tagihanAwal) {
+        // Secara kontrak Prisma ini tidak mungkin: nested create di atas harus
+        // ikut commit atau ikut rollback. Tetap gagal tertutup daripada
+        // mengarang paymentId/nominal ketika kontrak database berubah.
+        throw new Error("Booking tersimpan tanpa tagihan awal");
     }
 
     const labelTagihan = bayarDp ? `DP ${PERSEN_DP}%` : "Lunas";
@@ -304,7 +356,7 @@ export async function POST(req: Request) {
                 billboardAddress: targetBillboard.address,
                 duration: durasi,
                 // Nominal yang benar-benar ditagihkan, bukan nilai pesanan.
-                total: keAngka(tagihanSekarang),
+                total: keAngka(tagihanAwal.jumlah),
                 status: "PENDING_PAYMENT"
             }
         });
@@ -339,9 +391,10 @@ export async function POST(req: Request) {
     return NextResponse.json({
         message: "Sukses",
         orderId: newBooking.id,
+        paymentId: tagihanAwal.id,
         totalPrice: keAngka(totalPrice),
         dpAmount: keAngka(dpAmount),
-        tagihanSekarang: keAngka(tagihanSekarang),
+        tagihanSekarang: keAngka(tagihanAwal.jumlah),
     });
 
   } catch (error: any) {

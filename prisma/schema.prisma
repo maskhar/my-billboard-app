@@ -428,6 +428,16 @@ model Payment {
   // karena jendela kegagalan beberapa milidetik.
   providerReferenceId String? @unique
   providerSessionId   String? @unique
+
+  // Claim berumur pendek untuk satu upaya membuat sesi. Provider tidak memberi
+  // idempotency key untuk POST /sessions; token acak ini mencegah dua request
+  // paralel membuat dua sesi untuk Payment yang sama. Ini BUKAN jaminan
+  // exactly-once: bila hasil HTTP tidak diketahui, claim dibiarkan habis agar
+  // upaya lama tidak dapat menimpa sesi yang mungkin sudah dibuat.
+  sesiClaimToken      String?
+  sesiClaimedAt       DateTime?
+  sesiClaimExpiresAt  DateTime?
+
   // Satu Payment ID Xendit merepresentasikan satu transaksi uang nyata. Unik
   // agar webhook yang salah cari/diulang tidak bisa menautkannya ke dua baris
   // internal dan membuat satu pembayaran tercatat dua kali.
@@ -460,6 +470,9 @@ model Payment {
   @@index([bookingId, createdAt])
   // Penyapu tagihan kedaluwarsa menyaring dengan dua kolom ini.
   @@index([status, expiresAt])
+  // Pencarian claim macet harus tetap murah ketika beberapa worker melayani
+  // permintaan pembayaran bersamaan.
+  @@index([status, sesiClaimExpiresAt])
 }
 
 // 7. BIAYA TAMBAHAN

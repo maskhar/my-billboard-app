@@ -19,16 +19,7 @@ import { NextResponse } from 'next/server';
 import { hash } from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { adalahDuplikatUnik } from '@/lib/db-error';
-
-// Normalisasi nomor Indonesia: 08xx / +628xx / 628xx → 628xx.
-// Tanpa ini, satu orang bisa terdaftar tiga kali dengan nomor yang sama.
-function normalisasiWhatsapp(input: string): string {
-  const digit = input.replace(/\D/g, '');
-  if (digit.startsWith('0')) return '62' + digit.slice(1);
-  if (digit.startsWith('62')) return digit;
-  if (digit.startsWith('8')) return '62' + digit;
-  return digit;
-}
+import { keE164, normalisasiNomorLokal } from '@/lib/telepon';
 
 export async function POST(req: Request) {
   try {
@@ -44,9 +35,16 @@ export async function POST(req: Request) {
       : '';
     const password = typeof body.password === 'string' ? body.password : '';
 
-    if (!name || !email || !password) {
+    if (!name || !email || !phone || !password) {
       return NextResponse.json(
-        { message: 'Nama, email, dan password wajib diisi.' },
+        { message: 'Nama, email, nomor WhatsApp, dan password wajib diisi.' },
+        { status: 400 }
+      );
+    }
+
+    if (!keE164(phone)) {
+      return NextResponse.json(
+        { message: 'Format nomor WhatsApp tidak valid.' },
         { status: 400 }
       );
     }
@@ -109,7 +107,15 @@ export async function POST(req: Request) {
           name,
           email,
           password: hashedPassword,
-          whatsapp: phone ? normalisasiWhatsapp(phone) : null,
+          // Dinormalisasi supaya satu orang tidak bisa terdaftar tiga kali
+          // dengan nomor yang sama ditulis berbeda — dan supaya nomor yang
+          // tersimpan bisa dipakai gerbang pembayaran tanpa ditafsirkan ulang.
+          //
+          // Bentuknya sudah dibuktikan `keE164` di atas. Tanpa pembuktian itu,
+          // `normalisasiNomorLokal` membuang huruf dan menyimpan sisa angkanya:
+          // `+62812ABC4567` akan tersimpan sebagai nomor lain yang kelihatan
+          // sah, dan pembeli tidak pernah diberi tahu nomornya diubah.
+          whatsapp: normalisasiNomorLokal(phone),
           role: 'USER',          // selalu USER; tidak pernah dari body
           authProvider: 'EMAIL',
           isVerified: false,

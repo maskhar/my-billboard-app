@@ -1,4 +1,5 @@
 // src/app/dashboard/DashboardWrapper.tsx
+import { PaymentStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
@@ -29,36 +30,70 @@ export default async function DashboardWrapper() {
       redirect('/login');
   }
 
-  // Semua logika pengambilan data ada di sini (Server Component)
+  // KOLOM DIPILIH SATU PER SATU, BUKAN `include: { billboard: true }`.
+  //
+  // Sebelumnya seluruh baris Booking dan Billboard dikirim ke komponen client,
+  // lalu disebar dengan `...b`. Artinya setiap kolom baru pada kedua tabel ikut
+  // menyeberang ke browser dengan sendirinya — termasuk kolom yang tidak pernah
+  // ditampilkan. Pada tabel pembayaran kolom seperti itu bukan hal sepele:
+  // id sesi provider, id customer, dan payload webhook tidak boleh pernah
+  // sampai ke browser. Daftar di bawah adalah tepat apa yang dipakai layar.
   const myBookings = await prisma.booking.findMany({
       where: { userId: session.user.id },
-      include: { billboard: true },
-      orderBy: { createdAt: 'desc' }
+      orderBy: { createdAt: 'desc' },
+      select: {
+        id: true,
+        status: true,
+        expiresAt: true,
+        totalPrice: true,
+        dpAmount: true,
+        designOption: true,
+        designFileUrl: true,
+        designStatus: true,
+        designRejectionReason: true,
+        refundProof: true,
+        billboard: {
+          select: {
+            slug: true,
+            title: true,
+            address: true,
+            mainImage: true,
+          },
+        },
+        // Hanya keberadaannya yang dibutuhkan layar, bukan isi barisnya. `select`
+        // di sini dipersempit ke `id` supaya tidak ada satu pun kolom sesi
+        // pembayaran yang terbawa; `id`-nya sendiri tidak diteruskan ke client.
+        payments: {
+          where: { status: PaymentStatus.PENDING },
+          select: { id: true },
+          take: 1,
+        },
+      },
   });
 
   // Nominal uang di database bertipe Decimal — sebuah objek, bukan angka.
   // Next.js mengubah setiap prop menjadi JSON sebelum menyeberangkannya ke
   // komponen 'use client', dan objek Decimal tidak bisa diubah menjadi JSON:
-  // halaman dashboard gagal dirender saat dijalankan. Karena `order` di
-  // BookingCard bertipe `any`, pemeriksaan tipe tidak memperingatkan apa pun.
-  // Jadi semua nominal diubah ke angka biasa di sini, sebelum menyeberang.
+  // halaman dashboard gagal dirender saat dijalankan. Jadi nominal diubah ke
+  // angka biasa di sini, sebelum menyeberang.
   const siapkanPesanan = (b: (typeof myBookings)[number]) => ({
-    ...b,
+    id: b.id,
+    status: b.status,
+    // Diserialisasi eksplisit: `Date` menyeberang sebagai string, dan kartu
+    // pesanan memang membacanya lewat `new Date(...)`.
+    expiresAt: b.expiresAt === null ? null : b.expiresAt.toISOString(),
     totalPrice: uangUntukClient(b.totalPrice),
     dpAmount: b.dpAmount === null ? null : uangUntukClient(b.dpAmount),
-    refundAmount: b.refundAmount === null ? null : uangUntukClient(b.refundAmount),
-    // Empat kolom rincian di bawah baru terisi sejak harga dihitung di server.
-    // Tanpa konversi ini mereka ikut terbawa `...b` sebagai objek Decimal —
-    // halaman ini akan mati saat dijalankan begitu ada satu komponen yang
-    // menampilkannya, dan `tsc` tidak akan berkata apa-apa karena prop
-    // `order` di BookingCard bertipe `any`.
-    unitPrice: b.unitPrice === null ? null : uangUntukClient(b.unitPrice),
-    basePrice: b.basePrice === null ? null : uangUntukClient(b.basePrice),
-    taxAmount: b.taxAmount === null ? null : uangUntukClient(b.taxAmount),
-    adminFee: b.adminFee === null ? null : uangUntukClient(b.adminFee),
-    billboard: b.billboard
-      ? { ...b.billboard, price: uangUntukClient(b.billboard.price) }
-      : b.billboard,
+    designOption: b.designOption,
+    designFileUrl: b.designFileUrl,
+    designStatus: b.designStatus,
+    designRejectionReason: b.designRejectionReason,
+    refundProof: b.refundProof,
+    billboard: b.billboard,
+    // Tombol bayar hanya boleh tampil bila memang ada tagihan yang masih dapat
+    // dibayar. Status `PENDING_PAYMENT` saja tidak cukup: tagihannya bisa sudah
+    // ditutup sebagai EXPIRED oleh alur sesi pembayaran.
+    adaTagihanPending: b.payments.length > 0,
   });
 
   const activeOrders = myBookings.filter(b => activeStatuses.includes(b.status)).map(siapkanPesanan);
@@ -84,10 +119,17 @@ export default async function DashboardWrapper() {
     )
   );
 
-  // Render komponen client dan kirim data sebagai props
+  // Hanya nama dan email yang ditampilkan kartu profil. Objek sesi NextAuth
+  // memuat lebih dari itu (id, role, dan apa pun yang ditambahkan callback di
+  // kemudian hari); tidak ada alasan semuanya menyeberang ke browser.
   return (
     <DashboardClientPage
-        session={session}
+        session={{
+          user: {
+            name: session.user?.name ?? null,
+            email: session.user?.email ?? null,
+          },
+        }}
         activeOrders={activeOrders}
         historyOrders={historyOrders}
         totalSpent={totalSpent}

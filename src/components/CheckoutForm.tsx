@@ -107,14 +107,23 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                   ? result.tagihanSekarang
                   : null;
 
+              const orderId = typeof result.orderId === 'string' ? result.orderId.trim() : '';
+              if (!orderId) {
+                  // Booking sudah mungkin tersimpan, tetapi tanpa ID yang tervalidasi
+                  // browser tidak boleh mengarang URL pembayaran.
+                  alert('Pesanan dibuat, tetapi halaman pembayaran belum dapat dibuka. Buka Dashboard untuk melihat pesanan.');
+                  router.push('/dashboard');
+                  return;
+              }
+
               alert(
                   "✅ ORDER DITERIMA!\n\n" +
                   (tagihan !== null
                       ? `Nominal yang harus dibayar: Rp ${tagihan.toLocaleString('id-ID')}\n\n`
                       : "") +
-                  "Silakan cek invoice di Dashboard."
+                  "Lanjutkan ke Pembayaran Otomatis untuk memilih metode pembayaran."
               );
-              router.push('/dashboard');
+              router.push(`/dashboard/order/${encodeURIComponent(orderId)}/payment`);
           } else {
               alert("❌ Gagal: " + (result.message || `Server menolak (${response.status}).`));
           }
@@ -312,18 +321,14 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                     </div>
                     {/*
                       LABEL MENGIKUTI APA YANG BENAR-BENAR TERJADI.
-                      Tombol ini baru membuat pesanan lalu memulangkan pembeli ke
-                      dashboard; belum ada sesi pembayaran yang dibuka. Label lama
-                      ("Bayar via ...") menyebut nama gerbang pembayaran sekaligus
-                      menjanjikan pembayaran yang tidak pernah dimulai — pembeli
-                      menekannya, tidak ditagih apa pun, dan menyangka sudah bayar.
-                      Nama gerbang pembayaran tidak pernah tampil ke pembeli; di
-                      layar namanya "Pembayaran Otomatis". Ganti label ini menjadi
-                      "Lanjut ke Pembayaran Otomatis" pada fase yang menyambungkan
-                      halaman pembayaran, bukan sebelumnya.
+                      Tombol ini membuat pesanan lalu mengantar pembeli ke halaman
+                      Pembayaran Otomatis miliknya. Nama gerbang pembayaran tidak
+                      pernah tampil ke pembeli. Label tidak boleh menyatakan bahwa
+                      pembayaran sudah terjadi: yang terjadi di sini hanya pesanan
+                      dibuat dan pilihan pembayaran dibuka.
                     */}
                     <button onClick={handlePayment} disabled={isLoading} className="w-full bg-utero hover:bg-white hover:text-utero font-bold py-3 rounded-xl mt-6 transition duration-300 ring-2 ring-utero shadow-lg shadow-utero/50 disabled:opacity-50">
-                        {isLoading ? 'Membuat pesanan...' : 'Buat Pesanan'}
+                        {isLoading ? 'Membuat pesanan...' : 'Lanjut ke Pembayaran Otomatis'}
                     </button>
                 </div>
             </div>
