@@ -64,6 +64,33 @@ const JALUR_KLIEN_PEMBAYARAN = path.join(
   'payment',
   'PaymentClient.tsx'
 );
+const JALUR_PELUNASAN_WEBHOOK = path.join(
+  __dirname,
+  '..',
+  'src',
+  'lib',
+  'pelunasan-webhook.ts'
+);
+const JALUR_ROUTE_WEBHOOK_XENDIT = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'xendit',
+  'webhook',
+  'route.ts'
+);
+const JALUR_ROUTE_NOTIFY_LEGACY = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'payment',
+  'notify',
+  'route.ts'
+);
 
 // ---------------------------------------------------------------------------
 // Nilai palsu. Sengaja mirip bentuk aslinya supaya test kebocoran rahasia
@@ -77,6 +104,7 @@ const ENV_DIPAKAI = [
   'XENDIT_CALLBACK_TOKEN',
   'XENDIT_API_BASE_URL',
   'APP_ORIGIN',
+  'ADMIN_EMAIL',
   'NODE_ENV',
 ];
 
@@ -2506,6 +2534,609 @@ describe('POST /api/booking/[id]/payment-session', () => {
 
     assert.equal(response.status, 500);
     assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  });
+});
+
+// ===========================================================================
+// WEBHOOK PAYMENT SESSION: SATU-SATUNYA OTORITAS PELUNASAN
+// ===========================================================================
+describe('pelunasan webhook Payment Session', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
+  const SEKARANG = new Date('2026-09-26T10:00:00.000Z');
+
+  // Prisma sungguhan dipalsukan pada kedua jalur impornya. Service selalu
+  // menerima database lewat parameter, jadi singleton yang ikut termuat hanya
+  // akan membuka koneksi Postgres tanpa pernah dipakai.
+  const PRISMA_PALSU = { prisma: {} };
+
+  function muatPelunasan() {
+    delete require.cache[require.resolve(JALUR_PELUNASAN_WEBHOOK)];
+    return muatDenganModulPalsu(JALUR_PELUNASAN_WEBHOOK, {
+      './prisma': PRISMA_PALSU,
+      '@/lib/prisma': PRISMA_PALSU,
+    });
+  }
+
+  function dataWebhook(ganti = {}) {
+    return {
+      event: 'payment_session.completed',
+      created: '2026-09-26T09:59:00.000Z',
+      data: {
+        payment_session_id: 'ps-1',
+        reference_id: 'ref-1',
+        payment_id: 'pi-1',
+        status: 'COMPLETED',
+        currency: 'IDR',
+        session_type: 'PAY',
+        mode: 'COMPONENTS',
+        amount: '1500000',
+        components_sdk_key: 'csk-rahasia-yang-tidak-boleh-disimpan',
+        ...ganti,
+      },
+    };
+  }
+
+  function buatPaymentWebhook(ganti = {}) {
+    return {
+      id: 'pay-1',
+      bookingId: 'booking-1',
+      tujuan: PaymentTujuan.FULL,
+      status: PaymentStatus.PENDING,
+      jumlah: new Prisma.Decimal('1500000'),
+      providerReferenceId: 'ref-1',
+      providerSessionId: 'ps-1',
+      providerPaymentId: null,
+      paidAt: null,
+      callbackPayload: null,
+      ...ganti,
+    };
+  }
+
+  function cocokWebhook(row, where) {
+    if (!where) return true;
+    for (const [nama, syarat] of Object.entries(where)) {
+      if (nama === 'OR') {
+        if (!syarat.some((bagian) => cocokWebhook(row, bagian))) return false;
+      } else if (row[nama] !== syarat) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Database stateful yang menyalin seluruh transaksi. Serialisasi transaksi
+   * memodelkan database yang memilih satu pemenang delivery paralel; delivery
+   * berikutnya lalu membaca fakta PAID yang telah commit.
+   */
+  function buatDbPelunasan(options = {}) {
+    let payments = (options.payments ?? [buatPaymentWebhook()]).map((payment) => ({ ...payment }));
+    let bookings = new Map([
+      [
+        'booking-1',
+        {
+          id: 'booking-1',
+          status: BookingStatus.PENDING_PAYMENT,
+          paidAt: null,
+          duration: 30,
+          user: { email: 'pembeli@contoh.test', name: 'Budi Santoso' },
+          billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
+          ...(options.booking ?? {}),
+        },
+      ],
+    ]);
+    const calls = [];
+    let antrean = Promise.resolve();
+
+    function salinBooking(peta) {
+      return new Map(
+        [...peta.entries()].map(([id, booking]) => [
+          id,
+          { ...booking, user: { ...booking.user }, billboard: { ...booking.billboard } },
+        ])
+      );
+    }
+
+    function tabelPayment(ambil, simpan, ambilBooking) {
+      return {
+        async findFirst(args) {
+          calls.push('payment.findFirst');
+          const payment = ambil().find((row) => cocokWebhook(row, args.where));
+          if (!payment) return null;
+          const booking = ambilBooking().get(payment.bookingId);
+          return booking
+            ? { ...payment, booking: { ...booking, user: { ...booking.user }, billboard: { ...booking.billboard } } }
+            : null;
+        },
+        async updateMany(args) {
+          calls.push('payment.updateMany');
+          const rows = ambil();
+          const cocok = rows.filter((row) => cocokWebhook(row, args.where));
+          if (args.data.providerPaymentId) {
+            const sudahDipakai = rows.some(
+              (row) => row.id !== cocok[0]?.id && row.providerPaymentId === args.data.providerPaymentId
+            );
+            if (sudahDipakai) {
+              throw new Prisma.PrismaClientKnownRequestError('provider payment id duplikat', {
+                code: 'P2002',
+                clientVersion: 'test',
+                meta: { target: ['providerPaymentId'] },
+              });
+            }
+          }
+          simpan(rows.map((row) => (cocokWebhook(row, args.where) ? { ...row, ...args.data } : row)));
+          return { count: cocok.length };
+        },
+      };
+    }
+
+    function tabelBooking(ambil, simpan) {
+      return {
+        async updateMany(args) {
+          calls.push('booking.updateMany');
+          if (options.bookingCasGagal) return { count: 0 };
+          const booking = ambil().get(args.where.id);
+          if (!booking || !cocokWebhook(booking, args.where)) return { count: 0 };
+          simpan(new Map([...ambil(), [booking.id, { ...booking, ...args.data }]]));
+          return { count: 1 };
+        },
+      };
+    }
+
+    const db = {
+      payment: tabelPayment(
+        () => payments,
+        (nilai) => {
+          payments = nilai;
+        },
+        () => bookings
+      ),
+      async $transaction(kerja) {
+        const tungguGiliran = antrean;
+        let bukaGiliran;
+        antrean = new Promise((resolve) => {
+          bukaGiliran = resolve;
+        });
+        await tungguGiliran;
+
+        const paymentSebelum = payments;
+        const bookingSebelum = bookings;
+        let paymentSalinan = payments.map((payment) => ({ ...payment }));
+        let bookingSalinan = salinBooking(bookings);
+        calls.push('transaction.begin');
+        try {
+          const hasil = await kerja({
+            payment: tabelPayment(
+              () => paymentSalinan,
+              (nilai) => {
+                paymentSalinan = nilai;
+              },
+              () => bookingSalinan
+            ),
+            booking: tabelBooking(
+              () => bookingSalinan,
+              (nilai) => {
+                bookingSalinan = nilai;
+              }
+            ),
+          });
+          payments = paymentSalinan;
+          bookings = bookingSalinan;
+          calls.push('transaction.commit');
+          return hasil;
+        } catch (error) {
+          payments = paymentSebelum;
+          bookings = bookingSebelum;
+          calls.push('transaction.rollback');
+          throw error;
+        } finally {
+          bukaGiliran();
+        }
+      },
+    };
+
+    return {
+      db,
+      calls,
+      payments: () => payments.map((payment) => ({ ...payment })),
+      booking: () => ({ ...bookings.get('booking-1') }),
+    };
+  }
+
+  function depsDb(fake) {
+    return { db: fake.db, sekarang: () => new Date(SEKARANG) };
+  }
+
+  function dapatGalat(janji) {
+    return janji.then(
+      () => null,
+      (error) => error
+    );
+  }
+
+  it('mengurai nominal string atau number tepat dan menyaring SDK key dari audit', () => {
+    const { uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    for (const amount of ['1500000.00', 1500000]) {
+      const hasil = uraikanWebhookSesiSelesai(dataWebhook({ amount }));
+      assert.equal(hasil.data.amount.toString(), '1500000');
+      assert.equal(JSON.stringify(hasil.data.callbackPayload).includes('components_sdk_key'), false);
+      assert.deepEqual(hasil.data.callbackPayload, {
+        event: 'payment_session.completed',
+        created: '2026-09-26T09:59:00.000Z',
+        data: {
+          payment_session_id: 'ps-1',
+          reference_id: 'ref-1',
+          payment_id: 'pi-1',
+          status: 'COMPLETED',
+          currency: 'IDR',
+          session_type: 'PAY',
+          mode: 'COMPONENTS',
+          amount: '1500000',
+        },
+      });
+    }
+  });
+
+  for (const [judul, ganti, kode] of [
+    ['event lain', { event: 'payment_session.pending' }, 'EVENT_TIDAK_DIDUKUNG'],
+    ['status lain', { data: { ...dataWebhook().data, status: 'PENDING' } }, 'SESI_TIDAK_SESUAI'],
+    ['mata uang lain', { data: { ...dataWebhook().data, currency: 'USD' } }, 'SESI_TIDAK_SESUAI'],
+    ['jenis sesi lain', { data: { ...dataWebhook().data, session_type: 'RECURRING' } }, 'SESI_TIDAK_SESUAI'],
+    ['mode lain', { data: { ...dataWebhook().data, mode: 'HOSTED' } }, 'SESI_TIDAK_SESUAI'],
+    ['nominal kosong', { data: { ...dataWebhook().data, amount: '' } }, 'NOMINAL_TIDAK_SAH'],
+    ['nominal nol', { data: { ...dataWebhook().data, amount: '0' } }, 'NOMINAL_TIDAK_SAH'],
+    ['nominal negatif', { data: { ...dataWebhook().data, amount: '-1' } }, 'NOMINAL_TIDAK_SAH'],
+    ['nominal Infinity', { data: { ...dataWebhook().data, amount: 'Infinity' } }, 'NOMINAL_TIDAK_SAH'],
+    ['nominal NaN', { data: { ...dataWebhook().data, amount: 'NaN' } }, 'NOMINAL_TIDAK_SAH'],
+  ]) {
+    it(`menolak ${judul}`, () => {
+      const { GalatWebhookPembayaran, uraikanWebhookSesiSelesai } = muatPelunasan();
+      assert.throws(
+        () => uraikanWebhookSesiSelesai({ ...dataWebhook(), ...ganti }),
+        (error) => error instanceof GalatWebhookPembayaran && error.kode === kode
+      );
+    });
+  }
+
+  it('menyelesaikan Payment dan Booking secara atomik lewat identifier server', async () => {
+    const fake = buatDbPelunasan();
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+    const payment = fake.payments()[0];
+
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(payment.status, PaymentStatus.PAID);
+    assert.equal(payment.providerPaymentId, 'pi-1');
+    assert.equal(payment.paidAt.getTime(), SEKARANG.getTime());
+    assert.equal(payment.callbackPayload.data.amount, '1500000');
+    assert.equal(JSON.stringify(payment.callbackPayload).includes('components_sdk_key'), false);
+    assert.equal(fake.booking().status, BookingStatus.PAID_CONFIRMED);
+    assert.equal(fake.booking().paidAt.getTime(), SEKARANG.getTime());
+  });
+
+  it('mengabaikan identifier provider yang tidak dikenal atau pasangan campuran', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook(),
+        buatPaymentWebhook({ id: 'pay-2', bookingId: 'booking-1', providerSessionId: 'ps-2', providerReferenceId: 'ref-2' }),
+      ],
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const tidakDikenal = await selesaikanDariWebhook(
+      uraikanWebhookSesiSelesai(dataWebhook({ payment_session_id: 'ps-tidak-ada', reference_id: 'ref-tidak-ada' })),
+      depsDb(fake)
+    );
+    const campuran = await selesaikanDariWebhook(
+      uraikanWebhookSesiSelesai(dataWebhook({ payment_session_id: 'ps-1', reference_id: 'ref-2' })),
+      depsDb(fake)
+    );
+
+    assert.deepEqual(tidakDikenal, { keadaan: 'DIABAIKAN' });
+    assert.deepEqual(campuran, { keadaan: 'DIABAIKAN' });
+    assert.equal(fake.payments().every((payment) => payment.status === PaymentStatus.PENDING), true);
+    assert.equal(fake.calls.includes('payment.updateMany'), false);
+  });
+
+  it('menolak nominal yang tidak sama tanpa menulis fakta uang', async () => {
+    const fake = buatDbPelunasan();
+    const { GalatWebhookPembayaran, selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const galat = await dapatGalat(
+      selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook({ amount: '1500001' })), depsDb(fake))
+    );
+
+    assert.ok(galat instanceof GalatWebhookPembayaran);
+    assert.equal(galat.kode, 'NOMINAL_TIDAK_SESUAI');
+    assert.equal(fake.payments()[0].status, PaymentStatus.PENDING);
+    assert.equal(fake.calls.includes('payment.updateMany'), false);
+  });
+
+  it('mengembalikan duplicate hanya untuk payment ID provider yang sama', async () => {
+    const fake = buatDbPelunasan({
+      payments: [buatPaymentWebhook({ status: PaymentStatus.PAID, providerPaymentId: 'pi-1', paidAt: SEKARANG })],
+    });
+    const { GalatWebhookPembayaran, selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const duplikat = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+    const galat = await dapatGalat(
+      selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook({ payment_id: 'pi-lain' })), depsDb(fake))
+    );
+
+    assert.deepEqual(duplikat, { keadaan: 'DUPLIKAT' });
+    assert.ok(galat instanceof GalatWebhookPembayaran);
+    assert.equal(galat.kode, 'KONFLIK_PAYMENT_ID');
+    assert.equal(fake.calls.includes('payment.updateMany'), false);
+  });
+
+  it('menerjemahkan collision providerPaymentId dan rollback Payment pemenang palsu', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook(),
+        buatPaymentWebhook({
+          id: 'pay-2',
+          providerReferenceId: 'ref-2',
+          providerSessionId: 'ps-2',
+          status: PaymentStatus.PAID,
+          providerPaymentId: 'pi-1',
+          paidAt: SEKARANG,
+        }),
+      ],
+    });
+    const { GalatWebhookPembayaran, selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const galat = await dapatGalat(selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake)));
+
+    assert.ok(galat instanceof GalatWebhookPembayaran);
+    assert.equal(galat.kode, 'KONFLIK_PAYMENT_ID');
+    assert.equal(fake.payments().find((payment) => payment.id === 'pay-1').status, PaymentStatus.PENDING);
+    assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+  });
+
+  it('rollback Payment bila CAS Booking kalah', async () => {
+    const fake = buatDbPelunasan({ bookingCasGagal: true });
+    const { GalatWebhookPembayaran, selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const galat = await dapatGalat(selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake)));
+    const payment = fake.payments()[0];
+
+    assert.ok(galat instanceof GalatWebhookPembayaran);
+    assert.equal(galat.kode, 'PESANAN_SEDANG_DIPROSES');
+    assert.equal(payment.status, PaymentStatus.PENDING);
+    assert.equal(payment.providerPaymentId, null);
+    assert.equal(payment.paidAt, null);
+    assert.equal(payment.callbackPayload, null);
+    assert.equal(fake.booking().status, BookingStatus.PENDING_PAYMENT);
+  });
+
+  it('dua delivery serentak hanya memberi satu pemenang dan retry menjadi duplicate', async () => {
+    const fake = buatDbPelunasan();
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+    const webhook = uraikanWebhookSesiSelesai(dataWebhook());
+
+    const hasil = await Promise.all([
+      selesaikanDariWebhook(webhook, depsDb(fake)),
+      selesaikanDariWebhook(webhook, depsDb(fake)),
+    ]);
+
+    assert.equal(hasil.filter((nilai) => nilai.keadaan === 'DISELESAIKAN').length, 1);
+    assert.equal(hasil.filter((nilai) => nilai.keadaan === 'DUPLIKAT').length, 1);
+    assert.equal(fake.payments()[0].status, PaymentStatus.PAID);
+    assert.equal(fake.calls.filter((nama) => nama === 'booking.updateMany').length, 1);
+  });
+});
+
+// ===========================================================================
+// HTTP WEBHOOK: TOKEN CALLBACK, STATUS, DAN ROUTE LAMA
+// ===========================================================================
+describe('POST /api/xendit/webhook', () => {
+  class GalatWebhookPembayaran extends Error {
+    constructor(status, kode, pesan) {
+      super(pesan);
+      this.name = 'GalatWebhookPembayaran';
+      this.status = status;
+      this.kode = kode;
+    }
+  }
+
+  function buatRouteWebhook({ tokenCocok = (nilai) => nilai === TOKEN_PALSU, hasil = { keadaan: 'DIABAIKAN' }, galat = null, gagalEmail = false } = {}) {
+    const calls = { token: [], uraikan: [], selesaikan: [], email: [] };
+    const route = muatDenganModulPalsu(JALUR_ROUTE_WEBHOOK_XENDIT, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      '@/lib/mail': {
+        sendEmail: async (surat) => {
+          calls.email.push(surat);
+          if (gagalEmail) throw new Error('SMTP menolak');
+        },
+      },
+      '@/lib/money': { keAngka: (nilai) => Number(nilai), rupiah: () => 'Rp1.500.000' },
+      '@/lib/xendit': {
+        tokenWebhookCocok: (nilai) => {
+          calls.token.push(nilai);
+          return tokenCocok(nilai);
+        },
+      },
+      '@/lib/pelunasan-webhook': {
+        GalatWebhookPembayaran,
+        uraikanWebhookSesiSelesai: (body) => {
+          calls.uraikan.push(body);
+          if (galat) throw galat;
+          return { body };
+        },
+        selesaikanDariWebhook: async (webhook) => {
+          calls.selesaikan.push(webhook);
+          if (galat) throw galat;
+          return hasil;
+        },
+      },
+    });
+    return { route, calls };
+  }
+
+  function requestWebhook({ token = TOKEN_PALSU, body = { aman: true } } = {}) {
+    const headers = new Headers({ 'content-type': 'application/json' });
+    if (token !== null) headers.set('x-callback-token', token);
+    return new Request('https://contoh.test/api/xendit/webhook', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    });
+  }
+
+  for (const [judul, token, tokenCocok, hapusEnv] of [
+    ['token hilang', null, (nilai) => nilai === TOKEN_PALSU, false],
+    ['token salah', 'token-salah', (nilai) => nilai === TOKEN_PALSU, false],
+    // Token yang benar pun harus ditolak saat variabelnya belum dipasang:
+    // webhook yang terbuka tanpa konfigurasi berarti siapa pun yang menebak URL
+    // ini bisa menyatakan pesanan mana pun sudah dibayar.
+    ['konfigurasi callback token kosong', TOKEN_PALSU, () => false, true],
+  ]) {
+    it(`menolak ${judul} sebelum parser dan database`, async () => {
+      if (hapusEnv) delete process.env.XENDIT_CALLBACK_TOKEN;
+      const fake = buatRouteWebhook({ tokenCocok });
+      const response = await fake.route.POST(requestWebhook({ token }));
+
+      assert.equal(response.status, 401);
+      assert.equal(response.headers.get('Cache-Control'), 'no-store');
+      assert.equal(fake.calls.uraikan.length, 0);
+      assert.equal(fake.calls.selesaikan.length, 0);
+    });
+  }
+
+  it('menolak JSON rusak sebagai payload tidak sah tanpa parser atau settlement', async () => {
+    const fake = buatRouteWebhook();
+    const response = await fake.route.POST(
+      new Request('https://contoh.test/api/xendit/webhook', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-callback-token': TOKEN_PALSU,
+        },
+        body: '{"data":',
+      })
+    );
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.deepEqual(body, {
+      message: 'Body webhook bukan JSON yang sah.',
+      kode: 'PAYLOAD_TIDAK_SAH',
+    });
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(fake.calls.uraikan.length, 0);
+    assert.equal(fake.calls.selesaikan.length, 0);
+  });
+
+  it('memetakan event atau nominal salah ke galat aman tanpa settlement', async () => {
+    const galat = new GalatWebhookPembayaran(400, 'NOMINAL_TIDAK_SESUAI', 'Nominal webhook tidak sesuai tagihan.');
+    const fake = buatRouteWebhook({ galat });
+    const response = await fake.route.POST(requestWebhook());
+    const body = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.equal(body.kode, 'NOMINAL_TIDAK_SESUAI');
+    assert.equal(fake.calls.selesaikan.length, 0);
+    assert.equal(JSON.stringify(body).includes('csk-'), false);
+  });
+
+  it('menjawab 500 generik tanpa membocorkan galat mentah atau payload', async () => {
+    const fake = buatRouteWebhook({
+      galat: new Error('gagal query payment WHERE providerSessionId = ps-1 csk-rahasia'),
+    });
+    const response = await fake.route.POST(requestWebhook({ body: { rahasia: 'csk-rahasia' } }));
+    const body = await response.json();
+
+    assert.equal(response.status, 500);
+    assert.deepEqual(body, { message: 'Error Server', kode: 'GALAT_SERVER' });
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+  });
+
+  it('mengakui sesi provider tidak dikenal sebagai ignored tanpa menulis lagi', async () => {
+    const fake = buatRouteWebhook({ hasil: { keadaan: 'DIABAIKAN' } });
+    const response = await fake.route.POST(requestWebhook());
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, { status: 'ok', ignored: true });
+    assert.equal(fake.calls.selesaikan.length, 1);
+  });
+
+  it('mengakui duplicate tanpa menjalankan settlement kedua atau mengirim email', async () => {
+    const fake = buatRouteWebhook({ hasil: { keadaan: 'DUPLIKAT' } });
+    const response = await fake.route.POST(requestWebhook());
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, { status: 'ok', duplicate: true });
+    assert.equal(fake.calls.selesaikan.length, 1);
+    assert.equal(fake.calls.email.length, 0);
+  });
+
+  it('hanya pemenang settlement mengirim notifikasi admin dan pembeli', async () => {
+    process.env.ADMIN_EMAIL = 'admin@contoh.test';
+    const notifikasi = {
+      bookingId: 'booking-1',
+      emailPembeli: 'pembeli@contoh.test',
+      namaPembeli: 'Budi Santoso',
+      judulBillboard: 'Billboard Sudirman',
+      alamatBillboard: 'Jl. Sudirman',
+      durasi: 30,
+      tujuan: 'FULL',
+      jumlah: new (require('@prisma/client').Prisma.Decimal)('1500000'),
+    };
+    const fake = buatRouteWebhook({ hasil: { keadaan: 'DISELESAIKAN', notifikasi } });
+
+    const response = await fake.route.POST(requestWebhook());
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.calls.email.length, 2);
+    assert.equal(fake.calls.email[0].to, 'admin@contoh.test');
+    assert.equal(fake.calls.email[1].to, 'pembeli@contoh.test');
+  });
+
+  it('kegagalan email tidak membatalkan settlement yang sudah commit', async () => {
+    process.env.ADMIN_EMAIL = 'admin@contoh.test';
+    const fake = buatRouteWebhook({
+      gagalEmail: true,
+      hasil: {
+        keadaan: 'DISELESAIKAN',
+        notifikasi: {
+          bookingId: 'booking-1',
+          emailPembeli: 'pembeli@contoh.test',
+          namaPembeli: null,
+          judulBillboard: 'Billboard Sudirman',
+          alamatBillboard: 'Jl. Sudirman',
+          durasi: 30,
+          tujuan: 'FULL',
+          jumlah: new (require('@prisma/client').Prisma.Decimal)('1500000'),
+        },
+      },
+    });
+
+    const response = await fake.route.POST(requestWebhook());
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.calls.email.length, 1);
+    assert.equal(fake.calls.selesaikan.length, 1);
+  });
+});
+
+describe('POST /api/payment/notify lama', () => {
+  it('selalu 410 tanpa token lama atau penulis settlement', async () => {
+    const route = muatDenganModulPalsu(JALUR_ROUTE_NOTIFY_LEGACY, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+    });
+    const response = await route.POST();
+    const body = await response.json();
+    const sumber = fs.readFileSync(JALUR_ROUTE_NOTIFY_LEGACY, 'utf8');
+
+    assert.equal(response.status, 410);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(body.kode, 'ENDPOINT_LAMA_DINONAKTIFKAN');
+    assert.doesNotMatch(sumber, /PAYMENT_WEBHOOK_TOKEN|prisma\.|BookingStatus|PaymentStatus/);
   });
 });
 
