@@ -358,8 +358,10 @@ export async function POST(req: Request) {
 
         // Kirim Email jika Subject terisi
         if (subject) {
-            console.log("📨 Mengirim notifikasi update ke:", updatedOrder.user.email);
-            
+            // Baris log yang mencetak alamat pembeli dihapus, bukan disamarkan:
+            // `sendEmail` sudah mencatat setiap pengiriman dan setiap kegagalan
+            // dengan alamat yang disamarkan, jadi baris ini hanya menduplikasi
+            // catatan yang sama sambil menambah data pribadi ke penampung log.
             await sendEmail({
                 to: updatedOrder.user.email,
                 subject: subject,

@@ -13,6 +13,7 @@
 //   `Intl` aman tanpa itu.
 import nodemailer from 'nodemailer';
 import { amankanHtml } from '@/lib/html';
+import { samarkanEmail } from '@/lib/log-aman';
 import { rupiah, type NilaiUang } from '@/lib/money';
 import { nomorPesanan } from '@/lib/nomor-pesanan';
 
@@ -186,14 +187,19 @@ export const sendEmail = async ({ to, subject, title, message, orderDetail }: Su
             subject: subject,
             html: generateTemplate(title, message, orderDetail)
         });
-        console.log("✅ Email Terkirim ke:", to, "| ID:", info.messageId);
+        // Alamat disamarkan. Baris ini dieksekusi untuk SETIAP surat yang
+        // terkirim, jadi mencetaknya utuh berarti membangun daftar lengkap
+        // pelanggan di penampung log — tempat yang tidak pernah dimaksudkan
+        // menyimpan data pribadi dan bertahan jauh lebih lama daripada masa
+        // simpan yang dijanjikan.
+        console.log("✅ Email Terkirim ke:", samarkanEmail(to), "| ID:", info.messageId);
         return true;
     } catch (error) {
         // Jangan mencatat objek galat mentah: galat nodemailer membawa jawaban
         // server SMTP dan perintah yang gagal, dan log adalah tempat rahasia
         // paling sering bocor tanpa ada yang menyadarinya.
         const kategori = error instanceof Error ? error.name.slice(0, 80) : 'galat-tidak-dikenal';
-        console.error(`🔥 Gagal Kirim Email ke ${to}: ${kategori}`);
+        console.error(`🔥 Gagal Kirim Email ke ${samarkanEmail(to)}: ${kategori}`);
         return false;
     }
 };

@@ -17,6 +17,19 @@ export async function POST(req: Request) {
     const { orderId } = await req.json();
     const adminEmail = process.env.ADMIN_EMAIL;
 
+    // TIPENYA DIPERIKSA, BUKAN HANYA KEBERADAANNYA — dan ini bukan sekadar
+    // kerapian: `orderId` masuk langsung ke `where: { id: orderId }`. Nilai
+    // berupa objek tidak dibaca Prisma sebagai id, melainkan sebagai FILTER.
+    // `{"orderId":{"not":""}}` karena itu cocok dengan SEMUA baris yang lolos
+    // syarat lainnya, dan `updateMany` membatalkan seluruh pesanan
+    // `PENDING_PAYMENT` milik pemanggil dalam satu permintaan. Syarat `userId`
+    // membatasi kerusakannya pada pesanan sendiri, tapi satu klik yang
+    // dimaksudkan untuk satu pesanan tetap menghanguskan semuanya — termasuk
+    // tanggal billboard yang sudah dipesan.
+    if (typeof orderId !== 'string' || orderId.trim() === '') {
+      return NextResponse.json({ message: "ID pesanan tidak valid." }, { status: 400 });
+    }
+
     // Kepemilikan ditegakkan di tingkat query: sebelumnya order diambil
     // berdasarkan id saja, sehingga user mana pun bisa membatalkan pesanan
     // milik orang lain. updateMany dipakai karena update() hanya menerima

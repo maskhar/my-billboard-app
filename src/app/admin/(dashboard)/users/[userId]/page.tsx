@@ -32,11 +32,13 @@ export default async function UserProfilePage({ params }: PageProps) {
   const resolvedParams = await params;
   const { userId } = resolvedParams;
 
-  console.log('Successfully extracted userId:', userId);
-
+  // Baris `console.log` sisa debug dihapus: ia mencetak pengenal akun ke log
+  // pada setiap kunjungan halaman profil.
   if (!userId || typeof userId !== 'string') {
-    // This check is still useful in case the awaited params don't contain a valid userId.
-    throw new Error(`Invalid or missing userId after awaiting params: ${userId}`);
+    // Params yang sudah di-await belum tentu memuat userId yang sah.
+    // `notFound()`, bukan `throw`: id yang tidak sah adalah URL yang salah,
+    // bukan kerusakan server — dan pesan galatnya dulu ikut mencetak nilainya.
+    notFound();
   }
 
   const user = await prisma.user.findUnique({

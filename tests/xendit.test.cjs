@@ -97,6 +97,7 @@ const JALUR_TRANSISI = path.join(__dirname, '..', 'src', 'lib', 'transisi-status
 const JALUR_HTML = path.join(__dirname, '..', 'src', 'lib', 'html.ts');
 const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
 const JALUR_NOMOR_PESANAN = path.join(__dirname, '..', 'src', 'lib', 'nomor-pesanan.ts');
+const JALUR_LOG_AMAN = path.join(__dirname, '..', 'src', 'lib', 'log-aman.ts');
 const JALUR_ROUTE_CANCEL = path.join(
   __dirname, '..', 'src', 'app', 'api', 'booking', 'cancel', 'route.ts'
 );
@@ -6199,6 +6200,109 @@ describe('rumus nomor pesanan tidak ditulis ulang di luar modulnya', () => {
 });
 
 // ===========================================================================
+// DATA PRIBADI TIDAK BOLEH MENGENDAP DI LOG
+// ===========================================================================
+//
+// Log mengalir ke stdout proses, lalu ke penampung log penyedia hosting, lalu ke
+// siapa pun yang punya akses ke dashboard itu. Ia juga bertahan jauh lebih lama
+// daripada masa simpan yang dijanjikan kebijakan privasi, karena tidak ada
+// seorang pun yang menghapus log lama satu per satu. `mail.ts` mencetak alamat
+// penerima pada SETIAP surat yang terkirim — daftar lengkap pelanggan, di tempat
+// yang tidak pernah dimaksudkan menyimpan daftar pelanggan.
+describe('samarkanEmail', () => {
+  const { samarkanEmail } = require(JALUR_LOG_AMAN);
+
+  it('menyisakan huruf pertama dan terakhir nama, domain utuh', () => {
+    assert.equal(samarkanEmail('budi.santoso@contoh.test'), 'b***o@contoh.test');
+    // Domain dibiarkan utuh: ia bukan pengenal satu orang, dan justru bagian
+    // yang berguna saat menelusuri kegagalan SMTP yang mengelompok pada satu
+    // penyedia surat.
+    assert.equal(samarkanEmail('admin@utero.cloud'), 'a***n@utero.cloud');
+  });
+
+  it('nama sependek dua karakter disamarkan seluruhnya', () => {
+    // `b***i` dari `bi` akan MEMBOCORKAN seluruh nama, bukan menyamarkannya.
+    assert.equal(samarkanEmail('bi@contoh.test'), '***@contoh.test');
+    assert.equal(samarkanEmail('b@contoh.test'), '***@contoh.test');
+  });
+
+  it('nilai yang bukan alamat disamarkan seluruhnya, bukan ditebak', () => {
+    assert.equal(samarkanEmail('bukan-alamat'), '***');
+    assert.equal(samarkanEmail('@contoh.test'), '***');
+    assert.equal(samarkanEmail('budi@'), '***');
+  });
+
+  it('tidak melempar untuk nilai yang bukan teks', () => {
+    // Pemanggilnya sedang menulis log. Log yang menggagalkan permintaan adalah
+    // kerugian yang jauh lebih besar daripada log yang kabur.
+    for (const nilai of [null, undefined, 12345, {}, []]) {
+      assert.doesNotThrow(() => samarkanEmail(nilai));
+    }
+    assert.equal(samarkanEmail(null), '(bukan-teks)');
+    assert.equal(samarkanEmail('   '), '(kosong)');
+  });
+
+  it('hasilnya tidak pernah memuat nama asli utuh', () => {
+    const hasil = samarkanEmail('budi.santoso@contoh.test');
+    assert.doesNotMatch(hasil, /budi\.santoso/);
+    assert.doesNotMatch(hasil, /santoso/);
+  });
+});
+
+describe('tidak ada alamat email mentah di log', () => {
+  const BERKAS = [
+    ['mail', JALUR_MAIL],
+    ['update-order', JALUR_ROUTE_UPDATE_ORDER],
+    ['record-payment', JALUR_ROUTE_RECORD_PAYMENT],
+    ['webhook', JALUR_ROUTE_WEBHOOK_XENDIT],
+    ['booking/cancel', JALUR_ROUTE_CANCEL],
+    ['booking/create', JALUR_ROUTE_BOOKING],
+    ['request-refund', JALUR_ROUTE_REFUND],
+    ['add-charge', JALUR_ROUTE_ADD_CHARGE],
+  ];
+
+  function kodeSaja(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  for (const [nama, jalur] of BERKAS) {
+    it(`${nama} tidak mencetak alamat email ke log`, () => {
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+      const barisLog = kode
+        .split('\n')
+        .filter((baris) => /console\.(log|warn|error|info|debug)/.test(baris));
+
+      for (const baris of barisLog) {
+        // `samarkanEmail(...)` di baris yang sama adalah bentuk yang benar, jadi
+        // baris itu dilewati sebelum pola mentahnya dicocokkan.
+        if (/samarkanEmail\(/.test(baris)) continue;
+
+        // Teks di dalam tanda kutip dibuang lebih dulu. Yang dicari adalah NILAI
+        // yang diserahkan ke log, bukan kata yang kebetulan muncul di pesannya —
+        // `"Penerima (to) tidak didefinisikan"` tidak memuat alamat siapa pun.
+        // Interpolasi `${...}` di dalam template string sengaja dipertahankan,
+        // karena itu justru bentuk kebocoran yang paling sering terjadi.
+        const nilaiSaja = baris
+          .replace(/`(?:[^`\\$]|\\.|\$(?!\{))*`/g, '``')
+          .replace(/`((?:[^`\\]|\\.)*)`/g, (_, isi) => (isi.match(/\$\{[^}]*\}/g) ?? []).join(' '))
+          .replace(/"(?:[^"\\]|\\.)*"/g, '""')
+          .replace(/'(?:[^'\\]|\\.)*'/g, "''");
+
+        assert.doesNotMatch(
+          nilaiSaja,
+          /\b(\w+\.)*user\.email\b|\badminEmail\b|\bto\b/,
+          `${nama}: ${baris.trim()}`
+        );
+      }
+    });
+  }
+});
+
+// ===========================================================================
 // JUDUL SURAT SELALU MENYEBUT PESANANNYA
 // ===========================================================================
 //
@@ -6888,10 +6992,48 @@ describe('penutupan tagihan pada pembatalan mandiri', () => {
     });
   }
 
-  function permintaanCancel() {
+  function permintaanCancel(isi = { orderId: 'booking-1' }) {
     return new Request('https://contoh.test/api/booking/cancel', {
       method: 'POST',
-      body: JSON.stringify({ orderId: 'booking-1' }),
+      body: JSON.stringify(isi),
+    });
+  }
+
+  // =========================================================================
+  // FILTER PRISMA YANG DISELUNDUPKAN LEWAT BADAN PERMINTAAN
+  // =========================================================================
+  //
+  // `orderId` masuk langsung ke `where: { id: orderId }`. Nilai berupa OBJEK
+  // tidak dibaca Prisma sebagai id, melainkan sebagai filter — `{"not":""}`
+  // karena itu cocok dengan SEMUA baris yang lolos syarat lainnya, dan
+  // `updateMany` membatalkan seluruh pesanan `PENDING_PAYMENT` milik pemanggil
+  // dalam satu permintaan. Syarat `userId` membatasi kerusakannya pada pesanan
+  // sendiri, tapi satu klik yang dimaksudkan untuk satu pesanan tetap
+  // menghanguskan semuanya, termasuk tanggal billboard yang sudah dipesan.
+  //
+  // Gerbang `if (!orderId)` TIDAK cukup: objek adalah nilai truthy.
+  for (const [judul, nilai] of [
+    ['filter Prisma', { not: '' }],
+    ['daftar id', { in: ['booking-1', 'booking-2'] }],
+    ['angka', 12345],
+    ['null', null],
+    ['teks kosong', '   '],
+  ]) {
+    it(`orderId berupa ${judul} ditolak 400 tanpa membuka transaksi`, async () => {
+      let transaksiDibuka = 0;
+      const prismaPalsu = {
+        async $transaction() {
+          transaksiDibuka += 1;
+          throw new Error('transaksi tidak boleh dibuka untuk orderId yang tidak sah');
+        },
+      };
+
+      const response = await buatRouteCancel(prismaPalsu).POST(permintaanCancel({ orderId: nilai }));
+      const isi = await response.json();
+
+      assert.equal(response.status, 400, judul);
+      assert.match(isi.message, /ID pesanan tidak valid/);
+      assert.equal(transaksiDibuka, 0, judul);
     });
   }
 
