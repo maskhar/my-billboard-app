@@ -81,7 +81,14 @@ export default async function OrderDetailPage(props: Props) {
 
   // Status Merah
   const isFailed = s === 'CANCELLED' || s === 'REFUNDED';
-  const hasPhoto = !!order.installationProof;
+
+  // Nilainya ditahan di variabel, bukan diperiksa lewat `!!`, supaya `tsc`
+  // benar-benar mempersempit tipenya. `hasPhoto = !!order.installationProof`
+  // menghasilkan boolean yang tidak dikaitkan kembali ke kolomnya, sehingga
+  // `src`/`href` di bawah tetap menerima `string | null` — dua galat `tsc` yang
+  // sudah lama ada di file ini, dan sekaligus sumber `src={null}` yang membuat
+  // browser meminta ulang halaman ini sebagai gambar.
+  const buktiPasang = order.installationProof;
 
 
   return (
@@ -145,15 +152,15 @@ export default async function OrderDetailPage(props: Props) {
             
             
             {/* AREA BUKTI FOTO (Hanya muncul jika Status Active + Ada Foto) */}
-              {hasPhoto && (
+              {buktiPasang && (
                   <div className="bg-green-50/50 border border-green-200 rounded-xl p-6 mb-8 flex gap-6 items-center animate-in fade-in slide-in-from-bottom-2">
                       <div className="w-24 h-24 bg-white rounded-lg p-1 shadow-sm shrink-0">
-                           <img src={order.installationProof} className="w-full h-full object-cover rounded border border-gray-100 cursor-pointer hover:opacity-80"/>
+                           <img src={buktiPasang} alt="Bukti pemasangan iklan di lokasi" className="w-full h-full object-cover rounded border border-gray-100 cursor-pointer hover:opacity-80"/>
                       </div>
                       <div className="flex-1">
                           <h4 className="font-bold text-green-800 text-sm mb-1 flex items-center gap-2"><ImageIcon size={16}/> Iklan Telah Tayang!</h4>
                           <p className="text-xs text-gray-600 mb-3">Laporan lapangan tersedia. Klik tombol di bawah untuk mengunduh dokumentasi lengkap.</p>
-                          <a href={order.installationProof} target="_blank" className="text-[10px] bg-white text-green-700 font-bold px-3 py-2 rounded border border-green-200 shadow-sm inline-flex items-center gap-1 hover:bg-green-100 hover:border-green-300 transition">
+                          <a href={buktiPasang} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-white text-green-700 font-bold px-3 py-2 rounded border border-green-200 shadow-sm inline-flex items-center gap-1 hover:bg-green-100 hover:border-green-300 transition">
                               <Download size={12}/> Lihat/Unduh Foto
                           </a>
                       </div>
