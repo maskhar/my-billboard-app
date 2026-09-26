@@ -34,6 +34,10 @@ async function main() {
   console.log("🌱 Mulai Refresh Data...");
 
   // 1. HAPUS SEMUA DATA LAMA (URUTAN PENTING BIAR TIDAK ERROR)
+  // Payment memakai FK RESTRICT ke Booking supaya riwayat uang tidak hilang lewat
+  // penghapusan pesanan. Seed lokal yang memang bersifat destruktif harus
+  // menghapus fakta pembayaran lebih dulu.
+  await prisma.payment.deleteMany();
   await prisma.booking.deleteMany();
   await prisma.billboardHistory.deleteMany();
   await prisma.billboard.deleteMany();
