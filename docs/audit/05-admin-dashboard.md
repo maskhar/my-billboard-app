@@ -376,8 +376,8 @@ Severity: **CRITICAL** (fitur mati / angka salah di produksi) · **HIGH** · **M
 |---|---|---|---|---|---|---|
 | F-01 | CRITICAL | Fitur hilang | Modal transfer refund dihapus, tombol "Trf Sekarang" mati | `src/components/admin/OrderActions.tsx:174`, komentar di `:214-215` | `setShowTransferModal(true)` dipanggil tapi JSX modal tidak ada → **admin tidak bisa memproses refund sama sekali**. Uang pelanggan tertahan | Bangun modal refund: input nominal, upload bukti transfer, pilih rekening, lalu `updateStatus('REFUNDED', { refundProof, refundAmount })` |
 | F-02 | CRITICAL | Auth/Role | Role gate memblokir `CS` & `OPERATOR` sebelum percabangan layout | `src/app/admin/(dashboard)/layout.tsx:89-98` | `allowedRoles` hanya `['ADMIN','SUPER_ADMIN']`; cek `CS` di `:96` **mati**. Seluruh `CS_*` unreachable; user `OPERATOR` lihat "Akses Ditolak" | Tambah `'CS'`,`'OPERATOR'` ke `allowedRoles`, lalu routing per-role. Tetapkan enum role di Prisma (`schema.prisma:32` masih `String`) |
-| F-03 | HIGH | Angka salah | **Omzet menghitung order `REFUNDED` sebagai pendapatan** | `src/app/admin/(dashboard)/page.tsx:33`; `actions.ts:45` | Kartu "Total Omzet" dan grafik "Tren Pendapatan" **melebih-lebihkan pendapatan** sebesar total refund. Keputusan bisnis diambil dari angka salah | Ubah ke `status: { in: ['PAID_CONFIRMED','ACTIVE'] }` di kedua file. Tampilkan refund sebagai metrik terpisah |
-| F-04 | HIGH | Angka salah | "Total Spending" pelanggan juga memasukkan `REFUNDED` dan melewatkan `PAID_CONFIRMED` | `src/app/admin/(dashboard)/users/UserClientPage.tsx:51` | Definisi "uang masuk" berbeda dari dashboard (`page.tsx:33`) → tiga definisi di tiga tempat | Ekstrak satu helper `isRevenueStatus(status)` di `src/lib/`, pakai di semua tempat |
+| F-03 | HIGH | Angka salah | **Omzet menghitung order `REFUNDED` sebagai pendapatan** | `src/app/admin/(dashboard)/page.tsx:33`; `actions.ts:45` | Kartu "Total Omzet" dan grafik "Tren Pendapatan" **melebih-lebihkan pendapatan** sebesar total refund. Keputusan bisnis diambil dari angka salah | ✅ **SELESAI** — bukan lewat daftar status pesanan (lihat catatan di bawah tabel), melainkan `Payment` berstatus `PAID` sebagai satu-satunya bukti uang masuk, dengan refund selesai sebagai pengurang terpisah |
+| F-04 | HIGH | Angka salah | "Total Spending" pelanggan juga memasukkan `REFUNDED` dan melewatkan `PAID_CONFIRMED` | `src/app/admin/(dashboard)/users/UserClientPage.tsx:51` | Definisi "uang masuk" berbeda dari dashboard (`page.tsx:33`) → tiga definisi di tiga tempat | ✅ **SELESAI** — ketiga definisi dihapus, semuanya membaca `uangMasuk()`/`uangMasukSemua()` di `src/lib/pembayaran.ts`. Helper `isRevenueStatus(status)` yang disarankan di sini TIDAK dibuat; alasannya di catatan di bawah tabel |
 | F-05 | HIGH | Responsif | **Sidebar hilang di < 768px tanpa pengganti — navigasi admin mati di HP** | `src/app/admin/(dashboard)/layout.tsx:39` (`hidden md:flex`) | Admin yang login di HP **tidak bisa berpindah halaman sama sekali** | Tambah `@headlessui/react` `<Dialog>` sebagai drawer + tombol hamburger di header (`:68`). Library sudah terpasang |
 | F-06 | HIGH | Performa/Bug | Socket.io dibuat ulang setiap ganti percakapan (reconnect storm) | `src/app/admin/_components/cs/CS_InboxLayout.tsx:176-193` | Dependency `[selectedSession]` → connect/disconnect tiap klik; race condition, pesan hilang/ganda | Ubah dependency ke `[]`, simpan `selectedSession` di `useRef` dan baca di dalam handler `newMessage` |
 | F-07 | HIGH | Konfigurasi | URL socket hardcode `http://localhost:3001` | `src/app/admin/_components/cs/CS_InboxLayout.tsx:177` | **Live chat mati total di produksi** | Pakai `process.env.NEXT_PUBLIC_SOCKET_URL` |
@@ -427,6 +427,42 @@ Severity: **CRITICAL** (fitur mati / angka salah di produksi) · **HIGH** · **M
 | F-51 | LOW | UX | Seleksi transaksi ter-reset ke item pertama setelah refresh | `TransactionClient.tsx:140` | Admin kehilangan konteks setiap mutasi | Simpan `selectedId`, cari ulang objeknya dari props |
 | F-52 | LOW | UX | Modal user me-reset form saat dibuka/ditutup | `UserFormModal.tsx:50-61` | Salah klik = semua ketikan hilang tanpa peringatan | Reset hanya setelah submit sukses |
 | F-53 | LOW | Fitur hilang | Tidak ada active state pada menu sidebar | `layout.tsx:46` | Admin tidak tahu posisi halaman. `CS_Sidebar.tsx:27` justru sudah benar | Pakai `usePathname()` |
+
+### Catatan penyelesaian F-03 & F-04 (27 Sep 2026)
+
+Laporan ini menyarankan dua hal yang **tidak dikerjakan**, dan keduanya sengaja
+ditinggalkan karena premisnya salah:
+
+1. **`status: { in: ['PAID_CONFIRMED','ACTIVE'] }`** (F-03). Status *pesanan*
+   bukan bukti uang masuk. `PAID_CONFIRMED` hanya berarti seseorang menekan
+   tombol verifikasi di dashboard admin — tidak ada nominal, tidak ada waktu
+   terima, tidak ada bukti. Menghitung omzet dari daftar status berarti
+   membukukan seluruh `totalPrice` setiap pesanan yang lolos daftar itu,
+   termasuk pesanan DP yang uangnya baru masuk sebagian.
+2. **Helper `isRevenueStatus(status)`** (F-04). Helper berbasis status hanya
+   menyeragamkan kesalahan yang sama ke tiga tempat sekaligus. Yang dibutuhkan
+   bukan satu daftar status bersama, tapi satu *sumber angka* bersama.
+
+Yang benar-benar dipasang:
+
+- **`Payment` berstatus `PAID` adalah satu-satunya bukti uang masuk.** Setiap
+  baris punya nominalnya sendiri (`jumlah`), waktu terimanya sendiri (`paidAt`),
+  dan tujuannya (`DP` / `FULL` / `PELUNASAN` / `TAMBAHAN`). Status ini hanya
+  ditulis webhook Xendit, bukan tombol admin.
+- **Semua pembaca lewat [`src/lib/pembayaran.ts`](../../src/lib/pembayaran.ts)**
+  (`uangMasuk()`, `uangMasukSemua()`, `sisaTagihan()`, `sisaTambahan()`). Tiga
+  definisi yang berbeda di `page.tsx`, `actions.ts`, dan `UserClientPage.tsx`
+  sudah tidak ada lagi.
+- **Refund selesai menjadi pengurang terpisah**, dibaca dari
+  `Booking.refundAmount` pada pesanan `REFUNDED` — bukan status yang dikeluarkan
+  dari daftar. Bedanya nyata: pesanan yang direfund sebagian tetap membukukan
+  uang yang memang tidak dikembalikan.
+- **Grafik tren membukukan tiap penerimaan pada `Payment.paidAt` miliknya
+  sendiri.** Sebelumnya seluruh nilai kontrak jatuh di bulan pesanan dibuat,
+  sehingga pelunasan yang masuk tiga bulan kemudian tercatat di bulan DP.
+- **`UserClientPage.tsx:51` tidak lagi menghitung apa pun.** Angkanya disusun
+  server di `users/page.tsx` dan diserahkan sebagai angka jadi, sejalan dengan
+  batas "Client Component hanya menerima hasil hitung server".
 
 ---
 
@@ -542,7 +578,7 @@ JSX modal transfer **tidak ada di file**; yang tersisa hanya komentar `:214-215`
 ### Fase 0 — Hentikan Pendarahan (1–2 hari)
 Perbaikan kecil, dampak besar. Kerjakan lebih dulu.
 
-1. **F-03 + F-04** — Perbaiki perhitungan omzet: buang `REFUNDED` dari `page.tsx:33` dan `actions.ts:45`; samakan `UserClientPage.tsx:51`. Ekstrak `isRevenueStatus()` ke `src/lib/`. *(± 1 jam, menghentikan angka salah)*
+1. ~~**F-03 + F-04** — Perbaiki perhitungan omzet.~~ ✅ **SELESAI (27 Sep 2026).** Dikerjakan lebih dalam daripada rencana ini: bukan menambal daftar status dan mengekstrak `isRevenueStatus()`, melainkan menjadikan `Payment` berstatus `PAID` satu-satunya bukti uang masuk, dibaca semua halaman lewat `src/lib/pembayaran.ts`, dengan refund selesai sebagai pengurang terpisah. Alasan lengkapnya di "Catatan penyelesaian F-03 & F-04" setelah tabel temuan. *(Perkiraan 1 jam di sini terlalu rendah — perbaikan yang benar butuh tabel `Payment` beserta webhook penulisnya.)*
 2. **F-02** — Tambah `'CS'`,`'OPERATOR'` ke `allowedRoles` di `layout.tsx:89`; jadikan enum role di `schema.prisma:32`.
 3. **F-07** — `NEXT_PUBLIC_SOCKET_URL` menggantikan `localhost:3001`. *(Menghidupkan live chat di produksi)*
 4. **F-08** — Kembalikan autentikasi pada `billboards/page.tsx:17-21`, hapus fallback localhost.

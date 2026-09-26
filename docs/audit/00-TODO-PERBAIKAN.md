@@ -244,10 +244,28 @@ Gelombang solo harus mendarat lebih dulu — `middleware.ts` adalah fondasi yang
 
 | # | Task | File | Ref | Status |
 |---|---|---|---|---|
-| 2.16 | ⚠️ **Omzet menghitung order `REFUNDED` sebagai pendapatan** — kartu KPI & grafik melebih-lebihkan omzet sebesar total refund | `admin/(dashboard)/page.tsx:33`, `actions.ts:45` | `[05]F-03` | [ ] |
-| 2.17 | Satukan definisi "uang masuk" — saat ini **3 definisi berbeda di 3 file**. Ekstrak helper `isRevenueStatus(status)` di `src/lib/` | `page.tsx:33`, `actions.ts:45`, `UserClientPage.tsx:51` | `[05]F-04` | [ ] |
-| 2.18 | Keluarkan `REFUNDED` dari `totalSpent` pelanggan | `src/app/dashboard/DashboardWrapper.tsx:39` | `[02]DB-30` | [ ] |
-| 2.19 | Perbaiki "Total Spending" yang melewatkan `PAID_CONFIRMED` | `UserClientPage.tsx:51` | `[05]F-04` | [ ] |
+| 2.16 | ⚠️ **Omzet menghitung order `REFUNDED` sebagai pendapatan** — kartu KPI & grafik melebih-lebihkan omzet sebesar total refund | `admin/(dashboard)/page.tsx`, `actions.ts` | `[05]F-03` | [x] |
+| 2.17 | Satukan definisi "uang masuk" — saat ini **3 definisi berbeda di 3 file** | `page.tsx`, `actions.ts`, `users/page.tsx` | `[05]F-04` | [x] |
+| 2.18 | Keluarkan `REFUNDED` dari `totalSpent` pelanggan | `src/app/dashboard/DashboardWrapper.tsx` | `[02]DB-30` | [x] |
+| 2.19 | Perbaiki "Total Spending" yang melewatkan `PAID_CONFIRMED` | `users/page.tsx` | `[05]F-04` | [x] |
+
+> **Catatan penyelesaian 2.16–2.19 (27 Sep 2026).** Keempatnya tuntas sekaligus,
+> tapi **bukan** lewat `isRevenueStatus(status)` seperti yang disarankan laporan
+> `[05]`. Helper itu tidak pernah dibuat, dan sengaja: status *pesanan* bukan
+> bukti uang masuk. `PAID_CONFIRMED` hanya berarti seseorang menekan tombol
+> verifikasi, dan pesanan DP berstatus `ACTIVE` uangnya baru masuk sebagian —
+> helper berbasis status akan menghitung kontrak penuh sebagai pendapatan.
+>
+> Yang dipakai sebagai gantinya: baris `Payment` berstatus `PAID` sebagai
+> satu-satunya bukti uang masuk, dibaca lewat `uangMasuk()` /`uangMasukSemua()`
+> di [`src/lib/pembayaran.ts`](../../src/lib/pembayaran.ts). Refund yang selesai
+> menjadi PENGURANG terpisah dari `Booking.refundAmount` pada pesanan `REFUNDED`,
+> bukan status yang dikecualikan dari daftar. Grafik tren membukukan tiap
+> penerimaan pada `Payment.paidAt` miliknya sendiri, sehingga pelunasan yang
+> masuk berbulan-bulan kemudian tidak lagi tercatat di bulan DP.
+>
+> `UserClientPage.tsx:51` tidak lagi menghitung apa pun; angkanya disusun server
+> di `users/page.tsx` dan diserahkan sebagai angka jadi.
 
 ## 2E. Tanggal & kedaluwarsa
 
