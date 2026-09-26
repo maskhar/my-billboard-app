@@ -46,6 +46,82 @@ export type TabelPaymentTutup = {
 };
 
 /**
+ * Tenggang sebelum tagihan yang sesinya kedaluwarsa benar-benar ditutup.
+ *
+ * Sesi yang baru saja mati bisa masih menerima uang: bank menyelesaikan
+ * transfernya beberapa menit setelah gerbang menyatakan sesinya habis. Jarak ini
+ * membuat penyapu tidak berlomba dengan webhook yang sedang berjalan.
+ *
+ * Bukan jaminan, dan tidak perlu menjadi jaminan: sejak webhook MENCATAT uang
+ * yang masuk ke tagihan tertutup lalu menandainya untuk ditinjau admin
+ * (`TAGIHAN_SUDAH_DITUTUP` di `pelunasan-webhook.ts`), tagihan yang ditutup
+ * terlalu cepat tidak lagi membuat uang hilang dari pembukuan. Tenggang ini
+ * hanya mengurangi jumlah setoran yang perlu ditinjau manusia.
+ */
+export const TENGGANG_SAPU_TAGIHAN_MS = 15 * 60 * 1000;
+
+/**
+ * Tutup (`EXPIRED`) tagihan yang sesi pembayarannya sudah kedaluwarsa.
+ *
+ * KENAPA PERLU, DAN APA YANG MACET TANPA INI
+ * ------------------------------------------
+ * Baris `PENDING` yang `providerSessionId`-nya terisi tidak pernah dibereskan
+ * siapa pun kecuali pembeli itu sendiri kembali menekan Bayar — di situ
+ * `tutupLaluBukaUlang` di `sesi-pembayaran.ts` menutupnya lalu membuat
+ * penggantinya. Pembeli yang tidak pernah kembali meninggalkannya selamanya, dan
+ * baris itu:
+ *
+ * 1. menempati pasangan `(bookingId, tujuan)` pada indeks unik bersyarat
+ *    `payment_satu_tagihan_menganggur`, sehingga tagihan pengganti dengan tujuan
+ *    yang sama tidak bisa dibuat sama sekali;
+ * 2. membuat `add-charge` menolak 409 "pembeli sedang membayar" untuk SELAMANYA
+ *    pada pesanan itu, karena gerbangnya membaca `providerSessionId` yang terisi
+ *    sebagai bukti ada sesi hidup — padahal sesinya sudah mati berbulan-bulan;
+ * 3. terbaca `tagihanBerikutnya` sebagai tagihan yang menunggu dibayar dengan
+ *    nominal yang mungkin sudah tidak berlaku.
+ *
+ * `EXPIRED`, BUKAN `VOIDED`. Keduanya sama-sama "tidak akan dibayar", tapi
+ * sebabnya berbeda dan bedanya terbaca di pembukuan: `VOIDED` berarti
+ * pesanannya yang tutup (`tutupTagihanMenganggur`), `EXPIRED` berarti hanya
+ * sesinya yang mati sementara pesanannya masih berjalan dan masih boleh
+ * dibukakan tagihan baru.
+ *
+ * Aman dijalankan berulang: baris yang sudah tidak `PENDING` tidak ikut tersapu.
+ *
+ * @param bookingId Bila diisi, hanya menyapu tagihan pesanan itu.
+ * @returns jumlah tagihan yang ditutup.
+ */
+export async function sapuTagihanKedaluwarsa(
+  tx: { payment: TabelPaymentTutup },
+  sekarang: Date = new Date(),
+  bookingId?: string
+): Promise<number> {
+  const batas = new Date(sekarang.getTime() - TENGGANG_SAPU_TAGIHAN_MS);
+
+  const { count } = await tx.payment.updateMany({
+    where: {
+      status: PaymentStatus.PENDING,
+      // `expiresAt: null` TIDAK ikut tersapu, dan itu bukan kelalaian: nilainya
+      // null pada tagihan yang belum pernah dibukakan checkout — kewajiban yang
+      // masih sah menunggu pembeli, bukan sesi yang mati. Yang null karena
+      // pesanannya tutup ditangani `tutupTagihanMenganggur`.
+      expiresAt: { not: null, lt: batas },
+      ...(bookingId ? { bookingId } : {}),
+    },
+    data: {
+      status: PaymentStatus.EXPIRED,
+      // Alasan sama seperti `tutupTagihanMenganggur`: lease yang tertinggal
+      // membuat baris tertutup masih terlihat "sedang dikerjakan".
+      sesiClaimToken: null,
+      sesiClaimedAt: null,
+      sesiClaimExpiresAt: null,
+    },
+  });
+
+  return count;
+}
+
+/**
  * Tutup (`VOIDED`) semua tagihan menganggur milik pesanan-pesanan ini.
  *
  * HARUS dipanggil di dalam transaksi yang sama dengan penulisan yang menutup

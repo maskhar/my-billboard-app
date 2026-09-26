@@ -15,6 +15,7 @@ import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
 import { bulat, keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
 import { STATUS_BOLEH_BAYAR_LANJUTAN, sisaTambahan } from "@/lib/pembayaran";
+import { sapuTagihanKedaluwarsa } from "@/lib/tutup-tagihan";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { nomorPesanan } from "@/lib/nomor-pesanan";
 
@@ -90,6 +91,19 @@ export async function POST(req: Request) {
     // dicakup transaksi yang sama: biaya yang tercatat tanpa tagihan adalah
     // kewajiban yang tidak bisa dibayar siapa pun.
     const hasil = await prisma.$transaction(async (tx) => {
+      // TAGIHAN YANG SESINYA SUDAH MATI DISAPU LEBIH DULU.
+      //
+      // Gerbang `providerSessionId` di bawah membaca kolom yang terisi sebagai
+      // bukti "pembeli sedang membayar". Itu benar selama sesinya hidup — dan
+      // salah selamanya sesudah sesinya mati, karena tidak ada apa pun yang
+      // membereskan baris itu kecuali pembeli sendiri kembali menekan Bayar.
+      // Pembeli yang tidak pernah kembali membuat route ini menolak 409 pada
+      // pesanannya untuk SELAMANYA: admin tidak bisa lagi menagihkan biaya
+      // tambahan apa pun, tanpa satu pun keterangan yang menjelaskan sebabnya.
+      //
+      // Disaring ke `orderId` saja: route ini bukan tempat menyapu seluruh tabel.
+      await sapuTagihanKedaluwarsa(tx, new Date(), orderId);
+
       await tx.additionalCharge.create({
         data: {
           bookingId: orderId,

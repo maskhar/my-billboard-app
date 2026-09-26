@@ -4625,18 +4625,39 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
         },
         payment: {
           async updateMany(args) {
-            calls.push('payment.updateMany');
+            const w = args.where;
             const rows = ambilPayment();
+
+            // Route ini memanggil `updateMany` untuk DUA pekerjaan berbeda:
+            // menyapu tagihan yang sesinya mati (`expiresAt`), dan menaikkan
+            // nominal tagihan yang sudah ada (`id`). Keduanya harus dibedakan —
+            // kalau filter sapuan tidak dimodelkan, sapuannya diam-diam menjadi
+            // no-op dan test yang menguji efeknya tidak membuktikan apa pun.
+            if (w.expiresAt) {
+              calls.push('payment.sapuKedaluwarsa');
+              let count = 0;
+              simpanPayment(
+                rows.map((row) => {
+                  if (w.bookingId && row.bookingId !== w.bookingId) return row;
+                  if (row.status !== w.status) return row;
+                  if ((row.expiresAt ?? null) === null) return row;
+                  if (!(row.expiresAt < w.expiresAt.lt)) return row;
+                  count += 1;
+                  return { ...row, ...args.data };
+                })
+              );
+              return { count };
+            }
+
+            calls.push('payment.updateMany');
             const cocok = rows.filter(
               (row) =>
-                row.id === args.where.id &&
-                row.status === args.where.status &&
-                row.providerSessionId === args.where.providerSessionId
+                row.id === w.id &&
+                row.status === w.status &&
+                row.providerSessionId === w.providerSessionId
             );
             if (cocok.length === 0) return { count: 0 };
-            simpanPayment(
-              rows.map((row) => (row.id === args.where.id ? { ...row, ...args.data } : row))
-            );
+            simpanPayment(rows.map((row) => (row.id === w.id ? { ...row, ...args.data } : row)));
             return { count: cocok.length };
           },
           async create(args) {
@@ -4725,10 +4746,15 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
   function tagihan(ganti = {}) {
     return {
       id: 'pay-tambahan',
+      bookingId: 'booking-1',
       tujuan: PaymentTujuan.TAMBAHAN,
       status: PaymentStatus.PENDING,
       jumlah: new Prisma.Decimal('0'),
       providerSessionId: null,
+      // `null` berarti belum pernah dibukakan checkout — sesuai default
+      // `providerSessionId: null` di atas. Test yang butuh sesi mati mengisi
+      // keduanya.
+      expiresAt: null,
       ...ganti,
     };
   }
@@ -4830,6 +4856,71 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
     assert.equal(fake.calls.includes('transaction.rollback'), true);
     assert.equal(fake.calls.includes('transaction.commit'), false);
     assert.equal(emails.length, 0);
+  });
+
+  it('tagihan yang sesinya sudah MATI tidak lagi menolak 409 selamanya', async () => {
+    // Regresi atas kemacetan permanen. Gerbang `providerSessionId` di atas
+    // membaca kolom yang terisi sebagai bukti "pembeli sedang membayar". Itu
+    // benar selama sesinya hidup, dan salah selamanya sesudah sesinya mati:
+    // tidak ada apa pun yang membereskan baris itu kecuali pembeli sendiri
+    // kembali menekan Bayar. Pembeli yang tidak pernah kembali membuat route ini
+    // menolak SETIAP biaya tambahan pada pesanannya untuk selamanya, tanpa satu
+    // pun keterangan yang menjelaskan sebabnya kepada admin.
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('250000') }],
+      payments: [
+        tagihan({
+          jumlah: new Prisma.Decimal('250000'),
+          providerSessionId: 'ps-mati',
+          expiresAt: new Date('2020-01-01T00:00:00.000Z'),
+        }),
+      ],
+    });
+    const { route, emails } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '300000' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.calls.includes('payment.sapuKedaluwarsa'), true);
+    assert.equal(fake.calls.includes('transaction.commit'), true);
+
+    // Baris lama ditutup `EXPIRED`, bukan `VOIDED`: yang mati hanya sesinya,
+    // pesanannya masih berjalan.
+    const lama = fake.payments().find((p) => p.id === 'pay-tambahan');
+    assert.equal(lama.status, PaymentStatus.EXPIRED);
+
+    // Dan tagihan penggantinya benar-benar terbit — inilah yang dulu tidak bisa
+    // terjadi, karena baris `PENDING` lama menempati pasangan
+    // `(bookingId, tujuan)` pada indeks unik bersyarat.
+    const menganggur = fake.payments().filter((p) => p.status === PaymentStatus.PENDING);
+    assert.equal(menganggur.length, 1);
+    assert.equal(menganggur[0].tujuan, PaymentTujuan.TAMBAHAN);
+    // 550.000 ditagihkan seluruhnya, nol yang sudah dibayar.
+    assert.equal(menganggur[0].jumlah.toString(), '550000');
+    assert.equal(emails.length, 1);
+  });
+
+  it('tagihan yang sesinya masih HIDUP tetap menolak 409', async () => {
+    // Batas sapuan harus terbukti punya sisi lain. Sesi yang masih hidup memang
+    // sedang menerima uang atas nominal lama, dan menaikkan nominalnya berarti
+    // uang pembeli diterima gerbang lalu ditolak sistem kita.
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('250000') }],
+      payments: [
+        tagihan({
+          jumlah: new Prisma.Decimal('250000'),
+          providerSessionId: 'ps-hidup',
+          expiresAt: new Date('2099-01-01T00:00:00.000Z'),
+        }),
+      ],
+    });
+    const { route } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '300000' }));
+
+    assert.equal(response.status, 409);
+    assert.equal(fake.payments()[0].status, PaymentStatus.PENDING);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
   });
 
   it('pembuatan sesi yang menang balapan membatalkan seluruh penulisan', async () => {
@@ -5539,6 +5630,187 @@ describe('pemanggil sendEmail mengamankan nilai pengguna', () => {
 // tetap menempati pasangan `(bookingId, tujuan)` pada indeks unik bersyarat
 // `payment_satu_tagihan_menganggur` dan tetap terbaca `tagihanBerikutnya`
 // sebagai kewajiban yang menunggu dibayar.
+// Baris `PENDING` yang `providerSessionId`-nya TERISI sengaja dilewati
+// `tutupTagihanMenganggur`, dan tidak ada apa pun yang membereskannya kecuali
+// pembeli sendiri kembali menekan Bayar. Pembeli yang tidak pernah kembali
+// meninggalkan baris itu selamanya — dan baris itu mengunci pasangan
+// `(bookingId, tujuan)` pada indeks unik bersyarat sekaligus membuat `add-charge`
+// menolak 409 "pembeli sedang membayar" untuk selamanya.
+describe('sapuTagihanKedaluwarsa', () => {
+  const { PaymentStatus } = require('@prisma/client');
+  const { sapuTagihanKedaluwarsa, TENGGANG_SAPU_TAGIHAN_MS } = require(JALUR_TUTUP_TAGIHAN);
+
+  const SEKARANG = new Date('2026-09-27T10:00:00.000Z');
+
+  function buatTx(hasil = { count: 1 }) {
+    const panggilan = [];
+    return {
+      panggilan,
+      tx: {
+        payment: {
+          async updateMany(args) {
+            panggilan.push(args);
+            return hasil;
+          },
+        },
+      },
+    };
+  }
+
+  /** Database kecil yang benar-benar menjalankan filter `where`. */
+  function buatDb(baris) {
+    let rows = baris.map((r) => ({ ...r }));
+    return {
+      rows: () => rows.map((r) => ({ ...r })),
+      tx: {
+        payment: {
+          async updateMany(args) {
+            const w = args.where;
+            let count = 0;
+            rows = rows.map((row) => {
+              if (w.bookingId && row.bookingId !== w.bookingId) return row;
+              if (row.status !== w.status) return row;
+              if (w.expiresAt.not === null && (row.expiresAt ?? null) === null) return row;
+              if (!(row.expiresAt && row.expiresAt < w.expiresAt.lt)) return row;
+              count += 1;
+              return { ...row, ...args.data };
+            });
+            return { count };
+          },
+        },
+      },
+    };
+  }
+
+  function baris(id, ganti = {}) {
+    return {
+      id,
+      bookingId: 'booking-1',
+      status: PaymentStatus.PENDING,
+      // Sesi mati jauh di masa lalu.
+      expiresAt: new Date('2026-09-27T08:00:00.000Z'),
+      providerSessionId: 'ps-mati',
+      ...ganti,
+    };
+  }
+
+  it('menulis EXPIRED, bukan VOIDED', async () => {
+    const { tx, panggilan } = buatTx();
+
+    const jumlah = await sapuTagihanKedaluwarsa(tx, SEKARANG);
+
+    assert.equal(jumlah, 1);
+    // Bedanya terbaca di pembukuan: `VOIDED` berarti PESANANNYA yang tutup,
+    // `EXPIRED` berarti hanya SESINYA yang mati sementara pesanannya masih
+    // berjalan dan masih boleh dibukakan tagihan baru.
+    assert.equal(panggilan[0].data.status, PaymentStatus.EXPIRED);
+    assert.notEqual(panggilan[0].data.status, PaymentStatus.VOIDED);
+    assert.equal(panggilan[0].where.status, PaymentStatus.PENDING);
+  });
+
+  it('menyaring dengan tenggang, bukan dengan waktu sekarang', async () => {
+    const { tx, panggilan } = buatTx();
+
+    await sapuTagihanKedaluwarsa(tx, SEKARANG);
+
+    // Sesi yang baru saja mati bisa masih menerima uang: bank menyelesaikan
+    // transfernya beberapa menit setelah gerbang menyatakan sesinya habis.
+    // Menyapu dengan `sekarang` apa adanya membuat penyapu berlomba dengan
+    // webhook yang sedang berjalan.
+    assert.equal(
+      panggilan[0].where.expiresAt.lt.getTime(),
+      SEKARANG.getTime() - TENGGANG_SAPU_TAGIHAN_MS
+    );
+    assert.ok(TENGGANG_SAPU_TAGIHAN_MS > 0);
+  });
+
+  it('tagihan yang sesinya baru mati di dalam tenggang belum ikut disapu', async () => {
+    const db = buatDb([
+      // Mati 1 menit lalu — masih di dalam tenggang.
+      baris('pay-baru', { expiresAt: new Date(SEKARANG.getTime() - 60 * 1000) }),
+      // Mati jauh sebelum tenggang.
+      baris('pay-lama'),
+    ]);
+
+    const jumlah = await sapuTagihanKedaluwarsa(db.tx, SEKARANG);
+
+    assert.equal(jumlah, 1);
+    const rows = db.rows();
+    assert.equal(rows.find((r) => r.id === 'pay-baru').status, PaymentStatus.PENDING);
+    assert.equal(rows.find((r) => r.id === 'pay-lama').status, PaymentStatus.EXPIRED);
+  });
+
+  it('tagihan yang belum pernah dibukakan checkout TIDAK ikut disapu', async () => {
+    // `expiresAt: null` berarti belum pernah ada sesi — kewajiban yang masih sah
+    // menunggu pembeli, bukan sesi yang mati. Menyapunya berarti menghapus jalur
+    // bayar pembeli yang belum pernah menekan Bayar sekali pun.
+    const db = buatDb([
+      baris('pay-belum', { expiresAt: null, providerSessionId: null }),
+      baris('pay-mati'),
+    ]);
+
+    const jumlah = await sapuTagihanKedaluwarsa(db.tx, SEKARANG);
+
+    assert.equal(jumlah, 1);
+    assert.equal(db.rows().find((r) => r.id === 'pay-belum').status, PaymentStatus.PENDING);
+  });
+
+  it('melepas lease pembuatan sesi', async () => {
+    const { tx, panggilan } = buatTx();
+
+    await sapuTagihanKedaluwarsa(tx, SEKARANG);
+
+    assert.equal(panggilan[0].data.sesiClaimToken, null);
+    assert.equal(panggilan[0].data.sesiClaimedAt, null);
+    assert.equal(panggilan[0].data.sesiClaimExpiresAt, null);
+  });
+
+  it('tidak menulis kolom lain apa pun', async () => {
+    // Termasuk TIDAK mengosongkan `providerSessionId`: kolom itu satu-satunya
+    // jejak bahwa sebuah sesi pernah dibuka, dan jejak itu yang dibaca manusia
+    // saat setoran nyasar perlu dilacak ke sesi Xendit-nya.
+    const { tx, panggilan } = buatTx();
+
+    await sapuTagihanKedaluwarsa(tx, SEKARANG);
+
+    assert.deepEqual(Object.keys(panggilan[0].data).sort(), [
+      'sesiClaimExpiresAt',
+      'sesiClaimToken',
+      'sesiClaimedAt',
+      'status',
+    ]);
+  });
+
+  it('aman dijalankan berulang', async () => {
+    const db = buatDb([baris('pay-1')]);
+
+    assert.equal(await sapuTagihanKedaluwarsa(db.tx, SEKARANG), 1);
+    // Sapuan kedua tidak menemukan apa pun: barisnya sudah tidak `PENDING`.
+    assert.equal(await sapuTagihanKedaluwarsa(db.tx, SEKARANG), 0);
+    assert.equal(db.rows()[0].status, PaymentStatus.EXPIRED);
+  });
+
+  it('bookingId menyaring tagihan pesanan lain', async () => {
+    const db = buatDb([baris('pay-1'), baris('pay-2', { bookingId: 'booking-2' })]);
+
+    const jumlah = await sapuTagihanKedaluwarsa(db.tx, SEKARANG, 'booking-1');
+
+    assert.equal(jumlah, 1);
+    assert.equal(db.rows().find((r) => r.id === 'pay-2').status, PaymentStatus.PENDING);
+  });
+
+  it('tanpa bookingId menyapu seluruh tabel', async () => {
+    const { tx, panggilan } = buatTx();
+
+    await sapuTagihanKedaluwarsa(tx, SEKARANG);
+
+    // Bukan `bookingId: undefined`: Prisma memperlakukan kolom yang ada dengan
+    // nilai undefined sebagai filter yang diabaikan, tapi menuliskannya membuat
+    // maksudnya tidak terbaca. Kuncinya tidak boleh ada sama sekali.
+    assert.equal(Object.hasOwn(panggilan[0].where, 'bookingId'), false);
+  });
+});
+
 describe('tutupTagihanMenganggur', () => {
   const { PaymentStatus } = require('@prisma/client');
   const { tutupTagihanMenganggur } = require(JALUR_TUTUP_TAGIHAN);
@@ -5675,12 +5947,28 @@ describe('sapuPesananKedaluwarsa menutup tagihan pesanan yang hangus', () => {
 
     const tabelPayment = {
       async updateMany(args) {
-        calls.push('payment.updateMany');
+        // Dua penyapu memakai tabel ini dengan filter yang BERBEDA:
+        // `tutupTagihanMenganggur` menyaring `bookingId.in` + `providerSessionId: null`,
+        // sedangkan `sapuTagihanKedaluwarsa` menyaring `expiresAt` tanpa
+        // `bookingId` sama sekali. Filter yang tidak dimodelkan akan diam-diam
+        // mencocokkan semuanya — dan test yang lulus karena itu tidak membuktikan
+        // apa pun.
+        const w = args.where;
+        calls.push(w.expiresAt ? 'payment.sapuKedaluwarsa' : 'payment.updateMany');
         let count = 0;
         payments = payments.map((row) => {
-          if (!args.where.bookingId.in.includes(row.bookingId)) return row;
-          if (row.status !== args.where.status) return row;
-          if (row.providerSessionId !== args.where.providerSessionId) return row;
+          if (w.bookingId?.in && !w.bookingId.in.includes(row.bookingId)) return row;
+          if (w.bookingId && typeof w.bookingId === 'string' && row.bookingId !== w.bookingId) {
+            return row;
+          }
+          if (w.status && row.status !== w.status) return row;
+          if (Object.hasOwn(w, 'providerSessionId') && row.providerSessionId !== w.providerSessionId) {
+            return row;
+          }
+          if (w.expiresAt) {
+            if (w.expiresAt.not === null && (row.expiresAt ?? null) === null) return row;
+            if (w.expiresAt.lt && !(row.expiresAt && row.expiresAt < w.expiresAt.lt)) return row;
+          }
           count += 1;
           return { ...row, ...args.data };
         });

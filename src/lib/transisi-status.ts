@@ -19,7 +19,7 @@
 import { addHours, isAfter } from 'date-fns';
 import { BookingStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { tutupTagihanMenganggur } from '@/lib/tutup-tagihan';
+import { sapuTagihanKedaluwarsa, tutupTagihanMenganggur } from '@/lib/tutup-tagihan';
 
 /**
  * Untuk setiap status: daftar status berikutnya yang boleh dituju.
@@ -203,6 +203,27 @@ export async function sapuPesananKedaluwarsa(billboardId?: string): Promise<numb
   const sekarang = new Date();
 
   try {
+    // TAGIHAN YANG SESINYA MATI DISAPU LEBIH DULU, dan tidak terbatas pada
+    // pesanan yang hangus di bawah.
+    //
+    // Menumpang di sini dengan alasan yang sama seperti penyapu pesanan: sistem
+    // ini tidak punya penjadwal, dan fungsi ini adalah satu-satunya pekerjaan
+    // latar yang benar-benar dijalankan. Tanpa sapuan ini baris `PENDING` yang
+    // checkout-nya pernah dibuka lalu ditinggalkan mengunci pasangan
+    // `(bookingId, tujuan)` pada indeks unik bersyarat selamanya — alasan
+    // lengkapnya di `sapuTagihanKedaluwarsa`.
+    //
+    // DI LUAR transaksi penghangusan: kegagalannya tidak boleh menggagalkan
+    // pelepasan tanggal, dan sebaliknya. Keduanya pekerjaan yang berdiri sendiri.
+    try {
+      const tagihanTersapu = await sapuTagihanKedaluwarsa(prisma, sekarang);
+      if (tagihanTersapu > 0) {
+        console.log(`⌛ [SWEEPER] ${tagihanTersapu} tagihan ditutup karena sesinya kedaluwarsa.`);
+      }
+    } catch {
+      console.error('[SWEEPER] gagal menyapu tagihan kedaluwarsa.');
+    }
+
     // Id dibaca lebih dulu karena `updateMany` tidak memberi tahu baris mana
     // yang berubah, sementara penutupan tagihan perlu tahu pesanan mana yang
     // benar-benar hangus. Tidak dibatasi `take`: batas apa pun menyisakan
