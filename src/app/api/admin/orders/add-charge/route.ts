@@ -11,6 +11,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { PaymentStatus, PaymentTujuan } from "@prisma/client";
 import { authOptions } from "@/lib/auth";
+import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
 import { keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
 import { sisaTambahan } from "@/lib/pembayaran";
@@ -36,7 +37,12 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { orderId, description, amount } = body;
+    const { orderId, amount } = body;
+
+    // Keterangan biaya tampil di invoice pelanggan dan dikirim lewat email.
+    // Dulu diterima apa adanya dari body — objek atau angka jatuh ke Prisma
+    // sebagai 500, dan teks tanpa batas ikut tersimpan lalu tercetak.
+    const description = typeof body.description === 'string' ? body.description.trim().slice(0, 200) : '';
 
     if (!orderId || !description || !amount) {
       return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
@@ -166,7 +172,7 @@ export async function POST(req: Request) {
           subject: `Biaya tambahan — Order #${nomor}`,
           title: 'Ada Biaya Tambahan',
           message:
-            `Biaya tambahan <b>${description}</b> sebesar <b>${rupiah(nominal)}</b> ` +
+            `Biaya tambahan <b>${amankanHtml(description)}</b> sebesar <b>${rupiah(nominal)}</b> ` +
             `dicatat untuk pesanan #${nomor}.<br/>` +
             `Total biaya tambahan yang perlu dibayar saat ini <b>${rupiah(hasil.sisa)}</b>. ` +
             'Buka Dashboard untuk membayarnya.',

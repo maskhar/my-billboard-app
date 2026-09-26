@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { amankanHtml } from "@/lib/html";
 import { sendEmail } from "@/lib/mail";
 import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
 import { addMonths, isBefore, startOfDay } from "date-fns";
@@ -344,11 +345,11 @@ export async function POST(req: Request) {
                 : `Tagihan Lunas Order #${newBooking.id.slice(-6).toUpperCase()} — ${rupiah(totalPrice)}`,
             title: bayarDp ? "Pesanan Diterima — Menunggu DP" : "Pesanan Diterima — Menunggu Pelunasan",
             message: bayarDp
-                ? `Halo ${session.user.name}, pesanan Anda telah kami terima.<br/><br/>` +
+                ? `Halo ${amankanHtml(session.user.name)}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Total nilai pesanan: <b>${rupiah(totalPrice)}</b><br/>` +
                   `Yang perlu dibayar sekarang (DP ${PERSEN_DP}%): <b>${rupiah(dpAmount)}</b><br/>` +
                   `Sisa <b>${rupiah(kurang(totalPrice, dpAmount))}</b> dibayarkan H-3 sebelum tayang.`
-                : `Halo ${session.user.name}, pesanan Anda telah kami terima.<br/><br/>` +
+                : `Halo ${amankanHtml(session.user.name)}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Yang perlu dibayar sekarang (lunas): <b>${rupiah(totalPrice)}</b>`,
             orderDetail: {
                 id: newBooking.id,
@@ -371,7 +372,7 @@ export async function POST(req: Request) {
             subject: `[ADMIN] Order Masuk (${labelTagihan}): ${targetBillboard.title}`,
             title: "Ada Cuan Masuk! 💰",
             message:
-                `User ${session.user.name} baru saja membuat pesanan.<br/>` +
+                `User ${amankanHtml(session.user.name)} baru saja membuat pesanan.<br/>` +
                 `Nilai pesanan: <b>${rupiah(totalPrice)}</b> — skema bayar: <b>${labelTagihan}</b>` +
                 (bayarDp ? `, ditagih sekarang <b>${rupiah(dpAmount)}</b>` : "") +
                 `.<br/>Mohon cek dashboard.`,

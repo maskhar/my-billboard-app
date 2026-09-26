@@ -92,6 +92,11 @@ const JALUR_ROUTE_NOTIFY_LEGACY = path.join(
   'route.ts'
 );
 const JALUR_LEDGER = path.join(__dirname, '..', 'src', 'lib', 'pembayaran.ts');
+const JALUR_HTML = path.join(__dirname, '..', 'src', 'lib', 'html.ts');
+const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
+const JALUR_ROUTE_CANCEL = path.join(
+  __dirname, '..', 'src', 'app', 'api', 'booking', 'cancel', 'route.ts'
+);
 const JALUR_ROUTE_REFUND = path.join(
   __dirname,
   '..',
@@ -4610,6 +4615,233 @@ describe('getRevenueData', () => {
     const hasil = await getRevenueData('all');
 
     assert.deepEqual(hasil, [{ name: "Sep '26", total: 250000 }]);
+  });
+});
+
+// ===========================================================================
+// EMAIL: NILAI PENGGUNA TIDAK PERNAH MENJADI MARKUP
+// ===========================================================================
+//
+// Semua surat disusun sebagai string HTML. Nama akun, alasan refund, nama
+// bank, dan keterangan biaya ditulis pengguna; admin membaca suratnya sebagai
+// kiriman sistem sendiri. Tag yang lolos ke sana dirender klien email sebagai
+// markup — tautan palsu, gambar pelacak, isi yang menyamar sebagai resmi.
+describe('amankanHtml', () => {
+  const { amankanHtml } = require(JALUR_HTML);
+
+  it('mengganti lima karakter bermakna HTML dan membiarkan sisanya', () => {
+    assert.equal(
+      amankanHtml(`<b a="1" b='2'>Tom & Jerry</b>`),
+      '&lt;b a=&quot;1&quot; b=&#39;2&#39;&gt;Tom &amp; Jerry&lt;/b&gt;'
+    );
+    assert.equal(amankanHtml('Budi Santoso'), 'Budi Santoso');
+    assert.equal(amankanHtml('Jl. Soekarno-Hatta No. 1, Malang'), 'Jl. Soekarno-Hatta No. 1, Malang');
+  });
+
+  it('entitas yang sudah ada tetap diubah: pemanggil yang mengamankan dua kali akan melihatnya', () => {
+    assert.equal(amankanHtml('&lt;'), '&amp;lt;');
+  });
+
+  it('nilai kosong menjadi string kosong, bukan teks "null"', () => {
+    assert.equal(amankanHtml(null), '');
+    assert.equal(amankanHtml(undefined), '');
+    assert.equal(amankanHtml(''), '');
+  });
+
+  it('angka dan Decimal dicetak sebagai teks', () => {
+    const { Prisma } = require('@prisma/client');
+    assert.equal(amankanHtml(3), '3');
+    assert.equal(amankanHtml(new Prisma.Decimal('1500000.00')), '1500000');
+  });
+});
+
+describe('sendEmail template', () => {
+  function buatMail({ gagal = false } = {}) {
+    const terkirim = [];
+    const mail = muatDenganModulPalsu(JALUR_MAIL, {
+      nodemailer: {
+        createTransport: () => ({
+          sendMail: async (surat) => {
+            if (gagal) throw new Error('SMTP menolak: AUTH PLAIN rahasia-yang-tidak-boleh-bocor');
+            terkirim.push(surat);
+            return { messageId: 'id-1' };
+          },
+        }),
+      },
+    });
+    return { mail, terkirim };
+  }
+
+  function tangkapLog() {
+    const catatan = { error: [], warn: [], log: [] };
+    const asli = { error: console.error, warn: console.warn, log: console.log };
+    console.error = (...args) => catatan.error.push(args.map(String).join(' '));
+    console.warn = (...args) => catatan.warn.push(args.map(String).join(' '));
+    console.log = (...args) => catatan.log.push(args.map(String).join(' '));
+    return {
+      catatan,
+      pulihkan: () => {
+        console.error = asli.error;
+        console.warn = asli.warn;
+        console.log = asli.log;
+      },
+    };
+  }
+
+  async function kirim(mail, surat) {
+    const log = tangkapLog();
+    try {
+      return { ok: await mail.sendEmail(surat), catatan: log.catatan };
+    } finally {
+      log.pulihkan();
+    }
+  }
+
+  const detailBerbahaya = {
+    id: 'booking-<script>alert(1)</script>',
+    billboardTitle: '<img src=x onerror=alert(1)>',
+    billboardAddress: 'Jl. "Utama" & Co',
+    duration: 3,
+    total: '1500000',
+  };
+
+  it('title dan orderDetail diamankan; message dipakai apa adanya', async () => {
+    const { mail, terkirim } = buatMail();
+    process.env.NEXTAUTH_URL = 'https://app.contoh.test';
+
+    const { ok } = await kirim(mail, {
+      to: 'admin@contoh.test',
+      subject: 'Uji',
+      title: '<b>Judul</b>',
+      message: 'Halo <b>Budi</b>',
+      orderDetail: detailBerbahaya,
+    });
+
+    assert.equal(ok, true);
+    assert.equal(terkirim.length, 1);
+    const html = terkirim[0].html;
+
+    // title adalah teks: markup di dalamnya harus menjadi entitas.
+    assert.ok(html.includes('&lt;b&gt;Judul&lt;/b&gt;'));
+    assert.equal(html.includes('<b>Judul</b>'), false);
+
+    // message adalah HTML jadi: pemanggil yang bertanggung jawab, template
+    // tidak boleh merusak markup yang sengaja ditulis.
+    assert.ok(html.includes('Halo <b>Budi</b>'));
+
+    // Setiap kolom orderDetail adalah teks.
+    assert.equal(html.includes('<img src=x'), false);
+    assert.ok(html.includes('&lt;img src=x onerror=alert(1)&gt;'));
+    assert.ok(html.includes('Jl. &quot;Utama&quot; &amp; Co'));
+    assert.equal(html.includes('<script>'), false);
+    assert.match(html, /Rp\s?1\.500\.000/);
+  });
+
+  it('tautan invoice memakai id yang di-encode, bukan disisipkan mentah', async () => {
+    const { mail, terkirim } = buatMail();
+    process.env.NEXTAUTH_URL = 'https://app.contoh.test';
+
+    await kirim(mail, {
+      to: 'admin@contoh.test',
+      subject: 'Uji',
+      title: 'Judul',
+      message: 'Isi',
+      orderDetail: { id: 'abc/../../admin?x=1&y=2', total: '1000' },
+    });
+
+    const html = terkirim[0].html;
+    const href = html.match(/href="([^"]+)"/)[1];
+    const diharapkan =
+      'https://app.contoh.test/invoice/' +
+      encodeURIComponent('abc/../../admin?x=1&y=2').replace(/&/g, '&amp;');
+    assert.equal(href, diharapkan);
+    assert.equal(html.includes('/invoice/abc/../../admin'), false);
+  });
+
+  it('tanpa id tidak ada tautan invoice, dan nomor pesanan menjadi NEW', async () => {
+    const { mail, terkirim } = buatMail();
+
+    await kirim(mail, {
+      to: 'admin@contoh.test',
+      subject: 'Uji',
+      title: 'Judul',
+      message: 'Isi',
+      orderDetail: { total: '1000' },
+    });
+
+    const html = terkirim[0].html;
+    assert.equal(html.includes('/invoice/'), false);
+    assert.ok(html.includes('#NEW'));
+  });
+
+  it('penerima kosong dibatalkan tanpa melempar dan tanpa menyentuh SMTP', async () => {
+    const { mail, terkirim } = buatMail();
+    const { ok } = await kirim(mail, { to: null, subject: 'Uji', title: 'Judul', message: 'Isi' });
+    assert.equal(ok, false);
+    assert.equal(terkirim.length, 0);
+  });
+
+  it('SMTP gagal dijawab false dan log tidak memuat isi galat SMTP', async () => {
+    const { mail } = buatMail({ gagal: true });
+    const { ok, catatan } = await kirim(mail, {
+      to: 'admin@contoh.test',
+      subject: 'Uji',
+      title: 'Judul',
+      message: 'Isi',
+    });
+
+    assert.equal(ok, false);
+    assert.equal(catatan.error.length, 1);
+    // Galat nodemailer membawa jawaban server SMTP; hanya kategorinya yang dicatat.
+    assert.equal(catatan.error[0].includes('rahasia-yang-tidak-boleh-bocor'), false);
+    assert.equal(catatan.error[0].includes('AUTH PLAIN'), false);
+    assert.ok(catatan.error[0].includes('Error'));
+  });
+});
+
+describe('pemanggil sendEmail mengamankan nilai pengguna', () => {
+  const PEMANGGIL = [
+    ['webhook', JALUR_ROUTE_WEBHOOK_XENDIT],
+    ['add-charge', JALUR_ROUTE_ADD_CHARGE],
+    ['update-order', JALUR_ROUTE_UPDATE_ORDER],
+    ['request-refund', JALUR_ROUTE_REFUND],
+    ['booking/create', JALUR_ROUTE_BOOKING],
+    ['booking/cancel', JALUR_ROUTE_CANCEL],
+  ];
+
+  function kodeSaja(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  for (const [nama, jalur] of PEMANGGIL) {
+    it(`${nama} mengimpor amankanHtml dan tidak menyisipkan nama pengguna mentah`, () => {
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+      assert.match(kode, /from ['"]@\/lib\/html['"]/, `${nama} tidak mengimpor @/lib/html`);
+      // Pola yang dulu ada di setiap pemanggil: nilai pengguna langsung di
+      // dalam template string tanpa pembungkus.
+      assert.doesNotMatch(kode, /\$\{[\w.]*user\.name\}/, `${nama} menyisipkan user.name mentah`);
+      assert.doesNotMatch(kode, /\$\{[\w.]*billboard\.title\}/, `${nama} menyisipkan judul billboard mentah`);
+      assert.doesNotMatch(kode, /\$\{notifikasi\.namaPembeli[^}]*\}/, `${nama} menyisipkan namaPembeli mentah`);
+    });
+  }
+
+  it('request-refund mengamankan alasan dan data rekening di surat admin', () => {
+    const kode = kodeSaja(fs.readFileSync(JALUR_ROUTE_REFUND, 'utf8'));
+    assert.match(kode, /amankanHtml\(alasan\)/);
+    assert.match(kode, /amankanHtml\(namaBank\)/);
+    assert.match(kode, /amankanHtml\(nomorRekening\)/);
+    assert.doesNotMatch(kode, /\$\{alasan\}/);
+  });
+
+  it('add-charge mengamankan keterangan biaya dan membatasi bentuknya', () => {
+    const kode = kodeSaja(fs.readFileSync(JALUR_ROUTE_ADD_CHARGE, 'utf8'));
+    assert.match(kode, /amankanHtml\(description\)/);
+    assert.doesNotMatch(kode, /\$\{description\}/);
+    assert.match(kode, /typeof body\.description === 'string'/);
   });
 });
 

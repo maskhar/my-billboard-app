@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { amankanHtml } from "@/lib/html";
 import { sendEmail } from "@/lib/mail";
 import { keAngka } from "@/lib/money";
 import { BookingStatus } from "@prisma/client";
@@ -70,7 +71,7 @@ export async function POST(req: Request) {
             to: adminEmail,
             subject: `🚫 Order Dibatalkan User: #${order.id.slice(-6).toUpperCase()}`,
             title: "Pesanan Batal",
-            message: `User <b>${order.user.name}</b> membatalkan pesanan (Fase Pending) untuk billboard <b>${order.billboard.title}</b>.`,
+            message: `User <b>${amankanHtml(order.user.name)}</b> membatalkan pesanan (Fase Pending) untuk billboard <b>${amankanHtml(order.billboard.title)}</b>.`,
             orderDetail: {
                 id: order.id,
                 // Decimal tidak boleh diserahkan apa adanya ke template email:

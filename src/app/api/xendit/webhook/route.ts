@@ -17,6 +17,7 @@
 //    rahasia paling sering bocor tanpa ada yang menyadarinya.
 
 import { NextResponse } from 'next/server';
+import { amankanHtml } from '@/lib/html';
 import { sendEmail } from '@/lib/mail';
 import { keAngka, lebihBesar, rupiah } from '@/lib/money';
 import {
@@ -160,7 +161,9 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
       title: 'Ada Pembayaran Masuk',
       message:
         `${label} sebesar <b>${nominal}</b> masuk untuk pesanan #${nomor} ` +
-        `dari <b>${notifikasi.namaPembeli ?? 'pembeli'}</b>.<br/>` +
+        // Nama akun ditulis pembeli sendiri saat mendaftar; surat ini dibaca
+        // admin sebagai kiriman sistem, jadi isinya tidak boleh membawa markup.
+        `dari <b>${amankanHtml(notifikasi.namaPembeli ?? 'pembeli')}</b>.<br/>` +
         // Sisa pokok ikut di surat admin supaya pesanan DP langsung terbaca
         // sebagai pesanan yang masih menggantung, tanpa membuka dashboard.
         (sisaPokok ? `Sisa pokok setelah setoran ini: <b>${sisaPokok}</b>.<br/>` : '') +

@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { amankanHtml } from "@/lib/html";
 import { sendEmail } from "@/lib/mail";
 import { keAngka, nol, persen, rupiah } from "@/lib/money";
 import { sudahLunas, uangMasuk as uangMasukLedger } from "@/lib/pembayaran";
@@ -144,7 +145,9 @@ export async function POST(req: Request) {
               to: adminEmail,
               subject: `⚠️ Permintaan Refund: #${order.id.slice(-6).toUpperCase()}`,
               title: "User Minta Batal",
-              message: `User <b>${order.user.name}</b> mengajukan pembatalan untuk billboard <b>${order.billboard.title}</b>.<br/>Alasan: "${alasan}"`,
+              // Alasan ditulis pembeli dan dibaca admin sebagai kiriman sistem:
+              // tanpa pengamanan, tag di dalamnya dirender sebagai markup.
+              message: `User <b>${amankanHtml(order.user.name)}</b> mengajukan pembatalan untuk billboard <b>${amankanHtml(order.billboard.title)}</b>.<br/>Alasan: "${amankanHtml(alasan)}"`,
               orderDetail: {
                 id: order.id,
                 total: keAngka(order.totalPrice),
@@ -284,7 +287,7 @@ export async function POST(req: Request) {
                   `Nilai pesanan: ${rupiah(order.totalPrice)}<br/>` +
                   `Uang yang sudah diterima: <b>${rupiah(uangMasuk)}</b>${lunas ? ' (lunas)' : ' (sebagian)'}<br/>` +
                   `Dikembalikan ${PERSEN_REFUND}% dari uang yang diterima: <b>${rupiah(refundNominal)}</b><br/><br/>` +
-                  `Bank: ${namaBank} - ${nomorRekening}`,
+                  `Bank: ${amankanHtml(namaBank)} - ${amankanHtml(nomorRekening)}`,
               orderDetail: {
                 id: order.id,
                 total: keAngka(refundNominal), // Total yg harus ditransfer

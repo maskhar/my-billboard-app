@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { amankanHtml } from "@/lib/html";
 import { sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
@@ -254,7 +255,9 @@ export async function POST(req: Request) {
             subject = `📢 Billboard Anda Sudah Tayang - Order #${updatedOrder.id.slice(-6).toUpperCase()}`;
             title = "Billboard Anda Sudah Tayang!";
             message =
-                `Halo ${updatedOrder.user.name}, billboard "${updatedOrder.billboard.title}" sudah terpasang ` +
+                // Nama akun dan judul billboard adalah teks bebas; surat ini
+                // menyambung HTML, jadi keduanya diamankan dulu.
+                `Halo ${amankanHtml(updatedOrder.user.name)}, billboard "${amankanHtml(updatedOrder.billboard.title)}" sudah terpasang ` +
                 `dan berstatus AKTIF. Foto bukti pemasangan dapat dilihat di dashboard Anda.` +
                 (belumLunas
                     ? `<br/><br/>Catatan tagihan: pembayaran yang sudah kami terima ${rupiah(sudahDibayar)} ` +
@@ -266,7 +269,7 @@ export async function POST(req: Request) {
         else if (newStatus === 'REFUNDED') {
             subject = "💰 Dana Refund Dikembalikan";
             title = "Pengembalian Dana Selesai";
-            message = `Halo ${updatedOrder.user.name}, Admin telah mentransfer pengembalian dana ke rekening Anda. Silakan cek bukti transfer di dashboard website.`;
+            message = `Halo ${amankanHtml(updatedOrder.user.name)}, Admin telah mentransfer pengembalian dana ke rekening Anda. Silakan cek bukti transfer di dashboard website.`;
         }
 
         // Kirim Email jika Subject terisi
