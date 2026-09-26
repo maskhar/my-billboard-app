@@ -35,7 +35,7 @@ import { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } from '@prisma/cli
 import { randomUUID } from 'node:crypto';
 import { prisma as prismaAsli } from './prisma';
 import { uangUntukClient } from './money';
-import { bayarLanjutan, periksaKelayakanSesi } from './pembayaran';
+import { bayarLanjutan, periksaKelayakanSesi, tagihanBerikutnya } from './pembayaran';
 import { nomorPesanan } from './nomor-pesanan';
 import { keE164 } from './telepon';
 import {
@@ -118,6 +118,9 @@ export type HasilSesiPembayaran = {
 type BarisTagihan = {
   id: string;
   tujuan: PaymentTujuan;
+  // Ikut diambil walau query sudah menyaring `PENDING`: `tagihanBerikutnya`
+  // menyaringnya SENDIRI, dan baris tanpa kolom ini akan tersaring habis.
+  status: PaymentStatus;
   jumlah: Prisma.Decimal;
   providerReferenceId: string | null;
   providerSessionId: string | null;
@@ -233,6 +236,7 @@ function gabungDeps(depsSebagian?: DepsSebagian): Deps {
 const PILIH_TAGIHAN = {
   id: true,
   tujuan: true,
+  status: true,
   jumlah: true,
   providerReferenceId: true,
   providerSessionId: true,
@@ -263,19 +267,6 @@ function deskripsiTagihan(bookingId: string, tujuan: PaymentTujuan): string {
           ? 'Biaya tambahan'
           : 'Pembayaran penuh';
   return `${bagian} pesanan #${nomor}`;
-}
-
-/**
- * Tagihan mana yang dibayar sekarang.
- *
- * Yang paling tua lebih dulu. Satu pesanan bisa punya beberapa tagihan
- * menganggur dengan tujuan berbeda (pelunasan dan biaya tambahan hidup
- * bersamaan), dan membayar yang paling lama menunggu adalah urutan yang bisa
- * dijelaskan kepada pembeli maupun kepada pembukuan.
- */
-function tagihanBerikutnya(payments: BarisTagihan[]): BarisTagihan | null {
-  const urut = [...payments].sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-  return urut[0] ?? null;
 }
 
 /**

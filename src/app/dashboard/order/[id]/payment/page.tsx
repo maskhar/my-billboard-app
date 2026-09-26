@@ -18,6 +18,7 @@ import { labelPesanan } from '@/lib/nomor-pesanan';
 import {
   bayarLanjutan,
   periksaKelayakanSesi,
+  tagihanBerikutnya,
   tenggatPelunasan,
   tenggatPelunasanLewat,
 } from '@/lib/pembayaran';
@@ -77,10 +78,13 @@ export default async function PaymentPage({ params }: Props) {
       },
       payments: {
         where: { status: PaymentStatus.PENDING },
-        orderBy: { createdAt: 'asc' },
         select: {
           id: true,
           tujuan: true,
+          // `status` dan `createdAt` bukan hiasan: keduanya dibaca
+          // `tagihanBerikutnya`, dan tanpa `status` seluruh baris tersaring habis.
+          status: true,
+          createdAt: true,
           jumlah: true,
         },
       },
@@ -91,10 +95,12 @@ export default async function PaymentPage({ params }: Props) {
   // orang lain. Ini mencegah ID pesanan menjadi oracle untuk pengguna asing.
   if (!pesanan) notFound();
 
-  // Urutan `createdAt: 'asc'` di atas sama dengan `tagihanBerikutnya` di
-  // `src/lib/sesi-pembayaran.ts`, jadi tagihan yang ditampilkan di sini adalah
-  // tagihan yang benar-benar akan dibuatkan sesi oleh endpoint.
-  const tagihan = pesanan.payments[0] ?? null;
+  // Fungsi yang sama yang dipakai endpoint sesi, bukan `payments[0]` di atas
+  // urutan query. Urutan `createdAt: 'asc'` dulu kebetulan sepakat dengannya;
+  // begitu aturannya berubah (pokok menang atas biaya tambahan) kebetulan itu
+  // berakhir, dan halaman ini akan menampilkan nominal tagihan yang BERBEDA dari
+  // yang dibuka tombol Bayar.
+  const tagihan = tagihanBerikutnya(pesanan.payments);
   const sekarang = new Date();
 
   // Aturannya dibaca dari `src/lib/pembayaran.ts`, bukan ditulis ulang di sini.

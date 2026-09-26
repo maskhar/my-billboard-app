@@ -3910,6 +3910,130 @@ describe('periksaKelayakanSesi', () => {
 });
 
 // ===========================================================================
+// URUTAN TAGIHAN: POKOK MENANG ATAS BIAYA TAMBAHAN
+// ===========================================================================
+// Aturan ini dulu ditulis tiga kali — modul sesi, kartu pesanan, halaman bayar —
+// dan ketiganya "yang paling tua menang". Akibatnya satu biaya tambahan yang
+// dicatat admin lebih dulu mengunci pelunasan di belakangnya: pembeli hanya bisa
+// membayar biaya tambahan, sementara satu-satunya tagihan yang PUNYA tenggat
+// (pokok, H-3 sebelum tayang) tidak bisa dibuka sampai yang tanpa tenggat lunas.
+describe('tagihanBerikutnya', () => {
+  const { PaymentStatus, PaymentTujuan } = require('@prisma/client');
+  const { tagihanBerikutnya } = require(JALUR_LEDGER);
+
+  const T = (menit) => new Date(Date.UTC(2026, 8, 27, 10, menit, 0));
+
+  function baris(ganti) {
+    return {
+      id: 'pay-x',
+      tujuan: PaymentTujuan.PELUNASAN,
+      status: PaymentStatus.PENDING,
+      createdAt: T(0),
+      ...ganti,
+    };
+  }
+
+  it('pokok menang walau biaya tambahan lebih tua', () => {
+    // Inilah regresi yang aturan ini ada untuk mencegahnya.
+    const tambahan = baris({ id: 'tambahan', tujuan: PaymentTujuan.TAMBAHAN, createdAt: T(0) });
+    const pelunasan = baris({ id: 'pelunasan', tujuan: PaymentTujuan.PELUNASAN, createdAt: T(30) });
+
+    assert.equal(tagihanBerikutnya([tambahan, pelunasan]).id, 'pelunasan');
+    // Urutan masukan tidak boleh mengubah jawabannya.
+    assert.equal(tagihanBerikutnya([pelunasan, tambahan]).id, 'pelunasan');
+  });
+
+  it('DP dan FULL juga pokok, jadi ikut menang atas TAMBAHAN', () => {
+    for (const tujuan of [PaymentTujuan.DP, PaymentTujuan.FULL, PaymentTujuan.PELUNASAN]) {
+      const tambahan = baris({ id: 'tambahan', tujuan: PaymentTujuan.TAMBAHAN, createdAt: T(0) });
+      const pokok = baris({ id: 'pokok', tujuan, createdAt: T(45) });
+      assert.equal(tagihanBerikutnya([tambahan, pokok]).id, 'pokok', `${tujuan} harus menang`);
+    }
+  });
+
+  it('di antara tagihan sederajat, yang paling tua menang', () => {
+    const tua = baris({ id: 'tua', createdAt: T(0) });
+    const muda = baris({ id: 'muda', createdAt: T(15) });
+    assert.equal(tagihanBerikutnya([muda, tua]).id, 'tua');
+
+    // Dan di antara dua biaya tambahan pun aturan lamanya tetap berlaku.
+    const tambahanTua = baris({ id: 't-tua', tujuan: PaymentTujuan.TAMBAHAN, createdAt: T(0) });
+    const tambahanMuda = baris({ id: 't-muda', tujuan: PaymentTujuan.TAMBAHAN, createdAt: T(5) });
+    assert.equal(tagihanBerikutnya([tambahanMuda, tambahanTua]).id, 't-tua');
+  });
+
+  it('hanya PENDING yang dipertimbangkan', () => {
+    // Pemanggil yang sudah menyaring di query tidak dirugikan; yang belum tidak
+    // diam-diam mendapat tagihan yang uangnya sudah masuk atau sudah ditutup.
+    const lunas = baris({ id: 'lunas', status: PaymentStatus.PAID, createdAt: T(0) });
+    const hangus = baris({ id: 'hangus', status: PaymentStatus.EXPIRED, createdAt: T(1) });
+    const batal = baris({ id: 'batal', status: PaymentStatus.VOIDED, createdAt: T(2) });
+    const menunggu = baris({ id: 'menunggu', createdAt: T(99) });
+
+    assert.equal(tagihanBerikutnya([lunas, hangus, batal, menunggu]).id, 'menunggu');
+    assert.equal(tagihanBerikutnya([lunas, hangus, batal]), null);
+  });
+
+  it('daftar kosong menjawab null, dan masukan tidak diubah', () => {
+    assert.equal(tagihanBerikutnya([]), null);
+
+    const asli = [
+      baris({ id: 'tambahan', tujuan: PaymentTujuan.TAMBAHAN, createdAt: T(0) }),
+      baris({ id: 'pelunasan', createdAt: T(30) }),
+    ];
+    const salinan = [...asli];
+    tagihanBerikutnya(asli);
+    // `sort` bekerja di tempat. Mengurutkan array milik pemanggil berarti query
+    // Prisma yang sudah punya `orderBy` diam-diam berubah urutannya di tempat lain.
+    assert.deepEqual(
+      asli.map((p) => p.id),
+      salinan.map((p) => p.id)
+    );
+  });
+});
+
+// ===========================================================================
+// SATU ATURAN, SATU SALINAN: TIDAK ADA PENGURUT TAGIHAN LOKAL
+// ===========================================================================
+describe('urutan tagihan tidak ditulis ulang di luar pembayaran.ts', () => {
+  const BERKAS = [
+    'src/lib/sesi-pembayaran.ts',
+    'src/app/dashboard/DashboardWrapper.tsx',
+    'src/app/dashboard/order/[id]/payment/page.tsx',
+  ];
+
+  /** Komentar dibuang: kalimat yang MENYEBUT pola lama bukan pemakaiannya. */
+  function kodeSaja(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('ketiga pemanggil mengimpor tagihanBerikutnya, bukan menyortir sendiri', () => {
+    for (const berkas of BERKAS) {
+      const jalur = path.join(__dirname, '..', ...berkas.split('/'));
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+
+      assert.match(
+        kode,
+        /tagihanBerikutnya/,
+        `${berkas} harus memakai tagihanBerikutnya dari pembayaran.ts`
+      );
+
+      // Pola salinan lama: `sort` atas `createdAt`. Satu salinan yang tertinggal
+      // berarti tombol Bayar dan halaman bayar bisa menyebut tagihan berbeda.
+      assert.doesNotMatch(
+        kode,
+        /\.sort\([^)]*createdAt/s,
+        `${berkas} tidak boleh mengurutkan tagihan sendiri`
+      );
+    }
+  });
+});
+
+// ===========================================================================
 // REFUND PEMBELI: NOMINAL DARI UANG MASUK, BUKAN DARI RENCANA DP
 // ===========================================================================
 describe('POST /api/booking/request-refund step bank', () => {

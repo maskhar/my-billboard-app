@@ -216,6 +216,50 @@ export function bayarLanjutan(tujuan: PaymentTujuan): boolean {
   return tujuan === PaymentTujuan.PELUNASAN || tujuan === PaymentTujuan.TAMBAHAN;
 }
 
+/** Bentuk minimum sebuah tagihan untuk diurutkan `tagihanBerikutnya`. */
+export type BarisUrutanTagihan = {
+  tujuan: PaymentTujuan;
+  status: PaymentStatus;
+  createdAt: Date;
+};
+
+/**
+ * Tagihan mana yang dibayar berikutnya.
+ *
+ * POKOK MENANG ATAS BIAYA TAMBAHAN, lalu yang paling tua menang.
+ *
+ * Urutan sebelumnya hanya "paling tua menang", dan itu bisa mengunci pelunasan
+ * di belakang biaya tambahan: begitu admin mencatat biaya tambahan sebelum
+ * pelunasan diterbitkan, satu-satunya tagihan yang bisa dibuka pembeli adalah
+ * yang tambahan. Bedanya penting karena hanya POKOK yang punya tenggat — H-3
+ * sebelum tayang, karena uangnya dibutuhkan untuk mencetak dan memasang.
+ * Biaya tambahan tidak punya tenggat apa pun. Menahan yang bertenggat di
+ * belakang yang tidak, atas keputusan admin yang tidak tahu akibatnya, adalah
+ * urutan yang salah arah.
+ *
+ * Hanya baris `PENDING` yang dipertimbangkan. Pemanggil yang sudah menyaringnya
+ * di query tidak dirugikan; yang belum tidak diam-diam mendapat tagihan yang
+ * sudah lunas.
+ *
+ * Tinggal di sini, bukan di `sesi-pembayaran.ts`, karena TIGA tempat harus
+ * menjawabnya dengan jawaban yang sama: modul sesi yang membuka checkout,
+ * halaman bayar yang menampilkan nominalnya, dan kartu pesanan yang memberi
+ * label pada tombolnya. Label "Lunasi Sekarang" pada tombol yang membuka
+ * tagihan biaya tambahan adalah akibat dari tiga salinan yang menyimpang.
+ */
+export function tagihanBerikutnya<T extends BarisUrutanTagihan>(payments: readonly T[]): T | null {
+  const menunggu = payments.filter((p) => p.status === PaymentStatus.PENDING);
+
+  const urut = [...menunggu].sort((a, b) => {
+    const prioritasA = a.tujuan === PaymentTujuan.TAMBAHAN ? 1 : 0;
+    const prioritasB = b.tujuan === PaymentTujuan.TAMBAHAN ? 1 : 0;
+    if (prioritasA !== prioritasB) return prioritasA - prioritasB;
+    return a.createdAt.getTime() - b.createdAt.getTime();
+  });
+
+  return urut[0] ?? null;
+}
+
 export type KelayakanSesi =
   | { boleh: true }
   | { boleh: false; status: number; kode: string; pesan: string };

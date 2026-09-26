@@ -1,5 +1,5 @@
 // src/app/dashboard/DashboardWrapper.tsx
-import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { BookingStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
@@ -12,6 +12,7 @@ import {
   sisaTagihan,
   sisaTambahan,
   sudahLunas,
+  tagihanBerikutnya,
   tenggatPelunasan,
   tenggatPelunasanLewat,
   uangMasuk,
@@ -98,11 +99,11 @@ export default async function DashboardWrapper() {
         // `providerSessionId`, `providerReferenceId`, `providerPaymentId`, dan
         // `callbackPayload`; tidak satu pun boleh menyeberang ke browser.
         payments: {
-          // `createdAt` ikut karena tagihan mana yang dibayar berikutnya
-          // ditentukan urutan pembuatannya — aturan yang sama dengan
-          // `tagihanBerikutnya` di `src/lib/sesi-pembayaran.ts`. Tanpa itu kartu
-          // pesanan bisa memberi label "Lunasi Sekarang" pada pesanan yang
-          // sebenarnya akan membuka tagihan biaya tambahan.
+          // `createdAt` ikut karena tagihan mana yang dibayar berikutnya ikut
+          // ditentukan urutan pembuatannya — dibaca `tagihanBerikutnya` di
+          // `src/lib/pembayaran.ts`. Tanpa itu kartu pesanan bisa memberi label
+          // "Lunasi Sekarang" pada pesanan yang sebenarnya akan membuka tagihan
+          // biaya tambahan.
           select: { tujuan: true, status: true, jumlah: true, createdAt: true },
         },
         // Pasangan angka untuk biaya tambahan: tagihannya di sini,
@@ -145,26 +146,22 @@ export default async function DashboardWrapper() {
     // supaya kartu pesanan tidak perlu mengurangkan dua nominal sendiri.
     const sisaSetelahDpRencana = rencanaDp ? kurang(b.totalPrice, b.dpAmount) : null;
 
-    // TAGIHAN BERIKUTNYA DIPUTUSKAN DI SINI, bukan di browser.
-    //
-    // Yang paling tua menang — aturan yang sama dengan `tagihanBerikutnya` di
-    // `src/lib/sesi-pembayaran.ts`, supaya label tombol di kartu menyebut
-    // tagihan yang benar-benar akan dibuka endpoint sesi. Satu pesanan bisa
-    // punya pelunasan dan biaya tambahan menganggur bersamaan.
-    const tagihanBerikutnya =
-      [...b.payments]
-        .filter((p) => p.status === PaymentStatus.PENDING)
-        .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime())[0] ?? null;
+    // TAGIHAN BERIKUTNYA DIPUTUSKAN DI SINI, bukan di browser — dan lewat fungsi
+    // yang sama yang dipakai endpoint sesi (`tagihanBerikutnya` di
+    // `src/lib/pembayaran.ts`), supaya label tombol di kartu menyebut tagihan
+    // yang benar-benar akan dibuka. Satu pesanan bisa punya pelunasan dan biaya
+    // tambahan menganggur bersamaan.
+    const tagihan = tagihanBerikutnya(b.payments);
 
     // Boleh-tidaknya membayar adalah keputusan SERVER, dan aturannya dibaca dari
     // satu tempat. Gerbang lama di kartu pesanan ("PENDING_PAYMENT dan expiresAt
     // masih hidup") menyembunyikan tombol dari setiap pelunasan yang sah:
     // pesanan yang sudah dibayar DP tidak lagi PENDING_PAYMENT, dan `expiresAt`
     // -nya — tenggat 24 jam waktu pesanan masih baru — sudah lewat.
-    const bolehBayar = tagihanBerikutnya
+    const bolehBayar = tagihan
       ? periksaKelayakanSesi({
           statusPesanan: b.status,
-          tujuanTagihan: tagihanBerikutnya.tujuan,
+          tujuanTagihan: tagihan.tujuan,
           tenggatPesanan: b.expiresAt,
           sekarang,
         }).boleh
@@ -194,7 +191,7 @@ export default async function DashboardWrapper() {
       // Tujuan tagihan sebagai teks biasa, BUKAN nilai enum Prisma: mengimpor
       // `PaymentTujuan` di komponen client menarik runtime Prisma ke bundle
       // browser. Tipe union di sisi kartu pesanan menjaga nilainya tetap benar.
-      tujuanTagihan: (tagihanBerikutnya?.tujuan ?? null) as string | null,
+      tujuanTagihan: (tagihan?.tujuan ?? null) as string | null,
       /** Kesimpulan `periksaKelayakanSesi` di server; kartu hanya membacanya. */
       bolehBayar,
       // Biaya tambahan punya panelnya sendiri. Dicampur ke sisa pokok, pesanan
