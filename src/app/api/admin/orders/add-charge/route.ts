@@ -13,8 +13,8 @@ import { PaymentStatus, PaymentTujuan } from "@prisma/client";
 import { authOptions } from "@/lib/auth";
 import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
-import { keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
-import { sisaTambahan } from "@/lib/pembayaran";
+import { bulat, keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
+import { STATUS_BOLEH_BAYAR_LANJUTAN, sisaTambahan } from "@/lib/pembayaran";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { nomorPesanan } from "@/lib/nomor-pesanan";
 
@@ -45,7 +45,10 @@ export async function POST(req: Request) {
     // sebagai 500, dan teks tanpa batas ikut tersimpan lalu tercetak.
     const description = typeof body.description === 'string' ? body.description.trim().slice(0, 200) : '';
 
-    if (!orderId || !description || !amount) {
+    // `orderId` diperiksa TIPENYA, bukan hanya keberadaannya. Nilai selain teks
+    // (angka, objek, array) lolos `!orderId` lalu jatuh ke Prisma sebagai galat
+    // yang terbaca admin sebagai "Gagal menambah biaya" tanpa keterangan apa pun.
+    if (typeof orderId !== 'string' || orderId.trim() === '' || !description || !amount) {
       return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
     }
 
@@ -56,6 +59,23 @@ export async function POST(req: Request) {
     const nominal = keDecimal(amount);
     if (!lebihBesar(nominal, 0)) {
         return NextResponse.json({ message: "Jumlah biaya tidak valid" }, { status: 400 });
+    }
+
+    // PECAHAN DITOLAK DI SINI, BUKAN DI BATAS GERBANG PEMBAYARAN.
+    //
+    // `nominalUntukXendit` menolak nominal yang bukan rupiah bulat dengan
+    // `NOMINAL_TIDAK_VALID`, dan penolakan itu baru terjadi ketika PEMBELI
+    // menekan tombol Bayar. Tanpa pemeriksaan di sini, satu ketikan `500000.5`
+    // menghasilkan tagihan yang tercatat di database, tampil di invoice, dan
+    // dikirim lewat email — tapi tidak akan pernah bisa dibayar siapa pun.
+    // Lebih buruk lagi: nominal pecahan itu ikut ke dalam `sisaTambahan` dan
+    // membuat SETIAP tagihan biaya tambahan berikutnya di pesanan yang sama
+    // ikut pecahan, jadi satu salah ketik mengunci jalur bayar itu selamanya.
+    if (!bulat(nominal)) {
+        return NextResponse.json(
+            { message: "Jumlah biaya harus rupiah bulat, tanpa pecahan sen." },
+            { status: 400 }
+        );
     }
 
     // Seluruh penulisan di bawah harus berhasil atau gagal bersama.
@@ -86,6 +106,7 @@ export async function POST(req: Request) {
           data: { updatedAt: new Date() },
           select: {
             id: true,
+            status: true,
             duration: true,
             user: { select: { email: true, name: true } },
             billboard: { select: { title: true, address: true } },
@@ -101,6 +122,28 @@ export async function POST(req: Request) {
             },
           },
       });
+
+      // PESANAN YANG SUDAH TUTUP TIDAK BOLEH DITAMBAHI KEWAJIBAN BARU.
+      //
+      // Daftar yang sama dipakai `periksaKelayakanSesi` untuk memutuskan
+      // bolehkah sebuah tagihan lanjutan dibukakan sesi. Tanpa gerbang ini
+      // admin bisa mencatat biaya tambahan pada pesanan `REFUNDED` atau
+      // `CANCELLED`: tagihannya tertulis, emailnya berangkat, pembeli menekan
+      // Bayar — dan `periksaKelayakanSesi` menolaknya dengan
+      // `STATUS_TIDAK_MENERIMA_BAYAR`. Kewajiban yang ditagih tanpa jalur
+      // bayar, dan pembeli yang dikirimi tagihan atas pesanan yang uangnya
+      // justru baru dikembalikan kepadanya.
+      //
+      // Diperiksa DI DALAM transaksi, sesudah `booking.update` mengunci
+      // barisnya: status yang dibaca di luar transaksi bisa berubah sebelum
+      // biayanya tertulis.
+      if (!STATUS_BOLEH_BAYAR_LANJUTAN.includes(pesanan.status)) {
+        throw new GalatBiayaTambahan(
+          409,
+          `Pesanan berstatus ${pesanan.status} tidak lagi menerima pembayaran, ` +
+            'jadi biaya tambahan tidak bisa ditagihkan padanya.'
+        );
+      }
 
       // Nominal tagihan adalah SISA — seluruh biaya tambahan dikurangi yang
       // sudah dibayar — bukan `nominal` yang baru dicatat. Indeks unik bersyarat

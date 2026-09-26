@@ -2712,6 +2712,12 @@ describe('pelunasan webhook Payment Session', () => {
     for (const [nama, syarat] of Object.entries(where)) {
       if (nama === 'OR') {
         if (!syarat.some((bagian) => cocokWebhook(row, bagian))) return false;
+      } else if (syarat && typeof syarat === 'object' && !(syarat instanceof Date)) {
+        // `{ not: x }` dan `{ in: [...] }` dipakai pencari tagihan kembar. Tanpa
+        // dimodelkan di sini, filter itu diam-diam mencocokkan NOL baris dan test
+        // lulus tanpa pernah menjalankan kodenya.
+        if (Object.hasOwn(syarat, 'not') && row[nama] === syarat.not) return false;
+        if (Object.hasOwn(syarat, 'in') && !syarat.in.includes(row[nama])) return false;
       } else if (row[nama] !== syarat) {
         return false;
       }
@@ -3216,6 +3222,181 @@ describe('pelunasan webhook Payment Session', () => {
     assert.equal(fake.calls.includes('payment.create'), false);
     assert.equal(fake.calls.includes('transaction.rollback'), false);
     assert.equal(fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN).length, 1);
+  });
+
+  // =========================================================================
+  // UANG YANG SUDAH MASUK SELALU DICATAT
+  // =========================================================================
+  // Menolak webhook dengan 409 TIDAK mengembalikan uang kepada pembeli: uangnya
+  // tetap di Xendit tanpa pembukuan, tagihannya tetap terbuka, dan pembeli
+  // ditagih lagi. Suite ini menjaga agar keadaan ganjil dicatat lalu ditandai,
+  // bukan ditolak.
+
+  for (const status of [PaymentStatus.EXPIRED, PaymentStatus.VOIDED]) {
+    it(`mencatat uang yang tiba pada tagihan ${status} dan menandainya untuk tinjau admin`, async () => {
+      const fake = buatDbPelunasan({
+        payments: [buatPaymentWebhook({ status })],
+      });
+      const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+      const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+      // Sebelumnya ini 409: sesi dinyatakan MATI dari dugaan jam, lalu bank
+      // menyelesaikan pembayarannya sesudah itu.
+      assert.equal(hasil.keadaan, 'DISELESAIKAN');
+      assert.equal(hasil.notifikasi.perluTinjauAdmin, 'TAGIHAN_SUDAH_DITUTUP');
+      assert.equal(hasil.notifikasi.statusPesanan, BookingStatus.PENDING_PAYMENT);
+
+      const payment = fake.payments()[0];
+      assert.equal(payment.status, PaymentStatus.PAID);
+      assert.equal(payment.providerPaymentId, 'pi-1');
+      assert.deepEqual(payment.paidAt, SEKARANG);
+
+      // Pembayaran pertama tetap memindahkan pesanannya: uangnya nyata.
+      assert.equal(fake.booking().status, BookingStatus.PAID_CONFIRMED);
+      assert.equal(fake.calls.includes('transaction.commit'), true);
+    });
+  }
+
+  it('menutup tagihan pengganti yang belum bersesi ketika uang mendarat di tagihan lama', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook({ tujuan: PaymentTujuan.DP, status: PaymentStatus.EXPIRED }),
+        // `tutupLaluBukaUlang` membuat baris ini begitu yang lama EXPIRED.
+        buatPaymentWebhook({
+          id: 'pay-pengganti',
+          tujuan: PaymentTujuan.DP,
+          status: PaymentStatus.PENDING,
+          providerSessionId: null,
+          providerReferenceId: null,
+          sesiClaimToken: 'tok-1',
+        }),
+      ],
+      booking: { totalPrice: new Prisma.Decimal('5000000') },
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(hasil.notifikasi.perluTinjauAdmin, 'TAGIHAN_SUDAH_DITUTUP');
+
+    // Baris pengganti adalah tagihan atas kewajiban yang baru saja dibayar.
+    // Membiarkannya berarti pembeli melihat tombol Bayar untuk sesuatu yang lunas.
+    const pengganti = fake.payments().find((p) => p.id === 'pay-pengganti');
+    assert.equal(pengganti.status, PaymentStatus.VOIDED);
+    assert.equal(pengganti.sesiClaimToken, null);
+
+    // Slot (bookingId, tujuan) kini kosong, jadi PELUNASAN atas sisa pokok bisa
+    // diterbitkan tanpa melanggar indeks unik bersyarat.
+    const pelunasan = fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN);
+    assert.equal(pelunasan.length, 1);
+    assert.equal(pelunasan[0].jumlah.toString(), '3500000');
+  });
+
+  it('tidak menutup tagihan pengganti yang sesinya sudah terbuka, dan menandainya', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook({ status: PaymentStatus.EXPIRED }),
+        buatPaymentWebhook({
+          id: 'pay-pengganti',
+          status: PaymentStatus.PENDING,
+          providerSessionId: 'ps-pengganti',
+          providerReferenceId: 'ref-pengganti',
+        }),
+      ],
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    // Uang mungkin sedang mengalir ke sesi itu detik ini. Menutupnya berarti
+    // setoran kedua tiba tanpa baris untuk ditempati.
+    assert.equal(fake.payments().find((p) => p.id === 'pay-pengganti').status, PaymentStatus.PENDING);
+    assert.equal(hasil.notifikasi.perluTinjauAdmin, 'KEMBAR_BERSESI_TERBUKA');
+    assert.equal(fake.payments().find((p) => p.id === 'pay-1').status, PaymentStatus.PAID);
+  });
+
+  for (const status of [
+    BookingStatus.CANCELLED,
+    BookingStatus.REFUNDED,
+    BookingStatus.PROCESS_REFUND,
+    BookingStatus.REVIEW_REFUND,
+    BookingStatus.WAITING_BANK,
+  ]) {
+    it(`mencatat uang yang tiba pada pesanan ${status} tanpa menerbitkan tagihan baru`, async () => {
+      const fake = buatDbPelunasan({
+        payments: [buatPaymentWebhook({ tujuan: PaymentTujuan.DP })],
+        booking: { status, totalPrice: new Prisma.Decimal('5000000') },
+      });
+      const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+      const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+      assert.equal(hasil.keadaan, 'DISELESAIKAN');
+      assert.equal(hasil.notifikasi.perluTinjauAdmin, 'PESANAN_TIDAK_MENERIMA_BAYAR');
+      assert.equal(hasil.notifikasi.statusPesanan, status);
+      assert.equal(fake.payments()[0].status, PaymentStatus.PAID);
+
+      // Statusnya TIDAK dihidupkan kembali oleh uang yang terlambat, dan tagihan
+      // pelunasan tidak diterbitkan: menagih kewajiban dari pesanan yang justru
+      // sedang direfund berarti tagihan yang `periksaKelayakanSesi` akan menolak.
+      assert.equal(fake.booking().status, status);
+      assert.equal(fake.calls.includes('payment.create'), false);
+      assert.equal(fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN).length, 0);
+    });
+  }
+
+  it('jalur normal tidak pernah ditandai untuk tinjau admin', async () => {
+    for (const status of [
+      BookingStatus.PENDING_PAYMENT,
+      BookingStatus.PAID_CONFIRMED,
+      BookingStatus.DESIGN_RECEIVED,
+      BookingStatus.IN_PRODUCTION,
+      BookingStatus.INSTALLATION,
+      BookingStatus.ACTIVE,
+    ]) {
+      const fake = buatDbPelunasan({
+        payments: [buatPaymentWebhook({ tujuan: PaymentTujuan.PELUNASAN })],
+        booking: { status },
+      });
+      const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+      const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+      assert.equal(hasil.notifikasi.perluTinjauAdmin, null, `status ${status}`);
+      assert.equal(hasil.notifikasi.statusPesanan, status, `status ${status}`);
+    }
+  });
+
+  it('gerbang nominal, identifier, dan duplikat tetap ketat di jalur pemulihan', async () => {
+    const { GalatWebhookPembayaran, selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    // Nominal beda satu rupiah tetap ditolak walaupun barisnya EXPIRED. Yang
+    // dilonggarkan hanya status tagihan, bukan pembuktian bahwa ini uang yang sama.
+    const fakeNominal = buatDbPelunasan({ payments: [buatPaymentWebhook({ status: PaymentStatus.EXPIRED })] });
+    const galat = await dapatGalat(
+      selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook({ amount: '1500001' })), depsDb(fakeNominal))
+    );
+    assert.equal(galat instanceof GalatWebhookPembayaran, true);
+    assert.equal(galat.kode, 'NOMINAL_TIDAK_SESUAI');
+    assert.equal(fakeNominal.payments()[0].status, PaymentStatus.EXPIRED);
+
+    // Baris yang sudah PAID tetap duplikat, bukan jalur pemulihan.
+    const fakePaid = buatDbPelunasan({
+      payments: [buatPaymentWebhook({ status: PaymentStatus.PAID, providerPaymentId: 'pi-1', paidAt: SEKARANG })],
+    });
+    const duplikat = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fakePaid));
+    assert.equal(duplikat.keadaan, 'DUPLIKAT');
+
+    // Identifier sesi yang tidak dikenal tetap diabaikan, tidak dicatat.
+    const fakeAsing = buatDbPelunasan({ payments: [buatPaymentWebhook({ status: PaymentStatus.EXPIRED })] });
+    const asing = await selesaikanDariWebhook(
+      uraikanWebhookSesiSelesai(dataWebhook({ payment_session_id: 'ps-asing' })),
+      depsDb(fakeAsing)
+    );
+    assert.equal(asing.keadaan, 'DIABAIKAN');
+    assert.equal(fakeAsing.payments()[0].status, PaymentStatus.EXPIRED);
   });
 });
 
@@ -4269,7 +4450,7 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
 // BIAYA TAMBAHAN: SATU TAGIHAN SISA, BUKAN SATU TAGIHAN PER BIAYA
 // ===========================================================================
 describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
-  const { Prisma, PaymentStatus, PaymentTujuan } = require('@prisma/client');
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
 
   /**
    * Database stateful dengan transaksi yang benar-benar rollback.
@@ -4281,6 +4462,7 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
   function buatDbCharge(options = {}) {
     let charges = (options.charges ?? []).map((c) => ({ ...c }));
     let payments = (options.payments ?? []).map((p) => ({ ...p }));
+    const statusPesanan = options.status ?? BookingStatus.IN_PRODUCTION;
     const calls = [];
 
     function tabel(ambilCharge, simpanCharge, ambilPayment, simpanPayment) {
@@ -4302,6 +4484,7 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
             }
             return {
               id: 'booking-1',
+              status: statusPesanan,
               duration: 30,
               user: { email: 'pembeli@contoh.test', name: 'Budi Santoso' },
               billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
@@ -4588,6 +4771,80 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
 
     assert.equal(fake.calls.length, 0);
     assert.equal(fake.charges().length, 0);
+  });
+
+  it('menolak nominal berpecahan sen sebelum menyentuh database', async () => {
+    const fake = buatDbCharge();
+    const { route, emails } = buatRouteCharge(fake);
+
+    // Tanpa gerbang ini tagihannya tercatat dan dikirim lewat email, tetapi
+    // `nominalUntukXendit` menolaknya saat pembeli menekan Bayar — kewajiban
+    // yang tidak bisa dibayar siapa pun.
+    for (const amount of ['250000.5', '0.01', '999999.99']) {
+      const response = await route.POST(permintaan({ amount }));
+      assert.equal(response.status, 400, `amount ${amount}`);
+    }
+
+    assert.equal(fake.calls.length, 0);
+    assert.equal(fake.charges().length, 0);
+    assert.equal(emails.length, 0);
+  });
+
+  it('menolak orderId yang bukan teks tanpa menyentuh database', async () => {
+    const fake = buatDbCharge();
+    const { route } = buatRouteCharge(fake);
+
+    // Nilai-nilai ini lolos `!orderId` lalu jatuh ke Prisma sebagai 500 yang
+    // terbaca admin sebagai "Gagal menambah biaya" tanpa keterangan apa pun.
+    for (const orderId of [123, { id: 'booking-1' }, ['booking-1'], true, '   ']) {
+      const response = await route.POST(permintaan({ orderId }));
+      assert.equal(response.status, 400, `orderId ${JSON.stringify(orderId)}`);
+    }
+
+    assert.equal(fake.calls.length, 0);
+    assert.equal(fake.charges().length, 0);
+  });
+
+  it('menolak biaya tambahan pada pesanan yang tidak lagi menerima pembayaran', async () => {
+    for (const status of [
+      BookingStatus.CANCELLED,
+      BookingStatus.REFUNDED,
+      BookingStatus.PROCESS_REFUND,
+      BookingStatus.REVIEW_REFUND,
+      BookingStatus.WAITING_BANK,
+    ]) {
+      const fake = buatDbCharge({ status });
+      const { route, emails } = buatRouteCharge(fake);
+
+      const response = await route.POST(permintaan({}));
+
+      assert.equal(response.status, 409, `status ${status}`);
+      // Rollback: tidak ada kewajiban yatim, dan tidak ada surat tagihan atas
+      // pesanan yang uangnya justru baru dikembalikan kepada pembelinya.
+      assert.equal(fake.charges().length, 0, `status ${status}`);
+      assert.equal(fake.payments().length, 0, `status ${status}`);
+      assert.equal(fake.calls.includes('transaction.rollback'), true, `status ${status}`);
+      assert.equal(emails.length, 0, `status ${status}`);
+    }
+  });
+
+  it('menerima biaya tambahan pada seluruh status yang masih menerima pembayaran', async () => {
+    for (const status of [
+      BookingStatus.PENDING_PAYMENT,
+      BookingStatus.PAID_CONFIRMED,
+      BookingStatus.DESIGN_RECEIVED,
+      BookingStatus.IN_PRODUCTION,
+      BookingStatus.INSTALLATION,
+      BookingStatus.ACTIVE,
+    ]) {
+      const fake = buatDbCharge({ status });
+      const { route } = buatRouteCharge(fake);
+
+      const response = await route.POST(permintaan({}));
+
+      assert.equal(response.status, 200, `status ${status}`);
+      assert.equal(fake.payments().length, 1, `status ${status}`);
+    }
   });
 });
 

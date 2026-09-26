@@ -9,7 +9,13 @@ import 'server-only';
 import { BookingStatus, PaymentStatus, PaymentTujuan, Prisma } from '@prisma/client';
 import { adalahDuplikatUnik } from './db-error';
 import { keDecimal, lebihBesar, lebihKecil, nol } from './money';
-import { sisaTagihan, tenggatPelunasan, type BarisPembayaran } from './pembayaran';
+import {
+  STATUS_BOLEH_BAYAR_LANJUTAN,
+  bayarLanjutan,
+  sisaTagihan,
+  tenggatPelunasan,
+  type BarisPembayaran,
+} from './pembayaran';
 import { prisma as prismaAsli } from './prisma';
 import { transisiSah } from './transisi-status';
 
@@ -73,7 +79,12 @@ type BarisPayment = {
 
 type TabelPaymentWebhook = {
   findFirst(args: unknown): Promise<BarisPayment | null>;
-  findMany(args: unknown): Promise<BarisPembayaran[]>;
+  /**
+   * Generik karena dipakai dua pembacaan dengan `select` berbeda: menghitung sisa
+   * pokok (`BarisPembayaran`) dan mencari tagihan kembar (`id` +
+   * `providerSessionId`). Bentuknya ditentukan pemanggil, bukan dipaksa satu.
+   */
+  findMany<T = BarisPembayaran>(args: unknown): Promise<T[]>;
   create(args: unknown): Promise<{ id: string }>;
   updateMany(args: unknown): Promise<{ count: number }>;
 };
@@ -229,11 +240,46 @@ export type NotifikasiPembayaran = {
   sisaPokok: Prisma.Decimal;
   /** Tenggat pelunasan H-3; null bila tidak ada sisa pokok lagi. */
   tenggatPelunasan: Date | null;
+  /** Status pesanan saat uang ini masuk. Ikut di surat yang perlu ditinjau. */
+  statusPesanan: BookingStatus;
+  /**
+   * Alasan uang ini perlu DITINJAU ADMIN, atau `null` bila semuanya wajar.
+   *
+   * Uang yang sudah diterima gerbang pembayaran selalu dicatat — tidak ada
+   * keadaan di mana menolaknya membuat uangnya kembali sendiri kepada pembeli.
+   * Yang bisa dilakukan sistem adalah MENANDAI keadaan yang tidak semestinya
+   * terjadi, dan penandaannya harus sampai ke manusia lewat surat, bukan berhenti
+   * sebagai baris log yang tidak ada yang membacanya.
+   */
+  perluTinjauAdmin: AlasanTinjau | null;
 };
+
+/** Sebab sebuah setoran masuk ke dalam keadaan yang perlu ditinjau manusia. */
+export type AlasanTinjau =
+  /**
+   * Pembayaran lanjutan masuk pada pesanan yang seharusnya tidak lagi menerima
+   * uang: pesanan yang sedang direfund, sudah direfund, atau sudah dibatalkan.
+   */
+  | 'PESANAN_TIDAK_MENERIMA_BAYAR'
+  /**
+   * Tagihannya sudah ditutup (`EXPIRED`/`VOIDED`) sebelum uangnya tiba. Terjadi
+   * ketika sesi dinyatakan mati berdasarkan tenggat sementara pembayarannya
+   * masih berjalan di sisi bank.
+   */
+  | 'TAGIHAN_SUDAH_DITUTUP'
+  /**
+   * Uang terlambat mendarat di tagihan lama, dan tagihan PENGGANTI atas
+   * kewajiban yang sama sudah punya sesi terbuka. Baris itu tidak ditutup
+   * otomatis karena uang mungkin sedang mengalir ke sana juga — dua sesi hidup
+   * atas satu kewajiban yang kini sudah lunas, dan hanya manusia yang bisa
+   * memutuskan mana yang perlu dikembalikan.
+   */
+  | 'KEMBAR_BERSESI_TERBUKA';
 
 function notifikasiDari(
   payment: BarisPayment,
-  sisaPokok: Prisma.Decimal
+  sisaPokok: Prisma.Decimal,
+  perluTinjauAdmin: AlasanTinjau | null
 ): NotifikasiPembayaran {
   return {
     bookingId: payment.booking.id,
@@ -248,6 +294,8 @@ function notifikasiDari(
     tenggatPelunasan: lebihBesar(sisaPokok, 0)
       ? tenggatPelunasan(payment.booking.startDate)
       : null,
+    statusPesanan: payment.booking.status,
+    perluTinjauAdmin,
   };
 }
 
@@ -268,10 +316,17 @@ function notifikasiDari(
  * `TAMBAHAN` dilewati sepenuhnya: biaya tambahan berada DI LUAR `totalPrice`,
  * jadi membayarnya tidak mengubah sisa pokok dan tidak boleh memicu tagihan
  * pokok baru.
+ *
+ * `bolehTerbitkan: false` membuat fungsi ini hanya MENGHITUNG sisanya. Dipakai
+ * ketika uang tiba pada pesanan yang sudah tidak menerima pembayaran: sisanya
+ * tetap perlu untuk surat notifikasi, tetapi menerbitkan tagihannya berarti
+ * menagih kewajiban yang sudah tidak ada pada pesanan yang justru sedang
+ * direfund atau dibatalkan.
  */
 async function terbitkanPelunasanBila(
   tx: { payment: TabelPaymentWebhook },
-  payment: BarisPayment
+  payment: BarisPayment,
+  bolehTerbitkan = true
 ): Promise<Prisma.Decimal> {
   const seluruhTagihan = await tx.payment.findMany({
     where: { bookingId: payment.booking.id },
@@ -280,6 +335,7 @@ async function terbitkanPelunasanBila(
 
   const sisa = sisaTagihan(payment.booking.totalPrice, seluruhTagihan);
 
+  if (!bolehTerbitkan) return sisa;
   if (payment.tujuan === PaymentTujuan.TAMBAHAN) return sisa;
   if (!lebihBesar(sisa, 0)) return sisa;
 
@@ -309,6 +365,61 @@ async function terbitkanPelunasanBila(
   });
 
   return sisa;
+}
+
+/**
+ * Tutup tagihan KEMBAR yang menganggur setelah sebuah tagihan tertutup dibayar.
+ *
+ * Hanya perlu pada jalur pemulihan. Pada jalur normal, indeks unik bersyarat
+ * `payment_satu_tagihan_menganggur` menjamin baris `PENDING` yang dibayar itu
+ * satu-satunya untuk pasangan `(bookingId, tujuan)`-nya, jadi tidak ada kembar
+ * yang bisa ada.
+ *
+ * Jalur pemulihan berbeda: baris yang dibayar tadi sudah `EXPIRED` atau
+ * `VOIDED`, dan justru karena itu sebuah baris PENGGANTI boleh dibuat
+ * (`tutupLaluBukaUlang` di `sesi-pembayaran.ts`). Ketika uang yang terlambat
+ * akhirnya masuk ke baris lama, pengganti itu menjadi tagihan atas kewajiban
+ * yang BARU SAJA dibayar — dan pembeli yang menekan tombol Bayar di sana
+ * membayar dua kali untuk satu hal.
+ *
+ * Pengganti yang sesinya SUDAH dibuka tidak ikut ditutup: uang mungkin sedang
+ * masuk ke sana pada detik ini juga, dan baris yang tertutup tidak bisa
+ * menampungnya. Keadaan itu dikembalikan sebagai `false` agar pemanggil
+ * menandainya untuk ditinjau manusia.
+ *
+ * @returns `true` bila tidak ada kembar berbahaya yang tertinggal.
+ */
+async function tutupKembarMenganggur(
+  tx: { payment: TabelPaymentWebhook },
+  payment: BarisPayment
+): Promise<boolean> {
+  const kembar = await tx.payment.findMany<{ id: string; providerSessionId: string | null }>({
+    where: {
+      bookingId: payment.booking.id,
+      tujuan: payment.tujuan,
+      status: PaymentStatus.PENDING,
+      id: { not: payment.id },
+    },
+    select: { id: true, providerSessionId: true },
+  });
+
+  if (kembar.length === 0) return true;
+
+  const bisaDitutup = kembar.filter((k) => k.providerSessionId === null).map((k) => k.id);
+
+  if (bisaDitutup.length > 0) {
+    await tx.payment.updateMany({
+      where: { id: { in: bisaDitutup }, status: PaymentStatus.PENDING, providerSessionId: null },
+      data: {
+        status: PaymentStatus.VOIDED,
+        sesiClaimToken: null,
+        sesiClaimedAt: null,
+        sesiClaimExpiresAt: null,
+      },
+    });
+  }
+
+  return bisaDitutup.length === kembar.length;
 }
 
 function paymentSama(payment: BarisPayment, webhook: WebhookSesiSelesai): boolean {
@@ -362,8 +473,45 @@ export async function selesaikanDariWebhook(
         return { keadaan: 'DUPLIKAT' };
       }
 
+      // ================== UANG YANG SUDAH MASUK SELALU DICATAT ==================
+      //
+      // Dua gerbang di bawah ini dulu MELEMPAR 409, dan keduanya melempar untuk
+      // keadaan yang uangnya SUDAH BERADA DI XENDIT. Menolak webhook tidak
+      // mengembalikan uang itu kepada pembeli; yang terjadi hanyalah Xendit
+      // mengulang kiriman sampai berhenti mencoba, lalu setoran nyata itu tidak
+      // punya satu baris pun di pembukuan kita. Pembeli membayar, kami tidak
+      // mencatat, dan tagihannya masih terbuka — jadi ia ditagih lagi.
+      //
+      // Dua keadaan yang dimaksud, keduanya BUKAN hipotesis:
+      //
+      // 1. TAGIHAN SUDAH DITUTUP. `ambilSesiAktifUntukKomponen` menyatakan sesi
+      //    `MATI` ketika tenggatnya lewat lebih dari 10 menit — sebuah DUGAAN
+      //    dari jam, bukan fakta dari Xendit. Virtual account yang dibayar di
+      //    menit terakhir bisa baru diselesaikan bank sesudah itu. Barisnya sudah
+      //    `EXPIRED` (`tutupLaluBukaUlang`), lalu webhooknya tiba.
+      //
+      // 2. PESANAN TIDAK LAGI MENERIMA BAYAR. Sesi pelunasan yang sudah dibuka
+      //    tidak ditutup `tutupTagihanMenganggur` (lihat `tutup-tagihan.ts`:
+      //    baris bersesi sengaja ditinggalkan), jadi pembeli masih bisa
+      //    menyelesaikan pembayaran di tab yang terbuka setelah pesanannya masuk
+      //    jalur refund atau dibatalkan.
+      //
+      // Karena itu keduanya kini DICATAT lalu DITANDAI untuk ditinjau admin.
+      // Perbedaannya penting: mencatat membuat uangnya ada di pembukuan dan bisa
+      // dikembalikan lewat jalur refund yang sudah ada; menolak membuat uangnya
+      // tidak ada di mana pun kecuali di dashboard Xendit.
+      //
+      // Yang TIDAK dilonggarkan: nominal tetap harus sama persis, kedua
+      // identifier provider tetap harus cocok, `providerPaymentId` tetap unik,
+      // dan baris yang sudah `PAID` tetap duplikat. Gerbang-gerbang itu menjaga
+      // agar yang dicatat benar-benar uang ini, bukan uang lain.
+      // =========================================================================
+      let perluTinjau: AlasanTinjau | null = null;
+
       if (payment.status !== PaymentStatus.PENDING) {
-        throw new GalatWebhookPembayaran(409, 'TAGIHAN_TIDAK_MENUNGGU', 'Tagihan tidak lagi menunggu pembayaran.');
+        // Sisa kemungkinannya hanya EXPIRED dan VOIDED: PAID sudah ditangani di
+        // atas sebagai duplikat, dan PENDING adalah jalur normal.
+        perluTinjau = 'TAGIHAN_SUDAH_DITUTUP';
       }
 
       // TUJUAN MENENTUKAN APAKAH STATUS PESANAN BERGERAK.
@@ -374,32 +522,51 @@ export async function selesaikanDariWebhook(
       //
       // `PELUNASAN` dan `TAMBAHAN` adalah pembayaran LANJUTAN pada pesanan yang
       // sudah berjalan, dan keduanya TIDAK memindahkan status sama sekali.
-      // Sebelumnya `PAID_CONFIRMED` dipaksakan tanpa syarat di sini, dan itu
-      // menghanguskan uang: pelunasan yang tiba ketika pesanan sudah
-      // `IN_PRODUCTION` gagal di `transisiSah` (`IN_PRODUCTION` tidak punya
-      // `PAID_CONFIRMED` sebagai tujuan), webhook dijawab 409, Xendit mengulang
-      // selamanya, dan baris Payment tidak pernah menjadi PAID — padahal
-      // uangnya sudah diterima gerbang pembayaran. Menariknya balik ke
-      // `PAID_CONFIRMED` pun salah arah: pesanan yang sedang dicetak tidak
-      // kembali menjadi pesanan yang baru dibayar.
-      //
-      // Jejak waktunya tidak hilang: `Payment.paidAt` mencatat kapan setiap
-      // setoran masuk, dan itu memang satuan yang dipakai laporan.
-      const pembayaranPertama =
-        payment.tujuan === PaymentTujuan.DP || payment.tujuan === PaymentTujuan.FULL;
+      const pembayaranPertama = !bayarLanjutan(payment.tujuan);
 
-      if (
-        pembayaranPertama &&
-        !transisiSah(payment.booking.status, BookingStatus.PAID_CONFIRMED)
-      ) {
-        throw new GalatWebhookPembayaran(409, 'STATUS_PESANAN_TIDAK_SESUAI', 'Status pesanan tidak dapat dilunasi.');
+      // Daftar yang sama dipakai `periksaKelayakanSesi` untuk MENOLAK pembukaan
+      // sesi baru. Di sini sesinya sudah dibuka dan uangnya sudah masuk, jadi
+      // jawabannya tidak bisa "tidak" — hanya "catat, lalu beri tahu manusia".
+      //
+      // Berlaku untuk SEMUA tujuan, bukan hanya pembayaran lanjutan. `DP` pun
+      // bisa tiba pada pesanan `CANCELLED`: penyapu menghanguskan pesanan yang
+      // lewat tenggat 24 jam sementara sesi DP-nya sudah dibuka, dan
+      // `tutupTagihanMenganggur` sengaja meninggalkan baris bersesi. Pembeli yang
+      // menyelesaikan pembayaran beberapa detik kemudian mengirim uang nyata ke
+      // pesanan yang baru saja dibatalkan sistem sendiri.
+      //
+      // `PENDING_PAYMENT` ada di dalam daftar, jadi jalur normal DP/FULL tidak
+      // tersentuh sama sekali. Alasan ini menimpa `TAGIHAN_SUDAH_DITUTUP` karena
+      // status pesanan menjelaskan keadaannya lebih baik daripada status barisnya.
+      if (!STATUS_BOLEH_BAYAR_LANJUTAN.includes(payment.booking.status)) {
+        perluTinjau = 'PESANAN_TIDAK_MENERIMA_BAYAR';
       }
+
+      // STATUS PESANAN HANYA BERGERAK BILA PERPINDAHANNYA SAH.
+      //
+      // Dulu transisi yang tidak sah dijawab 409, dan itu membuang uang bersama
+      // penolakannya. Sekarang uangnya tetap tercatat, hanya status pesanannya
+      // yang tidak dipaksa bergerak — pesanan `CANCELLED` tidak dihidupkan
+      // kembali oleh uang yang terlambat, tetapi uang itu ada di pembukuan dan
+      // bisa dikembalikan lewat jalur refund yang sudah ada.
+      //
+      // `transisiSah(x, x)` bernilai true, jadi `DP` yang webhooknya dikirim
+      // ulang pada pesanan yang sudah `PAID_CONFIRMED` tetap lolos dan tidak
+      // mengubah apa pun selain memastikan `paidAt` terisi.
+      const gerakkanStatus =
+        pembayaranPertama && transisiSah(payment.booking.status, BookingStatus.PAID_CONFIRMED);
 
       const sekarang = deps.sekarang();
       const paymentTertulis = await tx.payment.updateMany({
         where: {
           id: payment.id,
-          status: PaymentStatus.PENDING,
+          // Status yang disyaratkan adalah status yang BENAR-BENAR DIBACA di atas,
+          // bukan `PENDING` mati. Pada jalur pemulihan barisnya `EXPIRED` atau
+          // `VOIDED`, dan menuntut `PENDING` di sini berarti `count === 0` lalu
+          // 409 — persis kegagalan yang seluruh perubahan ini ada untuk menutup.
+          // Sifat compare-and-swap-nya tidak hilang: nilainya tetap harus sama
+          // dengan saat dibaca, jadi penulis lain yang menang tetap terdeteksi.
+          status: payment.status,
           providerSessionId: webhook.data.paymentSessionId,
           providerReferenceId: webhook.data.referenceId,
           providerPaymentId: null,
@@ -418,7 +585,7 @@ export async function selesaikanDariWebhook(
         throw new GalatWebhookPembayaran(409, 'PEMBAYARAN_SEDANG_DIPROSES', 'Pembayaran sedang diproses.');
       }
 
-      if (pembayaranPertama) {
+      if (gerakkanStatus) {
         const bookingTertulis = await tx.booking.updateMany({
           where: { id: payment.booking.id, status: payment.booking.status },
           data: {
@@ -432,9 +599,37 @@ export async function selesaikanDariWebhook(
         }
       }
 
-      const sisaPokok = await terbitkanPelunasanBila(tx, payment);
+      // TAGIHAN KEMBAR DITUTUP SETELAH UANGNYA TERCATAT, BUKAN SEBELUM.
+      //
+      // Hanya perlu di jalur pemulihan: `tutupLaluBukaUlang` membuat baris
+      // PENGGANTI begitu baris lama dinyatakan `EXPIRED`. Ketika uang terlambat
+      // justru mendarat di baris LAMA, baris pengganti itu menjadi tagihan atas
+      // kewajiban yang baru saja dibayar — pembeli melihat tombol Bayar untuk
+      // sesuatu yang sudah lunas.
+      if (perluTinjau === 'TAGIHAN_SUDAH_DITUTUP') {
+        const bersih = await tutupKembarMenganggur(tx, payment);
 
-      return { keadaan: 'DISELESAIKAN', notifikasi: notifikasiDari(payment, sisaPokok) };
+        // Pengganti yang sesinya sudah terbuka TIDAK ditutup — uang mungkin
+        // sedang mengalir ke sana detik ini. Keadaan itu perlu mata manusia:
+        // dua sesi hidup atas satu kewajiban yang sudah lunas.
+        if (!bersih) perluTinjau = 'KEMBAR_BERSESI_TERBUKA';
+      }
+
+      // Tagihan pokok berikutnya hanya diterbitkan bila pesanannya memang masih
+      // menerima pembayaran. Menerbitkan `PELUNASAN` pada pesanan `CANCELLED`
+      // atau `REFUNDED` berarti menagih kewajiban yang sudah tidak ada, dan
+      // `periksaKelayakanSesi` akan menolak pembayarannya — tagihan tanpa jalur
+      // bayar, persis cacat yang fase ini ada untuk menutup.
+      const sisaPokok = await terbitkanPelunasanBila(
+        tx,
+        payment,
+        perluTinjau !== 'PESANAN_TIDAK_MENERIMA_BAYAR'
+      );
+
+      return {
+        keadaan: 'DISELESAIKAN',
+        notifikasi: notifikasiDari(payment, sisaPokok, perluTinjau),
+      };
     });
   } catch (error) {
     if (error instanceof GalatWebhookPembayaran) throw error;

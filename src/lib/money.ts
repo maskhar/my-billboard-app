@@ -93,6 +93,23 @@ export function nol(nilai: NilaiUang): boolean {
 }
 
 /**
+ * Apakah nominal ini rupiah bulat, tanpa pecahan?
+ *
+ * Rupiah tidak dipakai sampai sen. Pecahan yang lolos ke sebuah TAGIHAN bukan
+ * ketidakrapian kecil: `nominalUntukXendit` (`src/lib/xendit.ts`) menolaknya
+ * dengan `NOMINAL_TIDAK_VALID`, dan penolakan itu terjadi jauh di hilir — saat
+ * pembeli menekan tombol Bayar. Tagihannya tercatat, muncul di invoice, dikirim
+ * lewat email, tetapi tidak akan pernah bisa dibayar siapa pun. Karena itu
+ * pecahan harus ditolak di PINTU MASUK nominal, bukan di batas gerbang.
+ *
+ * Dipakai bersama `lebihBesar(nilai, 0)`: yang satu menjaga tandanya, yang ini
+ * menjaga bentuknya.
+ */
+export function bulat(nilai: NilaiUang): boolean {
+  return keDecimal(nilai).isInteger();
+}
+
+/**
  * Ubah ke `number` biasa — HANYA untuk dikirim ke komponen client atau ke
  * pustaka grafik yang memang menuntut number.
  *

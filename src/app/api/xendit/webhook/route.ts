@@ -25,6 +25,7 @@ import {
   GalatWebhookPembayaran,
   selesaikanDariWebhook,
   uraikanWebhookSesiSelesai,
+  type AlasanTinjau,
   type NotifikasiPembayaran,
 } from '@/lib/pelunasan-webhook';
 import { tokenWebhookCocok } from '@/lib/xendit';
@@ -102,6 +103,30 @@ export async function POST(req: Request) {
   }
 }
 
+/**
+ * Terjemahan alasan tinjau menjadi kalimat yang bisa dikerjakan admin.
+ *
+ * Penandaan ini tidak boleh berhenti sebagai baris log. Ketiga keadaan di bawah
+ * berarti uang NYATA sudah tercatat pada tagihan yang seharusnya tidak lagi
+ * menerimanya — dan satu-satunya jalan keluarnya adalah keputusan manusia
+ * (verifikasi, atau refund lewat jalur yang sudah ada). Karena itu alasannya
+ * ikut di JUDUL surat, bukan hanya di badannya: judul yang menonjol adalah satu-
+ * satunya bagian yang pasti terbaca di daftar inbox.
+ */
+const KALIMAT_TINJAU: Record<AlasanTinjau, string> = {
+  PESANAN_TIDAK_MENERIMA_BAYAR:
+    'Pesanan ini sudah tidak menerima pembayaran (dibatalkan, atau sedang/sudah direfund) ' +
+    'ketika uangnya masuk. Uangnya tetap dicatat agar bisa dikembalikan lewat jalur refund. ' +
+    'Tagihan pelunasan baru TIDAK diterbitkan.',
+  TAGIHAN_SUDAH_DITUTUP:
+    'Tagihannya sudah ditutup karena tenggatnya terlewat sebelum uangnya tiba — pembayaran ' +
+    'kemungkinan diselesaikan bank sesudah sesinya dinyatakan mati. Uangnya tetap dicatat.',
+  KEMBAR_BERSESI_TERBUKA:
+    'Uang terlambat masuk ke tagihan lama, sementara tagihan penggantinya sudah punya sesi ' +
+    'pembayaran yang terbuka. Sesi itu TIDAK ditutup otomatis karena mungkin sedang dibayar ' +
+    'juga. Periksa dashboard Xendit: bila ada setoran kedua, kembalikan salah satunya.',
+};
+
 function labelTujuan(tujuan: string): string {
   if (tujuan === 'DP') return 'DP';
   if (tujuan === 'PELUNASAN') return 'Pelunasan';
@@ -123,6 +148,12 @@ function labelTujuan(tujuan: string): string {
  * yang tidak akan terjadi.
  */
 function kalimatSisaPokok(notifikasi: NotifikasiPembayaran): string {
+  // Pada pesanan yang sudah tidak menerima pembayaran, `terbitkanPelunasanBila`
+  // sengaja tidak menerbitkan apa pun. Menyebut sisa pokok di sini berarti
+  // menagih kewajiban dari pesanan yang dibatalkan — dan menjanjikan tagihan
+  // yang memang tidak ada.
+  if (notifikasi.perluTinjauAdmin === 'PESANAN_TIDAK_MENERIMA_BAYAR') return '';
+
   if (!lebihBesar(notifikasi.sisaPokok, 0)) return '';
 
   const sisa = rupiah(notifikasi.sisaPokok);
@@ -154,30 +185,41 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
     status: 'MENUNGGU VERIFIKASI ADMIN',
   };
 
+  const tinjau = notifikasi.perluTinjauAdmin;
+
   const adminEmail = process.env.ADMIN_EMAIL;
   if (adminEmail) {
     await sendEmail({
       to: adminEmail,
       subject: judulSurat({
-        topik: `Uang masuk (${label})`,
+        topik: tinjau ? `PERLU DITINJAU — uang masuk (${label})` : `Uang masuk (${label})`,
         idPesanan: notifikasi.bookingId,
         nominal: notifikasi.jumlah,
         untukAdmin: true,
       }),
-      title: 'Ada Pembayaran Masuk',
+      title: tinjau ? 'Pembayaran Masuk — Perlu Ditinjau' : 'Ada Pembayaran Masuk',
       message:
         `${label} sebesar <b>${nominal}</b> masuk untuk pesanan #${nomor} ` +
         // Nama akun ditulis pembeli sendiri saat mendaftar; surat ini dibaca
         // admin sebagai kiriman sistem, jadi isinya tidak boleh membawa markup.
         `dari <b>${amankanHtml(notifikasi.namaPembeli ?? 'pembeli')}</b>.<br/>` +
+        `Status pesanan saat uang ini masuk: <b>${notifikasi.statusPesanan}</b>.<br/>` +
         // Sisa pokok ikut di surat admin supaya pesanan DP langsung terbaca
         // sebagai pesanan yang masih menggantung, tanpa membuka dashboard.
         (sisaPokok ? `Sisa pokok setelah setoran ini: <b>${sisaPokok}</b>.<br/>` : '') +
-        'Silakan cek dashboard lalu tekan Verifikasi.',
+        (tinjau
+          ? `<br/><b>Perlu ditinjau:</b> ${KALIMAT_TINJAU[tinjau]}`
+          : 'Silakan cek dashboard lalu tekan Verifikasi.'),
       orderDetail: detail,
     });
   } else {
+    // Satu-satunya jalur penandaan ke manusia adalah surat ini. Bila alamatnya
+    // belum diisi, keadaan yang perlu ditinjau harus setidaknya terbaca di log —
+    // tanpa nominal, id pesanan, atau data pembeli, seperti log lain di file ini.
     console.error('[xendit-webhook] ADMIN_EMAIL belum diisi — notifikasi admin dilewati.');
+    if (tinjau) {
+      console.error(`[xendit-webhook] setoran perlu ditinjau admin: ${tinjau}`);
+    }
   }
 
   // Tidak ada jeda antar-SMTP di sini: pengiriman terjadi di dalam permintaan
@@ -196,7 +238,13 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
       title: `${label} Telah Diterima`,
       message:
         `Terima kasih, ${label.toLowerCase()} sebesar <b>${nominal}</b> sudah masuk ke sistem kami. ` +
-        'Tim Admin akan memverifikasi dalam waktu singkat.' +
+        (tinjau === 'PESANAN_TIDAK_MENERIMA_BAYAR'
+          ? // Pembeli tidak perlu tahu sebab teknisnya, tetapi TIDAK BOLEH
+            // dijanjikan pesanannya berjalan. Uangnya tercatat, dan itu yang
+            // membuat pengembaliannya mungkin.
+            'Pembayaran ini masuk setelah pesanan Anda berhenti berjalan, ' +
+            'jadi Tim Admin akan menghubungi Anda untuk menindaklanjutinya.'
+          : 'Tim Admin akan memverifikasi dalam waktu singkat.') +
         kalimatSisaPokok(notifikasi),
       orderDetail: { ...detail, status: 'SEDANG DIVERIFIKASI' },
     });
