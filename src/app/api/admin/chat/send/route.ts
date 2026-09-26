@@ -19,7 +19,12 @@ export async function POST(req: Request) {
   try {
     const { sessionId, message } = await req.json();
 
-    if (!sessionId || !message) {
+    // Tipenya diperiksa, bukan hanya keberadaannya. Tiga route chat lain
+    // (`close`, `join`, `reply`) sudah memakai `typeof`; route inilah yang
+    // terlewat. Objek selalu truthy, jadi `!sessionId` meloloskannya utuh ke
+    // `where` — dan Prisma menolaknya sebagai galat validasi, yang muncul ke
+    // petugas sebagai 500 "Gagal kirim" yang bisa dipicu siapa pun.
+    if (typeof sessionId !== 'string' || sessionId.trim() === '' || !message) {
         return NextResponse.json({ error: "Data tidak lengkap" }, { status: 400 });
     }
 

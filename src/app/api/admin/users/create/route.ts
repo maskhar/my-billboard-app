@@ -10,6 +10,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import { Role, daftarNilai, sahRole } from '@/lib/enum-guard';
+import { adalahDuplikatUnik } from '@/lib/db-error';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -20,11 +21,48 @@ export async function POST(req: Request) {
 
   try {
     const body = await req.json();
-    const { name, email, password, role } = body;
+    const { role } = body;
 
     // 1. Validasi input dasar
+    //
+    // TIPENYA, BUKAN KEBERADAANNYA. Ketiga nilai di bawah dulu diambil mentah
+    // dan hanya diperiksa truthy. Objek selalu truthy, jadi
+    // `{"email":{"not":""}}` lolos utuh ke `where` milik `findUnique` di
+    // bawah — gerbang email-ganda itulah yang gagal, dan admin melihat 500
+    // "Terjadi kesalahan pada server".
+    //
+    // `email` juga DINORMALKAN. Tanpa `toLowerCase()`, akun yang dibuat admin
+    // sebagai `Budi@X.test` tersimpan apa adanya sementara `authorize` di
+    // `src/lib/auth.ts` mencari dengan alamat yang sudah dihuruf-kecilkan:
+    // akunnya ada, tapi pemiliknya tidak akan pernah bisa login dan pesan yang
+    // ia terima hanya "Email atau password salah".
+    //
+    // Aturannya disamakan dengan `api/register` supaya akun yang dibuat admin
+    // tidak lebih lemah daripada yang mendaftar sendiri.
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+    const password = typeof body.password === 'string' ? body.password : '';
+
     if (!name || !email || !password) {
       return NextResponse.json({ message: 'Semua field harus diisi.' }, { status: 400 });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return NextResponse.json({ message: 'Format email tidak valid.' }, { status: 400 });
+    }
+
+    if (password.length < 8) {
+      return NextResponse.json({ message: 'Password minimal 8 karakter.' }, { status: 400 });
+    }
+
+    // bcrypt memotong input di 72 byte. Menolak lebih awal lebih jujur daripada
+    // menyimpan hash atas potongan pertama saja — pemiliknya akan bisa login
+    // dengan password yang lebih pendek dari yang ia kira.
+    if (Buffer.byteLength(password, 'utf8') > 72) {
+      return NextResponse.json(
+        { message: 'Password terlalu panjang (maksimal 72 karakter).' },
+        { status: 400 }
+      );
     }
 
     // 2. Tentukan role. Hanya SUPER_ADMIN yang boleh mengangkat role apa pun;
@@ -52,30 +90,50 @@ export async function POST(req: Request) {
     }
 
     // 4. Hash password
-    const hashedPassword = await bcrypt.hash(password, 10);
+    //
+    // Biaya 12, sama dengan `api/register`. Sebelumnya 10 di sini dan 12 di
+    // sana: akun buatan admin — yang justru paling sering berperan ADMIN atau
+    // SUPER_ADMIN — dilindungi lebih lemah daripada akun pembeli biasa.
+    const hashedPassword = await bcrypt.hash(password, 12);
 
     // 5. Buat user baru. Field sensitif (isVerified, authProvider, otp*) diset
     //    di server, tidak pernah diambil dari body.
-    const newUser = await prisma.user.create({
-      data: {
-        name,
-        email,
-        password: hashedPassword,
-        role: roleFinal,
-        authProvider: 'EMAIL', // Default untuk pembuatan manual
-        isVerified: true, // Akun buatan admin dianggap terverifikasi
-      },
-      // Select eksplisit: hash password dan kolom OTP tidak ikut terkirim.
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        isVerified: true,
-        authProvider: true,
-        createdAt: true,
-      },
-    });
+    //
+    // Pemeriksaan di langkah 3 menutup kasus biasa tapi bukan balapan:
+    // `bcrypt.hash(password, 12)` sengaja lambat, dan selama ratusan milidetik
+    // itu permintaan kedua dengan email sama bisa lewat pemeriksaan yang sama.
+    // Klik ganda pada tombol Simpan sudah cukup. Yang menolak penulisan kedua
+    // adalah unique index `email`, dan penolakannya harus dibaca sebagai 409
+    // yang sama — bukan 500 "Terjadi kesalahan pada server".
+    let newUser;
+    try {
+      newUser = await prisma.user.create({
+        data: {
+          name,
+          email,
+          password: hashedPassword,
+          role: roleFinal,
+          authProvider: 'EMAIL', // Default untuk pembuatan manual
+          isVerified: true, // Akun buatan admin dianggap terverifikasi
+        },
+        // Select eksplisit: hash password dan kolom OTP tidak ikut terkirim.
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          isVerified: true,
+          authProvider: true,
+          createdAt: true,
+        },
+      });
+    } catch (error) {
+      if (adalahDuplikatUnik(error, 'email')) {
+        // Status dan pesan disamakan persis dengan jalur di langkah 3.
+        return NextResponse.json({ message: 'Email sudah terdaftar.' }, { status: 409 });
+      }
+      throw error;
+    }
 
     return NextResponse.json(newUser, { status: 201 }); // 201 Created
   } catch (error) {

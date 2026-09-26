@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { safeJsonParse } from "@/lib/safe-json";
+import { idDariBody } from "@/lib/id-dari-body";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -14,9 +15,22 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 
-    const { historyId } = await req.json();
-
     try {
+        // `req.json()` dulu dipanggil DI LUAR `try`. Body yang bukan JSON
+        // karena itu melempar tanpa penangkap: Next menjawabnya sebagai galat
+        // runtime, bukan 400, dan jejaknya masuk log sebagai kerusakan server.
+        const { historyId: historyIdMentah } = await req.json();
+
+        // Satu-satunya route di `admin/billboards` yang dulu tidak memeriksa
+        // pengenalnya sama sekali — bukan tipe, bukan pula keberadaannya.
+        // `undefined` di dalam `where` milik `findUnique` adalah galat
+        // validasi, dan objek `{"not":""}` pun begitu; keduanya muncul ke admin
+        // sebagai "Gagal Rollback" yang sama.
+        const historyId = idDariBody(historyIdMentah);
+        if (historyId === null) {
+            return NextResponse.json({ message: "ID riwayat tidak valid." }, { status: 400 });
+        }
+
         // 1. Ambil data history
         const history = await prisma.billboardHistory.findUnique({
             where: { id: historyId }
@@ -66,6 +80,7 @@ export async function POST(req: Request) {
         
         return NextResponse.json({ message: "Rollback Berhasil" });
     } catch (e) {
+        console.error('[billboards/rollback] Gagal memulihkan data billboard:', e);
         return NextResponse.json({ message: "Gagal Rollback" }, { status: 500 });
     }
 }

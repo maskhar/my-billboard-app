@@ -7899,3 +7899,607 @@ describe('area privat tidak boleh masuk indeks pencarian', () => {
     assert.equal(METADATA_PRIVAT.robots.follow, false);
   });
 });
+
+// ===========================================================================
+// FILTER PRISMA YANG DISELUNDUPKAN LEWAT PENGENAL DI BADAN PERMINTAAN
+// ===========================================================================
+//
+// Prisma membaca OBJEK di dalam `where` sebagai filter, bukan sebagai nilai.
+// `if (!id) return 400` tidak menahannya karena objek selalu truthy. Akibatnya
+// berbeda menurut operasinya — `deleteMany` berarti penghapusan massal,
+// `findUnique` berarti 500 yang bisa dipicu siapa pun — dan keduanya ditutup
+// dengan satu penjagaan yang sama.
+describe('src/lib/id-dari-body.ts — pengenal dari badan permintaan', () => {
+  const { idDariBody, idSah } = require(
+    path.join(__dirname, '..', 'src', 'lib', 'id-dari-body.ts')
+  );
+
+  const DITOLAK = [
+    ['filter Prisma', { not: '' }],
+    ['daftar id', { in: ['a', 'b'] }],
+    ['objek kosong', {}],
+    ['array', ['booking-1']],
+    ['angka', 12345],
+    ['nol', 0],
+    ['null', null],
+    ['undefined', undefined],
+    ['boolean', true],
+    ['teks kosong', ''],
+    ['hanya spasi', '   '],
+  ];
+
+  for (const [judul, nilai] of DITOLAK) {
+    it(`menolak ${judul}`, () => {
+      assert.equal(idDariBody(nilai), null, judul);
+      assert.equal(idSah(nilai), false, judul);
+    });
+  }
+
+  it('menerima cuid dan uuid apa adanya', () => {
+    assert.equal(idDariBody('clz1a2b3c4d5e6f7g8h9i0j1k'), 'clz1a2b3c4d5e6f7g8h9i0j1k');
+    assert.equal(idDariBody('3f0c1e6a-1b2c-4d5e-8f90-1a2b3c4d5e6f'), '3f0c1e6a-1b2c-4d5e-8f90-1a2b3c4d5e6f');
+    assert.equal(idSah('booking-1'), true);
+  });
+
+  it('memangkas spasi di tepi, bukan menolaknya', () => {
+    // Field form yang tersalin dengan spasi di ujung adalah kesalahan manusia
+    // yang wajar; menolaknya akan membuat admin melihat "ID tidak valid" atas
+    // id yang sebenarnya benar.
+    assert.equal(idDariBody('  booking-1  '), 'booking-1');
+  });
+
+  it('menolak teks yang terlalu panjang untuk sebuah id', () => {
+    // Teks sepanjang megabyte bukan id yang salah ketik; ia beban yang dikirim
+    // dengan sengaja ke kueri database.
+    assert.equal(idDariBody('a'.repeat(129)), null);
+    assert.equal(idDariBody('a'.repeat(128)), 'a'.repeat(128));
+  });
+});
+
+describe('route yang memakai pengenal dari badan permintaan menolak filter Prisma', () => {
+  // Proxy yang MELEMPAR begitu disentuh. Yang diuji bukan hanya status
+  // jawabannya, tapi bahwa database tidak pernah dihubungi sama sekali untuk
+  // pengenal yang tidak sah — penolakan yang terjadi setelah kueri berjalan
+  // tetap membiarkan kuerinya berjalan.
+  function prismaTakBolehDisentuh() {
+    return new Proxy({}, {
+      get(_target, prop) {
+        throw new Error(`prisma.${String(prop)} disentuh untuk pengenal yang tidak sah`);
+      },
+    });
+  }
+
+  const ROUTE = [
+    {
+      nama: 'admin/users/delete',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'users', 'delete', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { id: 'user-9' },
+      field: 'id',
+      pesan: /ID user tidak valid/,
+    },
+    {
+      nama: 'admin/billboards/delete',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', 'delete', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { id: 'bb-9' },
+      field: 'id',
+      pesan: /ID billboard tidak valid/,
+    },
+    {
+      nama: 'admin/billboards/update',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', 'update', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { id: 'bb-9', slug: 'jl-sudirman', price: '1000000', status: 'Available', publishStatus: 'PUBLISHED' },
+      field: 'id',
+      pesan: /ID billboard tidak valid/,
+    },
+    {
+      nama: 'admin/billboards/quick-update',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', 'quick-update', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { id: 'bb-9', status: 'Available' },
+      field: 'id',
+      pesan: /ID billboard tidak valid/,
+    },
+    {
+      nama: 'admin/billboards/rollback',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', 'rollback', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { historyId: 'hist-9' },
+      field: 'historyId',
+      pesan: /ID riwayat tidak valid/,
+    },
+    {
+      nama: 'admin/users/update-role',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'users', 'update-role', 'route.ts'),
+      peran: 'SUPER_ADMIN',
+      isi: { userId: 'user-9', newRole: 'USER' },
+      field: 'userId',
+      pesan: /userId tidak valid/,
+    },
+    {
+      nama: 'admin/orders/update-design-status',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'orders', 'update-design-status', 'route.ts'),
+      peran: 'ADMIN',
+      isi: { orderId: 'booking-9', status: 'APPROVED' },
+      field: 'orderId',
+      pesan: /ID pesanan tidak valid/,
+    },
+    {
+      nama: 'admin/chat/send',
+      jalur: path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'chat', 'send', 'route.ts'),
+      peran: 'CS',
+      isi: { sessionId: 'sesi-9', message: 'halo' },
+      field: 'sessionId',
+      pesan: /Data tidak lengkap/,
+    },
+  ];
+
+  const NILAI_TIDAK_SAH = [
+    ['filter Prisma', { not: '' }],
+    ['daftar id', { in: ['a', 'b'] }],
+    ['angka', 12345],
+    ['null', null],
+    ['hanya spasi', '   '],
+  ];
+
+  for (const berkas of ROUTE) {
+    for (const [judulNilai, nilai] of NILAI_TIDAK_SAH) {
+      it(`${berkas.nama}: ${berkas.field} berupa ${judulNilai} dijawab 400 tanpa menyentuh database`, async () => {
+        const route = muatDenganModulPalsu(berkas.jalur, {
+          'next/server': {
+            NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+          },
+          'next-auth': {
+            getServerSession: async () => ({ user: { id: 'admin-1', role: berkas.peran } }),
+          },
+          '@/lib/auth': { authOptions: {} },
+          '@/lib/prisma': { prisma: prismaTakBolehDisentuh() },
+        });
+
+        const response = await route.POST(
+          new Request('https://contoh.test' + '/api/' + berkas.nama, {
+            method: 'POST',
+            body: JSON.stringify({ ...berkas.isi, [berkas.field]: nilai }),
+          })
+        );
+        const isi = await response.json();
+
+        assert.equal(response.status, 400, `${berkas.nama} / ${judulNilai}`);
+        // Sebagian route menamai fieldnya `message`, sebagian `error`.
+        assert.match(String(isi.message ?? isi.error), berkas.pesan, `${berkas.nama} / ${judulNilai}`);
+      });
+    }
+  }
+
+  it('admin/users/create menolak email berupa filter Prisma tanpa menyentuh database', async () => {
+    // Route ini tidak memakai `idDariBody` karena yang dipakai sebagai kunci
+    // pencarian adalah `email`, bukan sebuah id — tapi jalur serangannya sama:
+    // `{"not":""}` masuk ke `where` milik `findUnique` dan menggagalkan gerbang
+    // email-ganda, yang muncul ke admin sebagai 500.
+    const route = muatDenganModulPalsu(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'users', 'create', 'route.ts'),
+      {
+        'next/server': {
+          NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+        },
+        'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': { prisma: prismaTakBolehDisentuh() },
+        bcryptjs: { hash: async () => { throw new Error('hash tidak boleh dijalankan'); } },
+      }
+    );
+
+    const response = await route.POST(
+      new Request('https://contoh.test/api/admin/users/create', {
+        method: 'POST',
+        body: JSON.stringify({ name: 'Budi', email: { not: '' }, password: 'sandirahasia' }),
+      })
+    );
+
+    assert.equal(response.status, 400);
+  });
+});
+
+describe('penjagaan pengenal terpasang di sumbernya, bukan hanya lolos test', () => {
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const PEMAKAI_ID_DARI_BODY = [
+    ['admin/users/delete', ['api', 'admin', 'users', 'delete']],
+    ['admin/billboards/delete', ['api', 'admin', 'billboards', 'delete']],
+    ['admin/billboards/update', ['api', 'admin', 'billboards', 'update']],
+    ['admin/billboards/quick-update', ['api', 'admin', 'billboards', 'quick-update']],
+    ['admin/billboards/rollback', ['api', 'admin', 'billboards', 'rollback']],
+    ['admin/users/update-role', ['api', 'admin', 'users', 'update-role']],
+    ['admin/orders/update-design-status', ['api', 'admin', 'orders', 'update-design-status']],
+  ];
+
+  for (const [nama, bagian] of PEMAKAI_ID_DARI_BODY) {
+    it(`${nama} memakai penjagaan bersama, bukan salinan aturannya sendiri`, () => {
+      const kode = kodeSaja(path.join(__dirname, '..', 'src', 'app', ...bagian, 'route.ts'));
+      assert.match(kode, /from ['"]@\/lib\/id-dari-body['"]/, `${nama} tidak mengimpor id-dari-body`);
+      assert.match(kode, /idDariBody\(/, `${nama} tidak memanggil idDariBody`);
+      // Bentuk lama: hanya memeriksa keberadaan. Objek lolos dari pola ini.
+      assert.doesNotMatch(
+        kode,
+        /if\s*\(\s*!(id|userId|orderId|historyId)\s*\)/,
+        `${nama} masih memeriksa keberadaan saja`
+      );
+    });
+  }
+
+  it('admin/chat/send memeriksa tipe sessionId seperti tiga route chat lainnya', () => {
+    const kode = kodeSaja(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'chat', 'send', 'route.ts')
+    );
+    assert.match(kode, /typeof sessionId !== ['"]string['"]/);
+  });
+
+  it('semua route chat memeriksa tipe pengenal sesinya', () => {
+    // `send` dulu menjadi satu-satunya yang terlewat di antara empat route yang
+    // seharusnya seragam.
+    for (const nama of ['send', 'close', 'join', 'reply']) {
+      const jalur = path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'chat', nama, 'route.ts');
+      if (!fs.existsSync(jalur)) continue;
+      assert.match(kodeSaja(jalur), /typeof sessionId/, `chat/${nama} tidak memeriksa tipe sessionId`);
+    }
+  });
+
+  it('admin/users/create menormalkan email dan memakai biaya hash yang sama dengan pendaftaran publik', () => {
+    const kode = kodeSaja(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'users', 'create', 'route.ts')
+    );
+    // Tanpa `toLowerCase()`, akun yang dibuat sebagai `Budi@X.test` tidak akan
+    // pernah ditemukan `authorize` yang mencari dengan alamat huruf kecil:
+    // akunnya ada, pemiliknya terkunci, pesannya hanya "Email atau password
+    // salah".
+    assert.match(kode, /toLowerCase\(\)/, 'email tidak dinormalkan');
+    assert.match(kode, /typeof body\.email === ['"]string['"]/, 'tipe email tidak diperiksa');
+    // Biaya 10 di sini lawan 12 di `api/register` berarti akun ADMIN dilindungi
+    // lebih lemah daripada akun pembeli.
+    assert.match(kode, /bcrypt\.hash\(password, 12\)/, 'biaya hash tidak 12');
+    assert.match(kode, /adalahDuplikatUnik\(/, 'balapan email ganda tidak ditangani');
+  });
+});
+
+describe('src/lib/asal-permintaan.ts — kunci pembatas per alamat asal', () => {
+  const { asalDariRecord, asalPermintaan } = require(
+    path.join(__dirname, '..', 'src', 'lib', 'asal-permintaan.ts')
+  );
+
+  it('mengambil alamat paling kiri dari rantai proxy', () => {
+    assert.equal(
+      asalDariRecord({ 'x-forwarded-for': '203.0.113.9, 10.0.0.1, 10.0.0.2' }),
+      '203.0.113.9'
+    );
+  });
+
+  it('jatuh ke x-real-ip bila x-forwarded-for tidak ada', () => {
+    assert.equal(asalDariRecord({ 'x-real-ip': ' 203.0.113.9 ' }), '203.0.113.9');
+  });
+
+  it('mengembalikan null bila alamatnya tidak bisa ditentukan', () => {
+    // INI BAGIAN YANG PALING MUDAH SALAH. Mengganti `null` dengan nilai tetap
+    // seperti "tanpa-ip" membuat seluruh pengunjung berbagi satu penghitung:
+    // begitu batasnya tercapai, pintu tertutup bagi semua orang. Pembatas yang
+    // dipasang untuk menahan penyerang berubah menjadi cara mematikan layanan.
+    assert.equal(asalDariRecord(undefined), null);
+    assert.equal(asalDariRecord({}), null);
+    assert.equal(asalDariRecord({ 'x-forwarded-for': '   ' }), null);
+    assert.equal(asalDariRecord({ 'x-forwarded-for': ',,' }), null);
+    assert.equal(asalDariRecord({ 'x-forwarded-for': 12345 }), null);
+  });
+
+  it('memotong nilai yang terlalu panjang, tidak melewatkannya', () => {
+    // Memotong tetap memberi penghitung yang stabil per penyerang; menolak akan
+    // membuat permintaan itu lolos tanpa dibatasi sama sekali.
+    const hasil = asalDariRecord({ 'x-forwarded-for': 'a'.repeat(500) });
+    assert.equal(hasil.length, 64);
+  });
+
+  it('membaca Request dengan nama header tanpa peduli besar-kecil huruf', () => {
+    const req = new Request('https://contoh.test/', {
+      headers: { 'X-Forwarded-For': '198.51.100.7, 10.0.0.1' },
+    });
+    assert.equal(asalPermintaan(req), '198.51.100.7');
+    assert.equal(asalPermintaan(new Request('https://contoh.test/')), null);
+  });
+});
+
+describe('POST /api/register dibatasi lajunya', () => {
+  function buatRouteRegisterBerbatas() {
+    let jumlahBodyDibaca = 0;
+    let jumlahHash = 0;
+    const prisma = {
+      user: {
+        async findUnique() {
+          jumlahBodyDibaca += 1;
+          return null;
+        },
+        async create(args) {
+          return { id: 'u', name: args.data.name, email: args.data.email };
+        },
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_REGISTER, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      bcryptjs: { hash: async () => { jumlahHash += 1; return 'hash-palsu'; } },
+      '@/lib/prisma': { prisma },
+      '@/lib/db-error': { adalahDuplikatUnik: () => false },
+    });
+
+    return { route, jumlahHash: () => jumlahHash, jumlahPencarian: () => jumlahBodyDibaca };
+  }
+
+  function permintaanDaftar(asal, urutan) {
+    const headers = asal ? { 'x-forwarded-for': asal } : {};
+    return new Request('https://contoh.test/api/register', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        name: 'Budi Santoso',
+        email: `budi${urutan}@contoh.test`,
+        phone: '08123456789',
+        password: 'sandirahasia',
+      }),
+    });
+  }
+
+  it('menolak 429 setelah sepuluh pendaftaran dari satu alamat asal', async () => {
+    // Alamatnya dibuat unik per test karena penghitung `rate-limit` hidup di
+    // memori proses dan dibagi seluruh file test ini.
+    const asal = '203.0.113.' + Math.floor(Math.random() * 200 + 20);
+    const fake = buatRouteRegisterBerbatas();
+
+    for (let i = 0; i < 10; i += 1) {
+      const response = await fake.route.POST(permintaanDaftar(asal, i));
+      assert.equal(response.status, 201, `percobaan ke-${i + 1} seharusnya lolos`);
+    }
+
+    const hashSebelum = fake.jumlahHash();
+    const ditolak = await fake.route.POST(permintaanDaftar(asal, 99));
+    const isi = await ditolak.json();
+
+    assert.equal(ditolak.status, 429);
+    assert.match(isi.message, /Terlalu banyak pendaftaran/);
+    assert.equal(ditolak.headers.get('Retry-After') !== null, true, 'Retry-After tidak dikirim');
+    // `hash(password, 12)` sengaja lambat. Menolak SESUDAH menjalankannya tidak
+    // menahan biaya CPU-nya sama sekali — justru itu yang dipakai penyerang.
+    assert.equal(fake.jumlahHash(), hashSebelum, 'hash tetap dijalankan setelah batas tercapai');
+  });
+
+  it('melewati batas bila alamat asal tidak bisa ditentukan, bukan memakai kunci tetap', async () => {
+    // Kunci tetap akan membuat sepuluh percobaan dari siapa pun menutup
+    // pendaftaran bagi SEMUA orang selama sejam.
+    const fake = buatRouteRegisterBerbatas();
+    for (let i = 0; i < 12; i += 1) {
+      const response = await fake.route.POST(permintaanDaftar(null, 1000 + i));
+      assert.notEqual(response.status, 429, `percobaan ke-${i + 1} tidak boleh dibatasi`);
+    }
+  });
+
+  it('memeriksa batas sebelum membaca badan permintaan', () => {
+    const kode = fs
+      .readFileSync(JALUR_ROUTE_REGISTER, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    const posisiBatas = kode.indexOf('rateLimit({');
+    const posisiBody = kode.indexOf('req.json()');
+    assert.ok(posisiBatas > 0, 'rateLimit tidak dipanggil');
+    assert.ok(posisiBody > 0, 'req.json tidak ditemukan');
+    assert.ok(posisiBatas < posisiBody, 'badan permintaan dibaca sebelum batas diperiksa');
+    assert.match(kode, /rateLimitHeaders\(/, 'header sisa jatah tidak dikirim');
+  });
+});
+
+describe('pintu login: pembatas, pesan seragam, dan waktu jawaban', () => {
+  let nomor = 0;
+  function emailUnik() {
+    nomor += 1;
+    return `uji${nomor}.${Date.now()}@contoh.test`;
+  }
+
+  /**
+   * Muat `authOptions` dengan prisma dan bcrypt dipalsukan, lalu ambil
+   * `authorize` milik provider Credentials.
+   *
+   * `rateLimit` DIPAKAI ASLI: yang diuji justru perilaku pembatasnya.
+   */
+  function buatAuthorize(user) {
+    const pencarian = [];
+    const perbandingan = [];
+
+    const modul = muatDenganModulPalsu(path.join(__dirname, '..', 'src', 'lib', 'auth.ts'), {
+      'next-auth/providers/credentials': (konfig) => ({ ...konfig, id: 'credentials' }),
+      'next-auth/providers/google': (konfig) => ({ ...konfig, id: 'google' }),
+      '@/lib/prisma': {
+        prisma: {
+          user: {
+            async findUnique(args) {
+              pencarian.push(args);
+              return user;
+            },
+          },
+        },
+      },
+      bcryptjs: {
+        async compare(sandi, hash) {
+          perbandingan.push({ sandi, hash });
+          return hash === 'hash-benar' && sandi === 'sandi-benar';
+        },
+      },
+    });
+
+    const kredensial = modul.authOptions.providers.find((p) => p.id === 'credentials');
+    assert.ok(kredensial, 'provider Credentials tidak ditemukan');
+
+    return {
+      authorize: (email, password, headers) =>
+        kredensial.authorize({ email, password }, headers ? { headers } : undefined),
+      pencarian: () => pencarian,
+      perbandingan: () => perbandingan,
+    };
+  }
+
+  const AKUN = {
+    id: 'user-1',
+    email: 'budi@contoh.test',
+    name: 'Budi',
+    role: 'USER',
+    password: 'hash-benar',
+  };
+
+  it('kredensial yang benar mengembalikan identitas tanpa membawa hash password', async () => {
+    const fake = buatAuthorize(AKUN);
+    const hasil = await fake.authorize(emailUnik(), 'sandi-benar');
+    assert.deepEqual(hasil, { id: 'user-1', email: 'budi@contoh.test', name: 'Budi', role: 'USER' });
+  });
+
+  it('akun yang tidak ada dan password yang salah menjawab pesan yang sama', async () => {
+    // Pesan yang berbeda adalah alat pemeriksa: `POST
+    // /api/auth/callback/credentials` bisa dipanggil langsung dan membalas
+    // pesan aslinya, jadi siapa pun bisa menguji satu daftar alamat email dan
+    // tahu mana yang punya akun di sini.
+    const tanpaAkun = buatAuthorize(null);
+    const salahSandi = buatAuthorize(AKUN);
+
+    const pesan = [];
+    for (const [fake, sandi] of [[tanpaAkun, 'apa-saja'], [salahSandi, 'sandi-salah']]) {
+      await assert.rejects(
+        () => fake.authorize(emailUnik(), sandi),
+        (e) => { pesan.push(e.message); return true; }
+      );
+    }
+
+    assert.equal(pesan[0], pesan[1], 'pesan penolakan bisa dibedakan');
+    assert.equal(pesan[0], 'Email atau password salah');
+  });
+
+  it('bcrypt tetap dijalankan walau akunnya tidak ada', async () => {
+    // Selisihnya terukur: ~230 ms lawan ~0 ms. Tanpa beban banding ini, alamat
+    // yang terdaftar bisa dipisahkan dari yang tidak hanya dengan mengukur
+    // waktu jawaban — walaupun pesan galatnya sudah diseragamkan.
+    const fake = buatAuthorize(null);
+    await assert.rejects(() => fake.authorize(emailUnik(), 'apa-saja'));
+
+    assert.equal(fake.perbandingan().length, 1, 'compare dilewati saat akun tidak ada');
+    assert.match(fake.perbandingan()[0].hash, /^\$2[aby]\$/, 'hash umpan bukan hash bcrypt yang sah');
+  });
+
+  it('akun Google tanpa password diperlakukan sama dengan akun yang tidak ada', async () => {
+    const fake = buatAuthorize({ ...AKUN, password: null });
+    await assert.rejects(
+      () => fake.authorize(emailUnik(), 'sandi-benar'),
+      /Email atau password salah/
+    );
+    assert.equal(fake.perbandingan().length, 1, 'compare dilewati untuk akun tanpa password');
+  });
+
+  it('email dinormalkan sebelum dicari maupun dijadikan kunci pembatas', async () => {
+    const fake = buatAuthorize(AKUN);
+    const email = emailUnik().toUpperCase();
+    await fake.authorize(`  ${email}  `, 'sandi-benar');
+    assert.equal(fake.pencarian()[0].where.email, email.toLowerCase());
+  });
+
+  it('pencarian akun memakai select eksplisit, tidak membawa seluruh baris', async () => {
+    // `findUnique` tanpa `select` membawa `ktp`, `npwp`, dan `xenditCustomerId`
+    // ke memori pada SETIAP percobaan login, termasuk yang gagal.
+    const fake = buatAuthorize(AKUN);
+    await fake.authorize(emailUnik(), 'sandi-benar');
+    const args = fake.pencarian()[0];
+    assert.ok(args.select, 'tidak memakai select');
+    for (const kolom of ['ktp', 'npwp', 'xenditCustomerId', 'otp', 'otpExpiry', 'whatsapp']) {
+      assert.equal(kolom in args.select, false, `select membawa ${kolom}`);
+    }
+  });
+
+  it('percobaan ke-11 pada satu akun ditolak sebelum database dihubungi', async () => {
+    const fake = buatAuthorize(AKUN);
+    const email = emailUnik();
+
+    for (let i = 0; i < 10; i += 1) {
+      await assert.rejects(() => fake.authorize(email, 'sandi-salah'), /Email atau password salah/);
+    }
+    assert.equal(fake.pencarian().length, 10);
+
+    await assert.rejects(
+      () => fake.authorize(email, 'sandi-salah'),
+      /Terlalu banyak percobaan login/
+    );
+    // Penghitungnya naik SEBELUM akun dicari, jadi pembatas juga menahan beban
+    // `compare` — dan pesan "terlalu banyak percobaan" tidak ikut memberitahu
+    // apakah akunnya ada.
+    assert.equal(fake.pencarian().length, 10, 'database dihubungi walau batas tercapai');
+  });
+
+  it('batas per akun dihitung juga untuk percobaan yang berhasil', async () => {
+    // Penghitung yang hanya naik saat gagal tidak menahan biaya CPU-nya: satu
+    // skrip bisa memanggil terus dengan password yang benar dan membebani
+    // proses tanpa pernah tertahan.
+    const fake = buatAuthorize(AKUN);
+    const email = emailUnik();
+    for (let i = 0; i < 10; i += 1) {
+      await fake.authorize(email, 'sandi-benar');
+    }
+    await assert.rejects(() => fake.authorize(email, 'sandi-benar'), /Terlalu banyak percobaan login/);
+  });
+
+  it('batas per alamat asal menahan percobaan yang disebar ke banyak akun', async () => {
+    // Batas per akun tidak menyentuh credential stuffing: tiap percobaan
+    // memakai email yang berbeda, jadi tiap percobaan mendapat penghitung baru.
+    const fake = buatAuthorize(null);
+    const asal = '198.51.100.' + Math.floor(Math.random() * 200 + 20);
+    const headers = { 'x-forwarded-for': asal };
+
+    for (let i = 0; i < 30; i += 1) {
+      await assert.rejects(
+        () => fake.authorize(emailUnik(), 'apa-saja', headers),
+        /Email atau password salah/
+      );
+    }
+
+    await assert.rejects(
+      () => fake.authorize(emailUnik(), 'apa-saja', headers),
+      /Terlalu banyak percobaan login/
+    );
+  });
+
+  it('tanpa header alamat asal, batas per asal dilewati dan bukan dikunci bersama', async () => {
+    const fake = buatAuthorize(null);
+    for (let i = 0; i < 35; i += 1) {
+      await assert.rejects(
+        () => fake.authorize(emailUnik(), 'apa-saja'),
+        /Email atau password salah/
+      );
+    }
+  });
+
+  it('auth.ts memakai modul asal-permintaan bersama, bukan salinannya sendiri', () => {
+    const kode = fs
+      .readFileSync(path.join(__dirname, '..', 'src', 'lib', 'auth.ts'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    assert.match(kode, /from ['"]@\/lib\/asal-permintaan['"]/);
+    // Sentinel seperti `"tanpa-ip"` membuat seluruh pengunjung berbagi satu
+    // penghitung; pembatasnya lalu menjadi cara mematikan pintu login.
+    assert.doesNotMatch(kode, /tanpa-ip|unknown-ip|['"]0\.0\.0\.0['"]/);
+  });
+});

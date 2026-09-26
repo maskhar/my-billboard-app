@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { idDariBody } from "@/lib/id-dari-body";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -16,13 +17,32 @@ export async function POST(req: Request) {
   }
 
   try {
-      const { id } = await req.json();
+      const { id: idMentah } = await req.json();
+
+      // TIPENYA, BUKAN KEBERADAANNYA — dan di route inilah selisihnya paling
+      // mahal. `id` dulu diteruskan apa adanya ke `deleteMany` di bawah, dan
+      // Prisma membaca objek di dalam `where` sebagai filter. `{"id":{"not":""}}`
+      // karena itu berarti `deleteMany({ where: { userId: { not: "" } } })`:
+      // SELURUH tabel `Booking` milik seluruh pengguna, beserta pembayaran dan
+      // biaya tambahannya lewat cascade.
+      //
+      // Dua kebetulan menahannya hari ini, dan tidak satu pun penjagaan:
+      // gerbang `findFirst` di bawah ikut cocok dengan pesanan aktif SIAPA PUN
+      // (jadi serangannya butuh nol pesanan aktif di seluruh sistem), dan
+      // `user.delete` menuntut nilai skalar sehingga objek melempar di dalam
+      // transaksi dan me-rollback penghapusannya. Keduanya hilang begitu
+      // `delete` diganti `deleteMany`, transaksinya dilepas, atau tabel pesanan
+      // sedang sepi.
+      const id = idDariBody(idMentah);
+      if (id === null) {
+          return NextResponse.json({ message: "ID user tidak valid." }, { status: 400 });
+      }
 
       // Cek apakah User ini punya pesanan Aktif/Pending?
       const activeBookings = await prisma.booking.findFirst({
-          where: { 
+          where: {
               userId: id,
-              status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PROCESS_REFUND'] } 
+              status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PROCESS_REFUND'] }
           }
       });
 

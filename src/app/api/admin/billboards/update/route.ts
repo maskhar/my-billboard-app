@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { idDariBody } from "@/lib/id-dari-body";
 import { keDecimal, lebihBesar } from "@/lib/money";
 import {
   BillboardStatus,
@@ -22,11 +23,27 @@ export async function POST(req: Request) {
   try {
       const body = await req.json();
 
+      // KEDUA NILAI DI BAWAH MASUK KE `findFirst`, dan `where` milik `findFirst`
+      // menerima FILTER pada setiap field — termasuk yang bersarang di bawah
+      // `NOT`. Tanpa pemeriksaan tipe, `{"slug":{"not":""}}` cocok dengan
+      // billboard mana pun yang ada, dan gerbang di bawah menolak SETIAP
+      // penyimpanan dengan "Slug sudah dipakai billboard lain" — billboard yang
+      // sah pun tidak bisa lagi disunting siapa pun.
+      const id = idDariBody(body.id);
+      if (id === null) {
+          return NextResponse.json({ message: "ID billboard tidak valid." }, { status: 400 });
+      }
+
+      const slug = typeof body.slug === 'string' ? body.slug.trim() : '';
+      if (slug === '') {
+          return NextResponse.json({ message: "Link URL (Slug) wajib diisi." }, { status: 400 });
+      }
+
       // Cek Unik Slug (Kecuali diri sendiri)
       const existingSlug = await prisma.billboard.findFirst({
           where: {
-              slug: body.slug,
-              NOT: { id: body.id }
+              slug,
+              NOT: { id }
           }
       });
       if (existingSlug) {
@@ -34,7 +51,7 @@ export async function POST(req: Request) {
       }
 
       // Ambil Data Lama (Untuk History)
-      const oldData = await prisma.billboard.findUnique({ where: { id: body.id } });
+      const oldData = await prisma.billboard.findUnique({ where: { id } });
       if (!oldData) return NextResponse.json({ message: "Data hilang" }, { status: 404 });
 
       // --- LOGIC PACKING DATA BARU (SAMA SEPERTI CREATE) ---
@@ -105,7 +122,7 @@ export async function POST(req: Request) {
           // 1. Simpan History
           prisma.billboardHistory.create({
               data: {
-                  billboardId: body.id,
+                  billboardId: id,
                   title: oldData.title,
                   price: oldData.price,
                   status: oldData.status,
@@ -128,10 +145,10 @@ export async function POST(req: Request) {
           
           // 2. Update Data
           prisma.billboard.update({
-              where: { id: body.id },
+              where: { id },
               data: {
                   title: body.title,
-                  slug: body.slug,
+                  slug,
                   sku: body.sku,
                   address: body.address,
                   type: body.type,

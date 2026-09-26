@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Role, daftarNilai, sahRole } from "@/lib/enum-guard";
+import { idDariBody } from "@/lib/id-dari-body";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -14,10 +15,16 @@ export async function POST(req: Request) {
     }
 
     try {
-        const { userId, newRole } = await req.json();
+        const { userId: userIdMentah, newRole } = await req.json();
 
-        if (!userId) {
-            return NextResponse.json({ message: "userId dibutuhkan" }, { status: 400 });
+        // `newRole` sudah dijaga `sahRole` di bawah; `userId` dulu hanya
+        // diperiksa keberadaannya. Objek selalu truthy, jadi `{"not":""}`
+        // lolos utuh ke `where` milik `findUnique` — ditolak validator Prisma
+        // sebagai 500 "Gagal update" yang bisa dipicu siapa pun, dan sekali
+        // operasinya berubah ke bentuk `*Many` batasnya hilang.
+        const userId = idDariBody(userIdMentah);
+        if (userId === null) {
+            return NextResponse.json({ message: "userId tidak valid" }, { status: 400 });
         }
 
         // Ini satu-satunya jalur yang bisa mengubah role akun, dan dulu
@@ -59,6 +66,9 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ status: "ok", message: "Role berhasil diupdate" });
     } catch (error) {
+        // Tanpa baris ini kegagalan perubahan role tidak meninggalkan jejak
+        // apa pun: admin melihat "Gagal update", log server kosong.
+        console.error('[users/update-role] Gagal mengubah role:', error);
         return NextResponse.json({ message: "Gagal update" }, { status: 500 });
     }
 }

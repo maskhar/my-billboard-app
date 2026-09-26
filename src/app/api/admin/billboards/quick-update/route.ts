@@ -10,6 +10,7 @@ import {
   sahBillboardStatus,
   sahPublishStatus,
 } from "@/lib/enum-guard";
+import { idDariBody } from "@/lib/id-dari-body";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -20,10 +21,14 @@ export async function POST(req: Request) {
 
   try {
       const body = await req.json();
-      const { id, status, publishStatus } = body;
+      const { id: idMentah, status, publishStatus } = body;
 
-      if (!id) {
-          return NextResponse.json({ message: "ID Billboard dibutuhkan" }, { status: 400 });
+      // Kedua enum di bawah sudah dijaga; `id` dulu hanya diperiksa
+      // keberadaannya. Objek selalu truthy, jadi `{"not":""}` lolos ke `where`
+      // dan berbalik menjadi 500 "Gagal mengupdate status".
+      const id = idDariBody(idMentah);
+      if (id === null) {
+          return NextResponse.json({ message: "ID billboard tidak valid." }, { status: 400 });
       }
 
       // Nilai status dulu diteruskan apa adanya dari body request ke
@@ -59,7 +64,7 @@ export async function POST(req: Request) {
       }
 
       await prisma.billboard.update({
-          where: { id: id },
+          where: { id },
           data: {
               ...dataToUpdate,
               updatedById: session.user.id

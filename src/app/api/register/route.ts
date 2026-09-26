@@ -20,9 +20,53 @@ import { hash } from 'bcryptjs';
 import { prisma } from '@/lib/prisma';
 import { adalahDuplikatUnik } from '@/lib/db-error';
 import { keE164, normalisasiNomorLokal } from '@/lib/telepon';
+import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
+import { asalPermintaan } from '@/lib/asal-permintaan';
+
+// PENDAFTARAN DULU TIDAK DIBATASI SAMA SEKALI, dan route ini terbuka tanpa
+// sesi. Tiga akibatnya berbeda-beda, dan hanya satu yang tentang spam:
+//
+//   1. `hash(password, 12)` sengaja lambat — ratusan milidetik CPU per
+//      permintaan. Satu skrip yang memanggil route ini berulang kali
+//      menghabiskan proses Node tanpa perlu satu pun pendaftaran berhasil.
+//   2. Jawaban 409 "Email sudah terdaftar" adalah alat pemeriksa: siapa pun
+//      bisa menguji satu daftar alamat dan tahu mana yang punya akun di sini.
+//      Pesannya sudah diseragamkan, tapi tanpa pembatas daftarnya bisa diuji
+//      seluruhnya.
+//   3. Akun sampah tertulis sebanyak yang diminta, dan tiap barisnya nyata.
+//
+// Kuncinya alamat asal, bukan email: email datang dari penyerang dan bisa
+// diganti tiap permintaan, jadi kunci per email tidak menahan apa pun di sini.
+// Batasnya lebih longgar daripada login karena satu kantor yang berbagi satu IP
+// wajar mendaftarkan beberapa akun.
+const BATAS_DAFTAR = 10;
+const JENDELA_DAFTAR_MS = 60 * 60 * 1000;
 
 export async function POST(req: Request) {
   try {
+    // Diperiksa SEBELUM body dibaca dan jauh sebelum `hash`: menolak setelah
+    // pekerjaan mahalnya selesai tidak menghemat apa pun.
+    //
+    // `asalPermintaan` boleh `null` bila header asalnya tidak ada, dan saat itu
+    // batasnya DILEWATI, bukan diganti kunci tetap — kunci tetap membuat semua
+    // pengunjung berbagi satu penghitung, sehingga sepuluh percobaan dari
+    // siapa pun akan menutup pendaftaran bagi semua orang selama sejam.
+    const asal = asalPermintaan(req);
+    if (asal) {
+      const batas = rateLimit({
+        key: `daftar:${asal}`,
+        limit: BATAS_DAFTAR,
+        windowMs: JENDELA_DAFTAR_MS,
+      });
+
+      if (!batas.success) {
+        return NextResponse.json(
+          { message: `Terlalu banyak pendaftaran dari jaringan ini. Coba lagi dalam ${batas.retryAfterSeconds} detik.` },
+          { status: 429, headers: rateLimitHeaders(BATAS_DAFTAR, batas) }
+        );
+      }
+    }
+
     const body = await req.json();
 
     // Allowlist eksplisit. Field diambil satu per satu, tidak pernah
