@@ -1,13 +1,23 @@
 // src/app/dashboard/DashboardWrapper.tsx
-import { PaymentStatus } from '@prisma/client';
+import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { redirect } from 'next/navigation';
 import DashboardClientPage from './DashboardClientPage'; // Impor komponen client yang baru kita buat
-import { jumlah, keAngka, uangUntukClient } from '@/lib/money';
-import { isRevenueStatus } from '@/lib/revenue';
+import { jumlah, keAngka, kurang, lebihBesar, lebihKecil, persen, uangUntukClient } from '@/lib/money';
+import { masihAdaSisa, sisaTagihan, sudahLunas, uangMasuk, uangMasukSemua } from '@/lib/pembayaran';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
+
+/**
+ * Bagian dari uang masuk yang dikembalikan bila pesanan direfund.
+ *
+ * Disalin dari `src/app/api/booking/request-refund/route.ts` semata untuk
+ * menampilkan PERKIRAAN kepada pembeli sebelum ia mengajukan. Nominal yang
+ * mengikat tetap dihitung server saat pengajuan diproses; angka di layar ini
+ * tidak pernah menjadi dasar penulisan apa pun.
+ */
+const PERSEN_REFUND = 90;
 
 // Status yang dianggap "Aktif / Berjalan".
 //
@@ -46,7 +56,11 @@ export default async function DashboardWrapper() {
         status: true,
         expiresAt: true,
         totalPrice: true,
+        // `dpAmount` tetap diambil, tapi hanya sebagai catatan RENCANA: berapa
+        // yang hendak dibayar di muka saat pesanan dibuat. Ia TIDAK dipakai
+        // sebagai bukti uang diterima — bukti itu hanya ada di `payments`.
         dpAmount: true,
+        refundAmount: true,
         designOption: true,
         designFileUrl: true,
         designStatus: true,
@@ -60,13 +74,17 @@ export default async function DashboardWrapper() {
             mainImage: true,
           },
         },
-        // Hanya keberadaannya yang dibutuhkan layar, bukan isi barisnya. `select`
-        // di sini dipersempit ke `id` supaya tidak ada satu pun kolom sesi
-        // pembayaran yang terbawa; `id`-nya sendiri tidak diteruskan ke client.
+        // Seluruh baris pembayaran diambil, bukan hanya satu baris PENDING.
+        // Kartu pesanan perlu menjawab dua hal berbeda: "masih ada tagihan yang
+        // bisa dibayar?" (baris PENDING) dan "berapa uang yang sudah benar-benar
+        // masuk?" (baris PAID). Yang kedua dulu dijawab dari `dpAmount`, yaitu
+        // rencana — bukan fakta.
+        //
+        // `select` tetap dipersempit ke empat kolom. Baris Payment juga memuat
+        // `providerSessionId`, `providerReferenceId`, `providerPaymentId`, dan
+        // `callbackPayload`; tidak satu pun boleh menyeberang ke browser.
         payments: {
-          where: { status: PaymentStatus.PENDING },
-          select: { id: true },
-          take: 1,
+          select: { tujuan: true, status: true, jumlah: true },
         },
       },
   });
@@ -76,48 +94,106 @@ export default async function DashboardWrapper() {
   // komponen 'use client', dan objek Decimal tidak bisa diubah menjadi JSON:
   // halaman dashboard gagal dirender saat dijalankan. Jadi nominal diubah ke
   // angka biasa di sini, sebelum menyeberang.
-  const siapkanPesanan = (b: (typeof myBookings)[number]) => ({
-    id: b.id,
-    status: b.status,
-    // Diserialisasi eksplisit: `Date` menyeberang sebagai string, dan kartu
-    // pesanan memang membacanya lewat `new Date(...)`.
-    expiresAt: b.expiresAt === null ? null : b.expiresAt.toISOString(),
-    totalPrice: uangUntukClient(b.totalPrice),
-    dpAmount: b.dpAmount === null ? null : uangUntukClient(b.dpAmount),
-    designOption: b.designOption,
-    designFileUrl: b.designFileUrl,
-    designStatus: b.designStatus,
-    designRejectionReason: b.designRejectionReason,
-    refundProof: b.refundProof,
-    billboard: b.billboard,
-    // Tombol bayar hanya boleh tampil bila memang ada tagihan yang masih dapat
-    // dibayar. Status `PENDING_PAYMENT` saja tidak cukup: tagihannya bisa sudah
-    // ditutup sebagai EXPIRED oleh alur sesi pembayaran.
-    adaTagihanPending: b.payments.length > 0,
-  });
+  //
+  // Seluruh hitungan uang diselesaikan DI SINI sebagai Decimal, lalu dikirim
+  // sebagai angka jadi. Kartu pesanan tidak menghitung uang sendiri: begitu
+  // Decimal menjadi angka biasa, rumus apa pun di browser kehilangan jaminan
+  // presisi yang dijaga `src/lib/money.ts`.
+  const siapkanPesanan = (b: (typeof myBookings)[number]) => {
+    const pokokMasuk = uangMasuk(b.payments);
+    const sisaPokok = sisaTagihan(b.totalPrice, b.payments);
+
+    // Apakah pesanan ini DIRENCANAKAN dibayar bertahap? `dpAmount` bernilai nol
+    // pada pesanan yang memang dibayar lunas di muka, jadi syaratnya "ada
+    // isinya DAN lebih kecil dari total". Keduanya lewat money.ts: `dpAmount`
+    // masih Decimal di sini, dan `<` atas dua objek Decimal membandingkannya
+    // sebagai teks — "9000000" dinilai lebih besar dari "10000000".
+    const rencanaDp =
+      b.dpAmount !== null &&
+      lebihBesar(b.dpAmount, 0) &&
+      lebihKecil(b.dpAmount, b.totalPrice);
+
+    // Sisa menurut RENCANA, dipakai hanya pada pesanan yang belum dibayar
+    // sepeser pun — di sana belum ada fakta yang bisa dipakai. Dihitung di sini
+    // supaya kartu pesanan tidak perlu mengurangkan dua nominal sendiri.
+    const sisaSetelahDpRencana = rencanaDp ? kurang(b.totalPrice, b.dpAmount) : null;
+
+    return {
+      id: b.id,
+      status: b.status,
+      // Diserialisasi eksplisit: `Date` menyeberang sebagai string, dan kartu
+      // pesanan memang membacanya lewat `new Date(...)`.
+      expiresAt: b.expiresAt === null ? null : b.expiresAt.toISOString(),
+      totalPrice: uangUntukClient(b.totalPrice),
+      // Rencana pembayaran bertahap, dipakai hanya pada pesanan yang belum
+      // dibayar sama sekali. Tidak pernah menjadi dasar hitungan sisa tagihan.
+      rencanaDp,
+      dpRencana: b.dpAmount === null ? null : uangUntukClient(b.dpAmount),
+      sisaSetelahDpRencana:
+        sisaSetelahDpRencana === null ? null : uangUntukClient(sisaSetelahDpRencana),
+      designOption: b.designOption,
+      designFileUrl: b.designFileUrl,
+      designStatus: b.designStatus,
+      designRejectionReason: b.designRejectionReason,
+      refundProof: b.refundProof,
+      billboard: b.billboard,
+      // Tombol bayar hanya boleh tampil bila memang ada tagihan yang masih dapat
+      // dibayar. Status `PENDING_PAYMENT` saja tidak cukup: tagihannya bisa sudah
+      // ditutup sebagai EXPIRED oleh alur sesi pembayaran.
+      adaTagihanPending: b.payments.some((p) => p.status === PaymentStatus.PENDING),
+      // Fakta ledger. `pokokMasuk` adalah uang yang benar-benar diterima untuk
+      // pokok sewa; `sisaPokok` sisanya. `masihAdaSisa` sengaja terpisah dari
+      // "sisaPokok > 0": pesanan yang belum dibayar sepeser pun juga punya sisa
+      // penuh, tapi ia bukan pesanan DP yang menggantung.
+      pokokMasuk: uangUntukClient(pokokMasuk),
+      sisaPokok: uangUntukClient(sisaPokok),
+      adaUangMasuk: lebihBesar(pokokMasuk, 0),
+      dibayarSebagian: masihAdaSisa(b.totalPrice, b.payments),
+      pokokLunas: sudahLunas(b.totalPrice, b.payments),
+      // Perkiraan refund, untuk ditampilkan sebelum pembeli mengajukan.
+      // Nominal yang mengikat dihitung ulang server saat pengajuan diproses.
+      perkiraanRefund: uangUntukClient(persen(pokokMasuk, PERSEN_REFUND)),
+      // Refund yang sudah ditetapkan server, bila pengajuannya sudah diproses.
+      refundAmount: b.refundAmount === null ? null : uangUntukClient(b.refundAmount),
+    };
+  };
 
   const activeOrders = myBookings.filter(b => activeStatuses.includes(b.status)).map(siapkanPesanan);
   const historyOrders = myBookings.filter(b => !activeStatuses.includes(b.status)).map(siapkanPesanan);
 
-  // `acc + curr.totalPrice` dulu menyambung teks, bukan menjumlah: hasilnya
-  // "1000000015000000" alih-alih 25.000.000. Ditampilkan sebagai "Total
-  // Pengeluaran" di kartu profil.
+  // TOTAL PENGELUARAN
+  // -----------------
+  // Uang yang benar-benar keluar dari kantong pembeli, bukan nilai pesanan yang
+  // pernah ia buat.
   //
-  // Penyaringan statusnya juga dulu salah pada dua hal. Pertama, `REFUNDED`
-  // ikut dijumlahkan: pelanggan yang pesanannya dibatalkan dan uangnya sudah
-  // dikembalikan penuh tetap melihat nominal itu tercatat sebagai
-  // pengeluarannya — seolah uangnya hangus. Kedua, pesanan yang sudah dibayar
-  // tapi belum tayang (PAID_CONFIRMED sampai INSTALLATION) tidak dihitung,
-  // jadi pelanggan yang baru saja membayar melihat "Total Pengeluaran" tetap
-  // nol sampai billboardnya terpasang. Kini daftarnya satu dengan yang dipakai
-  // laporan admin, lewat `isRevenueStatus`.
-  const totalSpent = keAngka(
-    jumlah(
-      ...myBookings
-        .filter(b => isRevenueStatus(b.status))
-        .map(b => b.totalPrice)
-    )
+  // Rumus ini sebelumnya menjumlahkan `totalPrice` dari pesanan yang statusnya
+  // masuk daftar pendapatan. Tiga hal salah sekaligus:
+  //
+  //   1. Nilai KONTRAK dianggap uang yang sudah dibayar. Pembeli DP yang baru
+  //      menyetor 60% melihat 100% tercatat sebagai pengeluarannya — angka yang
+  //      belum pernah meninggalkan rekeningnya.
+  //   2. Status dipakai sebagai bukti pembayaran. `PAID_CONFIRMED` hanya
+  //      berarti admin menandainya; ia bisa disetel tanpa satu pun rupiah masuk.
+  //   3. Refund yang sudah ditransfer keluar tidak dikurangkan sama sekali —
+  //      hanya disembunyikan dengan mengecualikan status `REFUNDED`. Refund
+  //      SEBAGIAN atas pesanan yang tetap berjalan tidak pernah terlihat.
+  //
+  // Sekarang: seluruh `Payment PAID` (termasuk `TAMBAHAN` — pembeli memang
+  // membayarnya), dikurangi refund yang sudah benar-benar selesai ditransfer.
+  const seluruhPembayaran = myBookings.flatMap((b) => b.payments);
+  const totalDibayar = uangMasukSemua(seluruhPembayaran);
+
+  // Hanya `REFUNDED` yang dihitung: pesanan di tengah alur refund
+  // (REVIEW_REFUND, WAITING_BANK, PROCESS_REFUND) belum menerima uangnya, jadi
+  // mengurangkannya berarti mengaku sudah membayar sesuatu yang belum dikirim.
+  const totalRefundSelesai = jumlah(
+    ...myBookings
+      .filter((b) => b.status === BookingStatus.REFUNDED)
+      .map((b) => b.refundAmount ?? new Prisma.Decimal(0))
   );
+
+  const selisih = kurang(totalDibayar, totalRefundSelesai);
+  const totalSpent = keAngka(lebihBesar(selisih, 0) ? selisih : 0);
 
   // Hanya nama dan email yang ditampilkan kartu profil. Objek sesi NextAuth
   // memuat lebih dari itu (id, role, dan apa pun yang ditambahkan callback di

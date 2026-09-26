@@ -4,22 +4,73 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import type { Booking, User, Billboard, AdditionalCharge } from '@prisma/client';
+import type { PaymentStatus, PaymentTujuan } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
 import { arrayDariJson } from '@/lib/safe-json';
-import { jumlah, rupiah } from '@/lib/money';
+import { rupiah } from '@/lib/money';
 
-type Transaction = Booking & {
-  user: User;
-  billboard: Billboard;
-  additionalCharges: AdditionalCharge[]; // <-- SERTAKAN TIPE RELASI
+/**
+ * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
+ *
+ * Tipe ini dulu `Booking & { user: User; billboard: Billboard; ... }` — tipe
+ * Prisma utuh, yang dua kali salah. Pertama, ia mengklaim nominal di sini masih
+ * `Prisma.Decimal`, padahal Next.js sudah mengubahnya menjadi number saat
+ * menyeberang ke komponen client; setiap `rupiah()` di bawah bekerja pada number.
+ * Kedua, ia mengklaim relasi `user` lengkap — termasuk hash password, otpCode,
+ * dan otpExpires — sehingga tidak ada yang menahan kode di sini kalau suatu saat
+ * membacanya, dan `page.tsx` butuh cast `as unknown as` untuk lolos.
+ */
+export type TransaksiUntukClient = {
+  id: string;
+  status: string;
+  createdAt: Date;
+  duration: number;
+  designOption: string | null;
+  designFileUrl: string | null;
+  designStatus: string | null;
+  designRejectionReason: string | null;
+  isLocked: boolean;
+  refundProof: string | null;
+  refundedAt: Date | null;
+  installationProof: string | null;
+  userBankName: string | null;
+  userBankAccount: string | null;
+  totalPrice: number;
+  refundAmount: number | null;
+  user: { id: string; name: string | null; email: string | null; whatsapp: string | null };
+  billboard: { id: string; title: string; address: string; type: string; specs: unknown };
+  additionalCharges: { id: string; description: string; amount: number }[];
+  payments: {
+    id: string;
+    tujuan: PaymentTujuan;
+    status: PaymentStatus;
+    jumlah: number;
+    paidAt: Date | null;
+  }[];
+  /** Fakta ledger yang sudah dihitung server sebagai Decimal. */
+  uang: {
+    pokokMasuk: number;
+    sisaPokok: number;
+    totalTambahan: number;
+    tambahanDibayar: number;
+    sisaTambahan: number;
+    grandTotal: number;
+    adaUangMasuk: boolean;
+  };
 };
 
 interface Props {
-  transactions: Transaction[];
+  transactions: TransaksiUntukClient[];
   currentUserRole: string;
 }
+
+const LABEL_TUJUAN: Record<string, string> = {
+  DP: 'DP',
+  FULL: 'Pelunasan penuh',
+  PELUNASAN: 'Pelunasan sisa',
+  TAMBAHAN: 'Biaya tambahan',
+};
 
 // Helper component for internal design uploads
 const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
@@ -139,7 +190,7 @@ const AddChargeForm = ({ orderId }: { orderId: string }) => {
 };
 
 export default function TransactionClient({ transactions, currentUserRole }: Props) {
-  const [selected, setSelected] = useState<Transaction | null>(transactions.length > 0 ? transactions[0] : null);
+  const [selected, setSelected] = useState<TransaksiUntukClient | null>(transactions.length > 0 ? transactions[0] : null);
   const router = useRouter();
 
   const handleDesignStatusUpdate = async (status: 'APPROVED' | 'REJECTED') => {
@@ -190,13 +241,12 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
     </div>
   );
 
-  // Dulu: `totalPrice + charges.reduce((sum, c) => sum + c.amount, 0)`.
-  // Nominal di database bertipe Decimal (objek), jadi `+` menyambung teks
-  // alih-alih menjumlah — Grand Total muncul sebagai deretan digit menempel,
-  // tanpa error apa pun. Sekarang dihitung sebagai Decimal.
-  const grandTotal = selected
-    ? jumlah(selected.totalPrice, ...(selected.additionalCharges ?? []).map((c) => c.amount))
-    : 0;
+  // Dulu dihitung di sini: `totalPrice + charges.reduce((s, c) => s + c.amount, 0)`.
+  // Nominal dari database bertipe Decimal, jadi `+` menyambung teks alih-alih
+  // menjumlah — Grand Total muncul sebagai deretan digit menempel, tanpa error
+  // apa pun. Sekarang seluruh hitungannya dikerjakan server sebagai Decimal
+  // (`orders/page.tsx`) dan tiba di sini sebagai angka jadi.
+  const grandTotal = selected?.uang.grandTotal ?? 0;
 
   // Dibaca sekali, bukan tiga kali di dalam JSX. Selain memboroskan pekerjaan,
   // `JSON.parse` mentah di tengah render membuat satu baris DB rusak
@@ -267,7 +317,12 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                         <InfoPair label="Office Address" value="Jl. Melati No. 10, Jakarta" />
                     </DetailSection>
                     <DetailSection title="Actions">
-                        <OrderActions order={selected} currentUserRole={currentUserRole} />
+                        <OrderActions
+                            order={selected}
+                            currentUserRole={currentUserRole}
+                            adaUangMasuk={selected.uang.adaUangMasuk}
+                            nominalRefund={selected.refundAmount}
+                        />
                     </DetailSection>
                     
                     <DetailSection title="Billing Details">
@@ -278,6 +333,47 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                             ))}
                         </div>
                         <InfoPair label="Grand Total" value={rupiah(grandTotal)} />
+
+                        {/* Panel ini dulu hanya menampilkan apa yang DITAGIHKAN.
+                            Admin yang memutuskan refund tidak punya satu pun
+                            angka tentang apa yang sudah DITERIMA — dan itu dasar
+                            perhitungan nominal yang keluar ke rekening pembeli. */}
+                        <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 space-y-1">
+                            <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400 mb-2">
+                                Uang Diterima
+                            </p>
+                            <InfoPair label="Pokok diterima" value={rupiah(selected.uang.pokokMasuk)} />
+                            <InfoPair label="Sisa pokok" value={rupiah(selected.uang.sisaPokok)} />
+                            {selected.uang.totalTambahan > 0 && (
+                                <>
+                                    <InfoPair label="Tambahan dibayar" value={rupiah(selected.uang.tambahanDibayar)} />
+                                    <InfoPair label="Sisa tambahan" value={rupiah(selected.uang.sisaTambahan)} />
+                                </>
+                            )}
+
+                            {selected.payments.length > 0 && (
+                                <div className="mt-3 border-t border-gray-200 pt-2 space-y-1">
+                                    {selected.payments.map(p => (
+                                        <div key={p.id} className="flex items-center justify-between text-xs text-gray-600">
+                                            <span>
+                                                {LABEL_TUJUAN[p.tujuan] ?? p.tujuan}
+                                                <span className={`ml-2 rounded px-1.5 py-0.5 text-[9px] font-bold ${p.status === 'PAID' ? 'bg-green-100 text-green-700' : 'bg-gray-200 text-gray-500'}`}>
+                                                    {p.status}
+                                                </span>
+                                            </span>
+                                            <span className="text-right">
+                                                {rupiah(p.jumlah)}
+                                                {p.paidAt && (
+                                                    <span className="ml-2 text-gray-400">
+                                                        {new Date(p.paidAt).toLocaleDateString('id-ID')}
+                                                    </span>
+                                                )}
+                                            </span>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
 
                         <AddChargeForm orderId={selected.id} />
                     </DetailSection>

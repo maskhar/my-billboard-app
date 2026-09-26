@@ -1,13 +1,30 @@
 // src/app/admin/(dashboard)/orders/page.tsx
-import type { ComponentProps } from 'react';
 import { prisma } from '@/lib/prisma';
-import { uangUntukClient } from '@/lib/money';
-import TransactionClient from './TransactionClient';
+import { jumlah, kurang, lebihBesar, uangUntukClient } from '@/lib/money';
+import { sisaTagihan, uangMasuk } from '@/lib/pembayaran';
+import { PaymentStatus, PaymentTujuan } from '@prisma/client';
+import TransactionClient, { type TransaksiUntukClient } from './TransactionClient';
 import Link from 'next/link';
-import { getServerSession } from "next-auth"; 
+import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 
 const PER_HALAMAN = 25;
+
+/**
+ * Kolom Payment yang boleh menyeberang ke komponen client.
+ *
+ * Baris Payment juga memuat kaitan ke gerbang pembayaran (`providerSessionId`,
+ * `providerReferenceId`, `providerPaymentId`, `callbackPayload`). Tidak satu pun
+ * dibutuhkan untuk menampilkan riwayat pembayaran, dan `callbackPayload` memuat
+ * balasan mentah dari Xendit — jangan pernah ditanam ke HTML halaman admin.
+ */
+const PILIH_PEMBAYARAN = {
+  id: true,
+  tujuan: true,
+  status: true,
+  jumlah: true,
+  paidAt: true,
+} as const;
 
 // Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
 // dulu. Sebelumnya propertinya dibaca langsung dari objek Promise, sehingga
@@ -71,7 +88,8 @@ export default async function AdminTransactionsPage({
             },
           },
           billboard: true,
-          additionalCharges: true // <-- MENAMBAHKAN DATA BIAYA TAMBAHAN
+          additionalCharges: true, // <-- MENAMBAHKAN DATA BIAYA TAMBAHAN
+          payments: { select: PILIH_PEMBAYARAN, orderBy: { createdAt: 'asc' } },
         },
         skip: (halaman - 1) * PER_HALAMAN,
         take: PER_HALAMAN,
@@ -84,23 +102,61 @@ export default async function AdminTransactionsPage({
   // Semua nominal di bawah bertipe Decimal, dan objek Decimal tidak bisa
   // diubah menjadi JSON. Sebelumnya hasil query di atas diteruskan apa adanya
   // ke TransactionClient (`'use client'`), jadi halaman transaksi ini mati
-  // saat dijalankan — seluruh pesanan tidak bisa dikelola. Cast
-  // `as unknown as` di bawah membuat TypeScript diam soal ini.
-  const transactionsUntukClient = transactions.map(trx => ({
-    ...trx,
-    totalPrice: uangUntukClient(trx.totalPrice),
-    dpAmount: trx.dpAmount === null ? null : uangUntukClient(trx.dpAmount),
-    refundAmount: trx.refundAmount === null ? null : uangUntukClient(trx.refundAmount),
-    unitPrice: trx.unitPrice === null ? null : uangUntukClient(trx.unitPrice),
-    basePrice: trx.basePrice === null ? null : uangUntukClient(trx.basePrice),
-    taxAmount: trx.taxAmount === null ? null : uangUntukClient(trx.taxAmount),
-    adminFee: trx.adminFee === null ? null : uangUntukClient(trx.adminFee),
-    billboard: { ...trx.billboard, price: uangUntukClient(trx.billboard.price) },
-    additionalCharges: trx.additionalCharges.map(charge => ({
-      ...charge,
-      amount: uangUntukClient(charge.amount),
-    })),
-  }));
+  // saat dijalankan — seluruh pesanan tidak bisa dikelola.
+  //
+  // Seluruh hitungan uang diselesaikan DI SINI, sebagai Decimal, lalu dikirim
+  // sebagai number. Komponen client tidak pernah menghitung uang sendiri: di
+  // sana Decimal sudah menjadi number biasa, sehingga rumus apa pun di sana
+  // kehilangan jaminan presisi yang dijaga `src/lib/money.ts`.
+  const transactionsUntukClient: TransaksiUntukClient[] = transactions.map(({ dpAmount: _dpAmount, ...trx }) => {
+    // `dpAmount` dicabut di sini, di destructuring, BUKAN sekadar tidak ditulis
+    // ulang di bawah. `...trx` menyalin seluruh kolom pesanan, jadi kolom uang
+    // apa pun yang tidak diambil alih secara eksplisit akan menyeberang sebagai
+    // objek Decimal — dan objek Decimal tidak bisa diserialisasi, sehingga
+    // halaman transaksi mati saat dirender. Ia juga memang tidak diperlukan:
+    // rencana DP bukan bukti uang diterima, dan yang dibaca layar adalah
+    // `uang.pokokMasuk`/`uang.sisaPokok` dari `Payment PAID`.
+    const pokokMasuk = uangMasuk(trx.payments);
+    const sisaPokok = sisaTagihan(trx.totalPrice, trx.payments);
+
+    // `TAMBAHAN` berada DI LUAR `totalPrice`, jadi punya pasangan angkanya
+    // sendiri: tagihannya dari `AdditionalCharge`, pembayarannya dari baris
+    // Payment bertujuan TAMBAHAN. Keduanya tidak pernah dicampur ke pokok.
+    const totalTambahan = jumlah(...trx.additionalCharges.map((c) => c.amount));
+    const tambahanDibayar = jumlah(
+      ...trx.payments
+        .filter((p) => p.status === PaymentStatus.PAID && p.tujuan === PaymentTujuan.TAMBAHAN)
+        .map((p) => p.jumlah)
+    );
+    const sisaTambahanMentah = kurang(totalTambahan, tambahanDibayar);
+    const sisaTambahan = lebihBesar(sisaTambahanMentah, 0) ? sisaTambahanMentah : 0;
+
+    return {
+      ...trx,
+      totalPrice: uangUntukClient(trx.totalPrice),
+      refundAmount: trx.refundAmount === null ? null : uangUntukClient(trx.refundAmount),
+      unitPrice: trx.unitPrice === null ? null : uangUntukClient(trx.unitPrice),
+      basePrice: trx.basePrice === null ? null : uangUntukClient(trx.basePrice),
+      taxAmount: trx.taxAmount === null ? null : uangUntukClient(trx.taxAmount),
+      adminFee: trx.adminFee === null ? null : uangUntukClient(trx.adminFee),
+      billboard: { ...trx.billboard, price: uangUntukClient(trx.billboard.price) },
+      additionalCharges: trx.additionalCharges.map(charge => ({
+        ...charge,
+        amount: uangUntukClient(charge.amount),
+      })),
+      payments: trx.payments.map(p => ({ ...p, jumlah: uangUntukClient(p.jumlah) })),
+      // Fakta ledger yang sudah dihitung server; label di UI hanya membacanya.
+      uang: {
+        pokokMasuk: uangUntukClient(pokokMasuk),
+        sisaPokok: uangUntukClient(sisaPokok),
+        totalTambahan: uangUntukClient(totalTambahan),
+        tambahanDibayar: uangUntukClient(tambahanDibayar),
+        sisaTambahan: uangUntukClient(sisaTambahan),
+        grandTotal: uangUntukClient(jumlah(trx.totalPrice, totalTambahan)),
+        adaUangMasuk: lebihBesar(pokokMasuk, 0),
+      },
+    };
+  });
 
   return (
     <div>
@@ -123,16 +179,8 @@ export default async function AdminTransactionsPage({
             <Link href='/admin/orders?status=DONE' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='DONE'?'bg-red-500 text-white shadow':'text-gray-500 hover:bg-red-50'}`}>Selesai</Link>
         </div>
       </div>
-      {/*
-        CATATAN TINDAK LANJUT: TransactionClient masih mendeklarasikan propsnya
-        sebagai `Booking & { user: User; ... }` — tipe Prisma yang utuh, lebih
-        longgar daripada data yang benar-benar dikirim sejak relasi user
-        dipersempit di atas. Cast ini menjembatani sementara; idealnya tipe
-        `Transaction` di TransactionClient.tsx dipersempit agar sesuai (file itu
-        di luar cakupan perubahan ini).
-      */}
       <TransactionClient
-        transactions={transactionsUntukClient as unknown as ComponentProps<typeof TransactionClient>['transactions']}
+        transactions={transactionsUntukClient}
         currentUserRole={currentUserRole}
       />
 

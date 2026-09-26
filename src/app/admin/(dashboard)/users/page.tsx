@@ -1,8 +1,8 @@
 // src/app/admin/(dashboard)/users/page.tsx
 import Link from 'next/link';
+import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { keAngka } from '@/lib/money';
-import { STATUS_PENDAPATAN } from '@/lib/revenue';
+import { jumlah, kurang, lebihBesar, uangUntukClient } from '@/lib/money';
 import UserClientPage from './UserClientPage';
 
 const PER_HALAMAN = 25;
@@ -55,52 +55,82 @@ export default async function ManageUsersPage({
   // "Total Spending" dulu dihitung di browser: SELURUH baris booking milik
   // tiap pengguna dikirim ke client hanya untuk dijumlahkan di sana, lalu
   // dibuang. Yang dipakai layar hanya dua angka per baris. Jadi penjumlahannya
-  // dipindahkan ke database, yang memang dirancang untuk itu, dan yang
-  // menyeberang ke browser tinggal hasilnya.
+  // dipindahkan ke sisi server, dan yang menyeberang ke browser tinggal
+  // hasilnya.
   //
-  // Dua agregat terpisah dengan sengaja:
+  // SUMBER ANGKANYA KINI LEDGER PEMBAYARAN, BUKAN STATUS PESANAN.
+  //
+  // Rumus sebelumnya menjumlahkan `Booking.totalPrice` atas pesanan berstatus
+  // pendapatan. Itu nilai KONTRAK, bukan uang: pelanggan DP yang baru menyetor
+  // 40% tercatat sudah membelanjakan 100%, dan pesanan yang ditandai
+  // `PAID_CONFIRMED` tanpa satu rupiah pun masuk tetap dihitung penuh.
+  //
+  // Tiga query terpisah dengan sengaja:
   //   - `_count` dihitung atas SEMUA pesanan (kolom "Riwayat Order" memang
   //     berarti berapa kali orang ini pernah memesan, termasuk yang batal).
-  //   - `_sum` hanya atas status pendapatan — uang yang sudah masuk dan belum
-  //     dikembalikan. Daftarnya satu dengan kartu omzet admin lewat
-  //     `STATUS_PENDAPATAN`, supaya dua halaman tidak bisa berbeda angkanya.
+  //   - Penerimaan diambil dari `Payment PAID`, termasuk `TAMBAHAN` — pelanggan
+  //     memang membayarnya.
+  //   - Refund yang sudah selesai ditransfer dikurangkan.
+  //
+  // Prisma tidak bisa `groupBy` melewati relasi, jadi penerimaan diambil baris
+  // per baris lalu dilipat di sini. Aman karena hanya 25 pengguna per halaman.
   //
   // Sengaja `Promise.all`, bukan `$transaction([...])`: tipe hasil `groupBy`
   // luruh menjadi bentuk umum begitu ia masuk ke dalam array transaksi, dan
-  // `_sum`/`_count` jadi tidak terbaca TypeScript. Keduanya hanya membaca,
+  // `_sum`/`_count` jadi tidak terbaca TypeScript. Ketiganya hanya membaca,
   // jadi tidak ada yang perlu dijamin atomik di sini.
-  const [jumlahOrderPerUser, belanjaPerUser] =
+  const [jumlahOrderPerUser, penerimaan, refundPerUser] =
     idHalamanIni.length === 0
-      ? [[], []]
+      ? [[], [], []]
       : await Promise.all([
           prisma.booking.groupBy({
             by: ['userId'],
             where: { userId: { in: idHalamanIni } },
             _count: { _all: true },
           }),
+          prisma.payment.findMany({
+            where: {
+              status: PaymentStatus.PAID,
+              booking: { userId: { in: idHalamanIni } },
+            },
+            select: { jumlah: true, booking: { select: { userId: true } } },
+          }),
           prisma.booking.groupBy({
             by: ['userId'],
-            where: { userId: { in: idHalamanIni }, status: { in: [...STATUS_PENDAPATAN] } },
-            _sum: { totalPrice: true },
+            where: { userId: { in: idHalamanIni }, status: BookingStatus.REFUNDED },
+            _sum: { refundAmount: true },
           }),
         ]);
 
   const petaJumlahOrder = new Map(jumlahOrderPerUser.map((b) => [b.userId, b._count._all]));
-  // `_sum.totalPrice` bertipe Decimal — objek, bukan angka, dan tidak bisa
-  // diubah menjadi JSON. Dilewatkan apa adanya ke komponen client, halaman ini
-  // mati saat dijalankan. `keAngka` menutup itu di sini, sebelum menyeberang.
-  const petaBelanja = new Map(
-    belanjaPerUser.map((b) => [b.userId, b._sum.totalPrice === null ? 0 : keAngka(b._sum.totalPrice)])
-  );
 
-  const usersUntukClient = users.map((user) => ({
-    ...user,
-    createdAt: user.createdAt.toISOString(),
-    // Pengguna tanpa pesanan sama sekali tidak muncul di hasil groupBy, jadi
+  // Dilipat sebagai Decimal, bukan number. Nominal digabung dulu sampai
+  // selesai, baru diubah menjadi angka biasa tepat sebelum menyeberang ke
+  // browser — menjumlahkan `number` di tengah jalan membuang jaminan presisi
+  // yang justru dijaga `src/lib/money.ts`.
+  const petaPenerimaan = new Map<string, Prisma.Decimal>();
+  for (const p of penerimaan) {
+    const userId = p.booking.userId;
+    petaPenerimaan.set(userId, jumlah(petaPenerimaan.get(userId), p.jumlah));
+  }
+
+  const petaRefund = new Map(refundPerUser.map((b) => [b.userId, b._sum.refundAmount]));
+
+  const usersUntukClient = users.map((user) => {
+    // Pengguna tanpa pesanan sama sekali tidak muncul di hasil query, jadi
     // bukan "hilang" melainkan nol.
-    jumlahOrder: petaJumlahOrder.get(user.id) ?? 0,
-    totalSpent: petaBelanja.get(user.id) ?? 0,
-  }));
+    const selisih = kurang(petaPenerimaan.get(user.id), petaRefund.get(user.id));
+
+    return {
+      ...user,
+      createdAt: user.createdAt.toISOString(),
+      jumlahOrder: petaJumlahOrder.get(user.id) ?? 0,
+      // Ditahan di nol: refund tidak boleh membuat belanja pelanggan terlihat
+      // negatif, dan angka negatif di kolom ini lebih membingungkan daripada
+      // informatif.
+      totalSpent: uangUntukClient(lebihBesar(selisih, 0) ? selisih : 0),
+    };
+  });
 
   return (
     <div className="space-y-6">

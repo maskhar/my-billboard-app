@@ -91,6 +91,66 @@ const JALUR_ROUTE_NOTIFY_LEGACY = path.join(
   'notify',
   'route.ts'
 );
+const JALUR_LEDGER = path.join(__dirname, '..', 'src', 'lib', 'pembayaran.ts');
+const JALUR_ROUTE_REFUND = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'booking',
+  'request-refund',
+  'route.ts'
+);
+const JALUR_ROUTE_UPDATE_ORDER = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'admin',
+  'update-order',
+  'route.ts'
+);
+const JALUR_LAPORAN = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'admin',
+  '(dashboard)',
+  'actions.ts'
+);
+const JALUR_INVOICE = path.join(__dirname, '..', 'src', 'app', 'invoice', '[id]', 'page.tsx');
+const JALUR_DASHBOARD_WRAPPER = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'dashboard',
+  'DashboardWrapper.tsx'
+);
+const JALUR_TRANSACTION_CLIENT = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'admin',
+  '(dashboard)',
+  'orders',
+  'TransactionClient.tsx'
+);
+const JALUR_BOOKING_CARD = path.join(__dirname, '..', 'src', 'components', 'BookingCard.tsx');
+const JALUR_USERS_CLIENT = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'admin',
+  '(dashboard)',
+  'users',
+  'UserClientPage.tsx'
+);
 
 // ---------------------------------------------------------------------------
 // Nilai palsu. Sengaja mirip bentuk aslinya supaya test kebocoran rahasia
@@ -3183,5 +3243,770 @@ describe('PaymentClient batas keamanan browser', () => {
   it('copy penyelesaian tidak mengklaim pembayaran lunas', () => {
     assert.match(sumber, /Pembayaran diterima, menunggu konfirmasi/);
     assert.doesNotMatch(sumber, /Pembayaran lunas/i);
+  });
+});
+
+// ===========================================================================
+// LEDGER: PAYMENT PAID SEBAGAI SATU-SATUNYA BUKTI UANG MASUK
+// ===========================================================================
+//
+// Semua pembaca uang — refund, invoice, email, laporan — berangkat dari
+// fungsi-fungsi di `src/lib/pembayaran.ts`. Kalau salah satu di antaranya
+// menghitung `PENDING` sebagai uang, atau mencampur biaya tambahan ke pokok,
+// kesalahannya tidak berhenti di layar: nominal yang ditransfer ke rekening
+// pembeli dihitung dari angka yang sama.
+describe('ledger pembayaran', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan } = require('@prisma/client');
+  const { uangMasuk, uangMasukSemua, sisaTagihan, sudahLunas, masihAdaSisa } = require(JALUR_LEDGER);
+
+  function baris(tujuan, status, jumlah) {
+    return { tujuan, status, jumlah: new Prisma.Decimal(jumlah) };
+  }
+
+  it('hanya menghitung PAID; PENDING, EXPIRED, dan VOIDED bukan uang', () => {
+    const payments = [
+      baris(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+      baris(PaymentTujuan.PELUNASAN, PaymentStatus.PENDING, '600000'),
+      baris(PaymentTujuan.PELUNASAN, PaymentStatus.EXPIRED, '600000'),
+      baris(PaymentTujuan.FULL, PaymentStatus.VOIDED, '1000000'),
+    ];
+
+    assert.equal(uangMasuk(payments).toString(), '400000');
+    assert.equal(uangMasukSemua(payments).toString(), '400000');
+    assert.equal(sisaTagihan('1000000', payments).toString(), '600000');
+    assert.equal(sudahLunas('1000000', payments), false);
+    assert.equal(masihAdaSisa('1000000', payments), true);
+  });
+
+  it('TAMBAHAN di luar pokok: tidak mengurangi sisa tagihan, tapi masuk uang masuk semua', () => {
+    const payments = [
+      baris(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+      baris(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000'),
+    ];
+
+    // Inti pemisahan pokok/tambahan. Kalau TAMBAHAN ikut ke `uangMasuk()`,
+    // pesanan ini terlihat sudah menyetor 650.000 dari pokok 1.000.000 —
+    // sisanya menyusut 250.000 tanpa ada pelunasan pokok sepeser pun.
+    assert.equal(uangMasuk(payments).toString(), '400000');
+    assert.equal(sisaTagihan('1000000', payments).toString(), '600000');
+    assert.equal(uangMasukSemua(payments).toString(), '650000');
+  });
+
+  it('pesanan DP yang dilunasi tidak lagi dianggap punya sisa', () => {
+    const payments = [
+      baris(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+      baris(PaymentTujuan.PELUNASAN, PaymentStatus.PAID, '600000'),
+    ];
+
+    assert.equal(uangMasuk(payments).toString(), '1000000');
+    assert.equal(sisaTagihan('1000000', payments).toString(), '0');
+    assert.equal(sudahLunas('1000000', payments), true);
+    assert.equal(masihAdaSisa('1000000', payments), false);
+  });
+
+  it('lebih bayar tidak menghasilkan sisa negatif, dan pesanan tanpa PAID belum punya sisa "terpakai"', () => {
+    const lebih = [baris(PaymentTujuan.FULL, PaymentStatus.PAID, '1050000')];
+    const kosong = [baris(PaymentTujuan.FULL, PaymentStatus.PENDING, '1000000')];
+
+    assert.equal(sisaTagihan('1000000', lebih).toString(), '0');
+    assert.equal(sudahLunas('1000000', lebih), true);
+
+    // `masihAdaSisa` sengaja false di sini: belum ada uang masuk sama sekali,
+    // jadi ini bukan "pesanan DP yang menunggu pelunasan".
+    assert.equal(uangMasuk(kosong).toString(), '0');
+    assert.equal(masihAdaSisa('1000000', kosong), false);
+  });
+});
+
+// ===========================================================================
+// REFUND PEMBELI: NOMINAL DARI UANG MASUK, BUKAN DARI RENCANA DP
+// ===========================================================================
+describe('POST /api/booking/request-refund step bank', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
+
+  function barisPembayaran(tujuan, status, jumlah) {
+    return { tujuan, status, jumlah: new Prisma.Decimal(jumlah) };
+  }
+
+  function cocokBaris(row, where) {
+    if (!where) return true;
+    return Object.entries(where).every(([nama, syarat]) => row[nama] === syarat);
+  }
+
+  /**
+   * Database stateful dengan transaksi yang diserialisasi.
+   *
+   * Serialisasi memodelkan database yang memilih satu pemenang di antara dua
+   * permintaan paralel: permintaan kedua membaca status yang sudah commit, lalu
+   * CAS-nya tidak cocok lagi. Tanpa ini, dua klik pada tombol yang sama bisa
+   * menghasilkan dua pengajuan refund atas satu pesanan.
+   */
+  function buatDbRefund(options = {}) {
+    const calls = [];
+    const payments = (options.payments ?? []).map((p) => ({ ...p }));
+    let booking = {
+      id: 'booking-1',
+      userId: 'user-1',
+      status: BookingStatus.WAITING_BANK,
+      totalPrice: new Prisma.Decimal(options.totalPrice ?? '1000000'),
+      // Sengaja diisi: rencana DP yang TIDAK boleh dipakai sebagai dasar
+      // nominal refund. Kalau route membacanya, angkanya akan 360.000.
+      dpAmount: new Prisma.Decimal(options.dpAmount ?? '400000'),
+      duration: 30,
+      refundAmount: null,
+      refundedAt: null,
+      userBankName: null,
+      userBankAccount: null,
+      ...(options.booking ?? {}),
+    };
+
+    function tabelBooking(ambil, simpan) {
+      return {
+        async findFirst(args) {
+          calls.push('booking.findFirst');
+          const row = ambil();
+          if (!cocokBaris(row, args.where)) return null;
+          return {
+            ...row,
+            billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
+            user: { name: 'Budi Santoso', email: 'pembeli@contoh.test' },
+            payments: payments.map((p) => ({ tujuan: p.tujuan, status: p.status, jumlah: p.jumlah })),
+          };
+        },
+        async updateMany(args) {
+          calls.push('booking.updateMany');
+          const row = ambil();
+          if (!cocokBaris(row, args.where)) return { count: 0 };
+          simpan({ ...row, ...args.data });
+          return { count: 1 };
+        },
+      };
+    }
+
+    let antrean = Promise.resolve();
+    const prismaPalsu = {
+      booking: tabelBooking(
+        () => booking,
+        (nilai) => {
+          booking = nilai;
+        }
+      ),
+      async $transaction(kerja) {
+        const tungguGiliran = antrean;
+        let bukaGiliran;
+        antrean = new Promise((resolve) => {
+          bukaGiliran = resolve;
+        });
+        await tungguGiliran;
+
+        const sebelum = booking;
+        let salinan = { ...booking };
+        calls.push('transaction.begin');
+        try {
+          const hasil = await kerja({
+            booking: tabelBooking(
+              () => salinan,
+              (nilai) => {
+                salinan = nilai;
+              }
+            ),
+          });
+          booking = salinan;
+          return hasil;
+        } catch (error) {
+          booking = sebelum;
+          throw error;
+        } finally {
+          bukaGiliran();
+        }
+      },
+    };
+
+    return { prisma: prismaPalsu, calls, booking: () => ({ ...booking }) };
+  }
+
+  function buatRouteRefund(fake) {
+    const emails = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_REFUND, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+    });
+    return { route, emails };
+  }
+
+  function permintaanBank() {
+    return new Request('https://contoh.test/api/booking/request-refund', {
+      method: 'POST',
+      body: JSON.stringify({
+        step: 'bank',
+        orderId: 'booking-1',
+        bankName: 'BCA',
+        bankAccount: '1234567890',
+      }),
+    });
+  }
+
+  it('menghitung 90% dari seluruh pokok PAID pada pesanan DP yang sudah dilunasi', async () => {
+    process.env.ADMIN_EMAIL = 'bos@contoh.test';
+    const fake = buatDbRefund({
+      payments: [
+        barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+        barisPembayaran(PaymentTujuan.PELUNASAN, PaymentStatus.PAID, '600000'),
+      ],
+    });
+    const { route, emails } = buatRouteRefund(fake);
+
+    const response = await route.POST(permintaanBank());
+
+    assert.equal(response.status, 200);
+    // 900.000 = 90% dari 1.000.000 yang benar-benar masuk. Rumus lama membaca
+    // `dpAmount` dan akan menghasilkan 360.000 — pembeli kehilangan 540.000
+    // atas uang yang sudah ia setorkan.
+    assert.equal(fake.booking().refundAmount.toString(), '900000');
+    assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+    assert.equal(fake.booking().userBankName, 'BCA');
+    assert.equal(fake.booking().userBankAccount, '1234567890');
+    assert.equal(emails.length, 1);
+    assert.match(emails[0].message, /Rp\s?1\.000\.000/);
+    assert.match(emails[0].message, /\(lunas\)/);
+  });
+
+  it('pesanan yang baru menyetor DP direfund dari DP yang masuk dan disebut sebagian', async () => {
+    process.env.ADMIN_EMAIL = 'bos@contoh.test';
+    const fake = buatDbRefund({
+      payments: [
+        barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+        barisPembayaran(PaymentTujuan.PELUNASAN, PaymentStatus.PENDING, '600000'),
+      ],
+    });
+    const { route, emails } = buatRouteRefund(fake);
+
+    const response = await route.POST(permintaanBank());
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.booking().refundAmount.toString(), '360000');
+    assert.match(emails[0].message, /\(sebagian\)/);
+  });
+
+  it('menolak refund pada pesanan tanpa satu pun Payment PAID', async () => {
+    process.env.ADMIN_EMAIL = 'bos@contoh.test';
+    const fake = buatDbRefund({
+      payments: [barisPembayaran(PaymentTujuan.FULL, PaymentStatus.PENDING, '1000000')],
+    });
+    const { route, emails } = buatRouteRefund(fake);
+
+    const response = await route.POST(permintaanBank());
+    const isi = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.match(isi.message, /Belum ada pembayaran yang tercatat/);
+    // Yang paling penting: TIDAK menulis 900.000 dari `totalPrice`. Rumus lama
+    // memperlakukan `dpAmount` nol sebagai "berarti bayar penuh", sehingga
+    // pesanan yang belum membayar sepeser pun tetap dijadwalkan refund.
+    assert.equal(fake.booking().refundAmount, null);
+    assert.equal(fake.booking().status, BookingStatus.WAITING_BANK);
+    assert.equal(fake.calls.includes('booking.updateMany'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('menolak step bank sebelum admin menyetujui pengajuan', async () => {
+    const fake = buatDbRefund({
+      booking: { status: BookingStatus.REVIEW_REFUND },
+      payments: [barisPembayaran(PaymentTujuan.FULL, PaymentStatus.PAID, '1000000')],
+    });
+    const { route, emails } = buatRouteRefund(fake);
+
+    const response = await route.POST(permintaanBank());
+    const isi = await response.json();
+
+    assert.equal(response.status, 409);
+    assert.match(isi.message, /belum siap menerima data rekening/);
+    assert.equal(fake.booking().refundAmount, null);
+    assert.equal(emails.length, 0);
+  });
+
+  it('dua permintaan paralel hanya menghasilkan satu penulisan dan satu email', async () => {
+    process.env.ADMIN_EMAIL = 'bos@contoh.test';
+    const fake = buatDbRefund({
+      payments: [barisPembayaran(PaymentTujuan.FULL, PaymentStatus.PAID, '1000000')],
+    });
+    const { route, emails } = buatRouteRefund(fake);
+
+    const hasil = await Promise.all([route.POST(permintaanBank()), route.POST(permintaanBank())]);
+    const status = hasil.map((r) => r.status).sort();
+
+    assert.deepEqual(status, [200, 409]);
+    assert.equal(emails.length, 1);
+    assert.equal(fake.booking().refundAmount.toString(), '900000');
+    // Hanya satu penulisan. Karena pembacaan pesanan ikut masuk ke dalam
+    // transaksi, permintaan kedua membaca status yang sudah berpindah ke
+    // `PROCESS_REFUND` dan berhenti di gerbang status — tidak sampai mencoba
+    // CAS. Kalau pembacaan itu berada di luar transaksi seperti sebelumnya,
+    // keduanya membaca `WAITING_BANK` dan sama-sama menulis.
+    assert.equal(fake.calls.filter((nama) => nama === 'booking.updateMany').length, 1);
+    assert.equal(fake.calls.filter((nama) => nama === 'transaction.begin').length, 2);
+  });
+});
+
+// ===========================================================================
+// PENYELESAIAN REFUND ADMIN: BUKTI WAJIB DAN PLAFON UANG MASUK
+// ===========================================================================
+describe('POST /api/admin/update-order gerbang REFUNDED', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } = require('@prisma/client');
+
+  function barisPembayaran(tujuan, status, jumlah) {
+    return { tujuan, status, jumlah: new Prisma.Decimal(jumlah) };
+  }
+
+  function buatDbAdmin(options = {}) {
+    const calls = [];
+    const payments = (options.payments ?? []).map((p) => ({ ...p }));
+    let booking = {
+      id: 'booking-1',
+      status: options.status ?? BookingStatus.PROCESS_REFUND,
+      totalPrice: new Prisma.Decimal(options.totalPrice ?? '1000000'),
+      refundAmount: options.refundAmount === undefined ? new Prisma.Decimal('900000') : options.refundAmount,
+      refundProof: options.refundProof ?? null,
+      refundedAt: null,
+      productionStartedAt: null,
+      installedAt: null,
+      installationProof: null,
+      cancelReason: null,
+      isLocked: false,
+      duration: 30,
+    };
+
+    function lengkap(row) {
+      return {
+        ...row,
+        payments: payments.map((p) => ({ tujuan: p.tujuan, status: p.status, jumlah: p.jumlah })),
+        user: { name: 'Budi Santoso', email: 'pembeli@contoh.test' },
+        billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
+      };
+    }
+
+    const prismaPalsu = {
+      async $transaction(kerja) {
+        let salinan = { ...booking };
+        const hasil = await kerja({
+          booking: {
+            async findUnique() {
+              calls.push('booking.findUnique');
+              return lengkap(salinan);
+            },
+            async updateMany(args) {
+              calls.push('booking.updateMany');
+              if (args.where.status !== salinan.status) return { count: 0 };
+              salinan = { ...salinan, ...args.data };
+              return { count: 1 };
+            },
+            async findUniqueOrThrow() {
+              return lengkap(salinan);
+            },
+          },
+        });
+        booking = salinan;
+        return hasil;
+      },
+    };
+
+    return { prisma: prismaPalsu, calls, booking: () => ({ ...booking }) };
+  }
+
+  function buatRouteAdmin(fake) {
+    const emails = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_UPDATE_ORDER, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+    });
+    return { route, emails };
+  }
+
+  function permintaan(isi) {
+    return new Request('https://contoh.test/api/admin/update-order', {
+      method: 'POST',
+      body: JSON.stringify({ orderId: 'booking-1', ...isi }),
+    });
+  }
+
+  const PAID_PENUH = [barisPembayaran(PaymentTujuan.FULL, PaymentStatus.PAID, '1000000')];
+
+  it('menolak REFUNDED tanpa bukti transfer', async () => {
+    const fake = buatDbAdmin({ payments: PAID_PENUH });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'REFUNDED' }));
+    const isi = await response.json();
+
+    assert.equal(response.status, 422);
+    assert.match(isi.message, /Bukti transfer wajib dilampirkan/);
+    assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+    assert.equal(fake.booking().refundedAt, null);
+    assert.equal(fake.calls.includes('booking.updateMany'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('menolak bukti transfer yang bukan URL http/https', async () => {
+    const fake = buatDbAdmin({ payments: PAID_PENUH });
+    const { route } = buatRouteAdmin(fake);
+
+    for (const bukti of ['javascript:alert(1)', 'data:image/png;base64,AAAA', 'sudah ditransfer kok']) {
+      const response = await route.POST(permintaan({ newStatus: 'REFUNDED', refundProof: bukti }));
+      assert.equal(response.status, 422);
+      assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+    }
+  });
+
+  for (const [judul, refundAmount] of [
+    ['belum tercatat', null],
+    ['nol', new Prisma.Decimal('0')],
+    ['negatif', new Prisma.Decimal('-1')],
+  ]) {
+    it(`menolak REFUNDED bila nominal refund ${judul}`, async () => {
+      const fake = buatDbAdmin({ payments: PAID_PENUH, refundAmount });
+      const { route, emails } = buatRouteAdmin(fake);
+
+      const response = await route.POST(
+        permintaan({ newStatus: 'REFUNDED', refundProof: 'https://bukti.contoh.test/1.png' })
+      );
+      const isi = await response.json();
+
+      assert.equal(response.status, 422);
+      assert.match(isi.message, /Nominal refund belum tercatat/);
+      assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+      assert.equal(emails.length, 0);
+    });
+  }
+
+  it('menolak nominal refund yang melebihi uang pokok yang pernah masuk', async () => {
+    // Pesanan DP: 400.000 masuk dari kontrak 1.000.000, tapi `refundAmount`
+    // tertulis 900.000 — nilai yang hanya masuk akal kalau seseorang
+    // menghitungnya dari `totalPrice`.
+    const fake = buatDbAdmin({
+      payments: [barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000')],
+      refundAmount: new Prisma.Decimal('900000'),
+    });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    const response = await route.POST(
+      permintaan({ newStatus: 'REFUNDED', refundProof: 'https://bukti.contoh.test/1.png' })
+    );
+    const isi = await response.json();
+
+    assert.equal(response.status, 422);
+    assert.match(isi.message, /melebihi uang yang pernah/);
+    assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+    assert.equal(emails.length, 0);
+  });
+
+  it('biaya tambahan yang dibayar tidak menaikkan plafon refund pokok', async () => {
+    // `uangMasuk()` mengecualikan TAMBAHAN. Kalau plafonnya dihitung dari
+    // `uangMasukSemua()`, refund 620.000 lolos — perusahaan mengembalikan uang
+    // biaya tambahan sebagai bagian dari pokok.
+    const fake = buatDbAdmin({
+      payments: [
+        barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+        barisPembayaran(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000'),
+      ],
+      refundAmount: new Prisma.Decimal('620000'),
+    });
+    const { route } = buatRouteAdmin(fake);
+
+    const response = await route.POST(
+      permintaan({ newStatus: 'REFUNDED', refundProof: 'https://bukti.contoh.test/1.png' })
+    );
+
+    assert.equal(response.status, 422);
+    assert.equal(fake.booking().status, BookingStatus.PROCESS_REFUND);
+  });
+
+  it('menerima REFUNDED lengkap dan mencatat waktu refund', async () => {
+    const fake = buatDbAdmin({ payments: PAID_PENUH });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    const response = await route.POST(
+      permintaan({ newStatus: 'REFUNDED', refundProof: 'https://bukti.contoh.test/1.png' })
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.booking().status, BookingStatus.REFUNDED);
+    assert.equal(fake.booking().refundProof, 'https://bukti.contoh.test/1.png');
+    assert.ok(fake.booking().refundedAt instanceof Date);
+    assert.equal(emails.length, 1);
+    assert.match(emails[0].subject, /Refund/);
+  });
+
+  it('email ACTIVE tidak menagih sisa pada pesanan yang sudah lunas', async () => {
+    const fake = buatDbAdmin({ status: BookingStatus.INSTALLATION, payments: PAID_PENUH });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'ACTIVE' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(emails.length, 1);
+    assert.doesNotMatch(emails[0].message, /Sisa|sisa|dilunasi/);
+    assert.match(emails[0].message, /sudah terpasang/);
+  });
+
+  it('email ACTIVE menagih sisa yang sama dengan sisaTagihan pada pesanan DP', async () => {
+    const { sisaTagihan } = require(JALUR_LEDGER);
+    const payments = [barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000')];
+    const fake = buatDbAdmin({ status: BookingStatus.INSTALLATION, payments });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    const response = await route.POST(permintaan({ newStatus: 'ACTIVE' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(sisaTagihan('1000000', payments).toString(), '600000');
+    assert.match(emails[0].message, /Sisa <b>Rp\s?600\.000<\/b>/);
+    assert.match(emails[0].message, /sudah kami terima Rp\s?400\.000/);
+  });
+
+  it('pesanan DP yang biaya tambahannya dibayar tetap ditagih sisa pokok penuh', async () => {
+    const fake = buatDbAdmin({
+      status: BookingStatus.INSTALLATION,
+      payments: [
+        barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
+        barisPembayaran(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000'),
+      ],
+    });
+    const { route, emails } = buatRouteAdmin(fake);
+
+    await route.POST(permintaan({ newStatus: 'ACTIVE' }));
+
+    // Bukan 350.000. Biaya tambahan bukan pembayaran pokok.
+    assert.match(emails[0].message, /Sisa <b>Rp\s?600\.000<\/b>/);
+  });
+});
+
+// ===========================================================================
+// LAPORAN: DIBUKUKAN PADA WAKTU UANG, BUKAN PADA STATUS PESANAN
+// ===========================================================================
+describe('getRevenueData', () => {
+  const { Prisma, PaymentStatus, BookingStatus } = require('@prisma/client');
+
+  function buatLaporan({ penerimaan = [], refund = [], role = 'ADMIN' }) {
+    const argumen = { payment: null, booking: null };
+    const prismaPalsu = {
+      payment: {
+        async findMany(args) {
+          argumen.payment = args;
+          return penerimaan;
+        },
+      },
+      booking: {
+        async findMany(args) {
+          argumen.booking = args;
+          return refund;
+        },
+      },
+    };
+    const modul = muatDenganModulPalsu(JALUR_LAPORAN, {
+      'next-auth': { getServerSession: async () => (role === null ? null : { user: { id: 'u', role } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: prismaPalsu },
+    });
+    return { getRevenueData: modul.getRevenueData, argumen };
+  }
+
+  it('menolak pemanggil yang bukan admin', async () => {
+    for (const role of [null, 'USER', 'CS']) {
+      const { getRevenueData } = buatLaporan({ role });
+      await assert.rejects(getRevenueData('all'), /Unauthorized/);
+    }
+  });
+
+  it('menyaring Payment PAID pada paidAt dan refund selesai pada refundedAt', async () => {
+    const { getRevenueData, argumen } = buatLaporan({});
+    await getRevenueData('all');
+
+    assert.equal(argumen.payment.where.status, PaymentStatus.PAID);
+    assert.ok(argumen.payment.where.paidAt.gte instanceof Date);
+    assert.deepEqual(Object.keys(argumen.payment.select).sort(), ['jumlah', 'paidAt']);
+
+    assert.equal(argumen.booking.where.status, BookingStatus.REFUNDED);
+    assert.ok(argumen.booking.where.refundedAt.gte instanceof Date);
+    assert.deepEqual(Object.keys(argumen.booking.select).sort(), ['refundAmount', 'refundedAt']);
+  });
+
+  it('membukukan tiap penerimaan pada bulan paidAt-nya sendiri', async () => {
+    // Dua pembayaran atas SATU pesanan, berbulan-bulan terpisah. Rumus lama
+    // membukukan keduanya pada `Booking.paidAt` — satu kolom yang tidak berubah
+    // saat sisanya dibayar — sehingga pelunasan September hilang dari grafik.
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('400000'), paidAt: new Date(2026, 6, 10) },
+        { jumlah: new Prisma.Decimal('600000'), paidAt: new Date(2026, 8, 5) },
+      ],
+    });
+
+    const hasil = await getRevenueData('all');
+
+    assert.deepEqual(hasil, [
+      { name: "Jul '26", total: 400000 },
+      { name: "Sep '26", total: 600000 },
+    ]);
+  });
+
+  it('refund selesai menjadi pengurang pada bulan refundedAt, bukan penambah', async () => {
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('1000000'), paidAt: new Date(2026, 7, 10) },
+        { jumlah: new Prisma.Decimal('500000'), paidAt: new Date(2026, 8, 5) },
+      ],
+      refund: [{ refundAmount: new Prisma.Decimal('900000'), refundedAt: new Date(2026, 8, 20) }],
+    });
+
+    const hasil = await getRevenueData('all');
+
+    // Neto September = 500.000 − 900.000. Rumus lama justru MENAIKKAN bulan
+    // refund, karena `REFUNDED` masuk daftar status pendapatan.
+    assert.deepEqual(hasil, [
+      { name: "Ags '26", total: 1000000 },
+      { name: "Sep '26", total: -400000 },
+    ]);
+  });
+
+  it('bulan yang hanya berisi refund tetap berada pada tempatnya di garis waktu', async () => {
+    // Kunci Map yang bisa diurutkan (`YYYY-MM`) dipisah dari label manusia
+    // justru untuk kasus ini. Kalau labelnya sendiri yang jadi kunci, urutannya
+    // mengikuti urutan baris dari database dan Juni muncul di ujung grafik.
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [{ jumlah: new Prisma.Decimal('1000000'), paidAt: new Date(2026, 8, 5) }],
+      refund: [{ refundAmount: new Prisma.Decimal('200000'), refundedAt: new Date(2026, 5, 15) }],
+    });
+
+    const hasil = await getRevenueData('all');
+
+    assert.deepEqual(hasil.map((t) => t.name), ["Jun '26", "Sep '26"]);
+    assert.equal(hasil[0].total, -200000);
+  });
+
+  it('menjumlahkan Decimal sebagai Decimal, bukan menyambungnya sebagai teks', async () => {
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('100000'), paidAt: new Date(2026, 8, 1) },
+        { jumlah: new Prisma.Decimal('50000'), paidAt: new Date(2026, 8, 2) },
+      ],
+    });
+
+    const hasil = await getRevenueData('all');
+
+    // `0 + Decimal(100000) + Decimal(50000)` akan menghasilkan "010000050000".
+    assert.equal(hasil.length, 1);
+    assert.equal(hasil[0].total, 150000);
+    assert.equal(typeof hasil[0].total, 'number');
+  });
+
+  it('melewati baris yang waktunya kosong alih-alih membukukannya di epoch', async () => {
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('100000'), paidAt: null },
+        { jumlah: new Prisma.Decimal('250000'), paidAt: new Date(2026, 8, 1) },
+      ],
+      refund: [{ refundAmount: new Prisma.Decimal('50000'), refundedAt: null }],
+    });
+
+    const hasil = await getRevenueData('all');
+
+    assert.deepEqual(hasil, [{ name: "Sep '26", total: 250000 }]);
+  });
+});
+
+// ===========================================================================
+// BATAS SERIALISASI: YANG MENYEBERANG KE BROWSER HANYA ANGKA JADI
+// ===========================================================================
+//
+// Dua hal yang dijaga di sini sekaligus. Pertama, `Prisma.Decimal` adalah objek
+// dan tidak bisa diserialisasi — mengirimnya ke Client Component menggagalkan
+// render, bukan sekadar menampilkan angka salah. Kedua, baris `Payment` memuat
+// kaitan ke gerbang pembayaran; props Client Component tertanam di HTML halaman,
+// jadi kolom apa pun yang ikut terkirim bisa dibaca siapa saja yang membuka
+// devtools.
+describe('batas serialisasi props client', () => {
+  const KOLOM_PROVIDER = [
+    'providerSessionId',
+    'providerReferenceId',
+    'providerPaymentId',
+    'callbackPayload',
+    'components_sdk_key',
+    'componentsSdkKey',
+  ];
+
+  const BERKAS_CLIENT = [
+    ['BookingCard', JALUR_BOOKING_CARD],
+    ['TransactionClient', JALUR_TRANSACTION_CLIENT],
+    ['UserClientPage', JALUR_USERS_CLIENT],
+  ];
+
+  /**
+   * Buang komentar sebelum mencocokkan.
+   *
+   * File-file ini memuat komentar panjang yang justru MENJELASKAN kenapa
+   * `Prisma.Decimal` dan `dpAmount` tidak boleh dipakai di sini. Mencocokkan
+   * teks mentah akan menghukum dokumentasi itu, jadi yang diperiksa hanya
+   * kodenya.
+   */
+  function kodeSaja(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  for (const [nama, jalur] of BERKAS_CLIENT) {
+    it(`${nama} tidak menyebut kolom provider maupun nilai Prisma`, () => {
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+      for (const kolom of KOLOM_PROVIDER) {
+        assert.equal(kode.includes(kolom), false, `${nama} menyebut ${kolom}`);
+      }
+      // `Prisma.Decimal` adalah objek: mengirimkannya sebagai prop MENGGAGALKAN
+      // render, bukan menampilkan angka salah. Yang dilarang adalah membawa
+      // nilai runtime Prisma ke bundle browser. `import type { PaymentTujuan }`
+      // tetap boleh — ia hilang saat kompilasi dan hanya menamai enum.
+      assert.doesNotMatch(kode, /Prisma\.Decimal/, `${nama} memakai Prisma.Decimal`);
+      const imporPrisma = kode.match(/^import(?! type).*from '@prisma\/client';$/m);
+      assert.equal(imporPrisma, null, `${nama} mengimpor nilai dari @prisma/client`);
+    });
+  }
+
+  for (const [nama, jalur] of [
+    ['DashboardWrapper', JALUR_DASHBOARD_WRAPPER],
+    [
+      'orders/page',
+      path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'orders', 'page.tsx'),
+    ],
+    ['users/page', path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'users', 'page.tsx')],
+  ]) {
+    it(`${nama} memakai uangUntukClient/keAngka sebelum nominal menyeberang`, () => {
+      const sumber = fs.readFileSync(jalur, 'utf8');
+      assert.match(sumber, /uangUntukClient|keAngka/);
+    });
+  }
+
+  it('pembaca uang tidak lagi memakai dpAmount sebagai bukti pembayaran', () => {
+    for (const jalur of [JALUR_ROUTE_REFUND, JALUR_ROUTE_UPDATE_ORDER, JALUR_INVOICE, JALUR_LAPORAN]) {
+      // Kata `dpAmount` masih boleh muncul di komentar yang menjelaskan kenapa
+      // ia tidak dipakai; yang dilarang adalah membacanya dari objek pesanan.
+      assert.doesNotMatch(
+        kodeSaja(fs.readFileSync(jalur, 'utf8')),
+        /\.dpAmount/,
+        `${jalur} masih membaca .dpAmount`
+      );
+    }
+  });
+
+  it('invoice menghitung pokok dan tambahan dari ledger secara terpisah', () => {
+    const sumber = fs.readFileSync(JALUR_INVOICE, 'utf8');
+    assert.match(sumber, /uangMasuk\(order\.payments\)/);
+    assert.match(sumber, /sisaPokokLedger\(order\.totalPrice, order\.payments\)/);
+    assert.match(sumber, /p\.tujuan === PaymentTujuan\.TAMBAHAN/);
   });
 });

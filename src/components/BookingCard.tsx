@@ -5,14 +5,24 @@ import { useState, useEffect } from 'react';
 import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-// Nominal yang sampai ke komponen ini sudah diubah menjadi angka biasa oleh
-// halaman induknya. Perbandingan `<`/`>` dan aritmetika `-`/`*` karena itu
-// "berfungsi" hari ini — tapi hanya selama konversi itu ada. Objek Decimal
-// yang lolos ke `<` akan dibandingkan sebagai teks ("900000000" < "99000000"
-// bernilai benar), dan `-` menghasilkan NaN. Karena prop `order` bertipe
-// `any`, tsc tidak akan memperingatkan apa pun. Pembantu money.ts benar pada
-// kedua bentuk, jadi kesalahan itu tidak bisa muncul lagi.
-import { angkaRupiah, kurang, lebihKecil, nol, persen } from '@/lib/money';
+// Komponen ini TIDAK menghitung uang. Setiap nominal yang dipakainya sudah
+// dihitung server sebagai `Prisma.Decimal` lalu diserialisasi lewat
+// `uangUntukClient` — lihat `src/app/dashboard/DashboardWrapper.tsx`.
+//
+// Dulu sisa tagihan dan perkiraan refund dihitung di sini dari `dpAmount` dan
+// `totalPrice`. Dua alasan itu dipindahkan ke server:
+//
+//   1. `dpAmount` adalah RENCANA, bukan bukti uang masuk. Ia tidak berubah saat
+//      pembeli melunasi sisanya, jadi kartu pesanan DP yang sudah lunas tetap
+//      menagih sisa penuh selamanya.
+//   2. Begitu Decimal menjadi angka biasa, operator `<` dan `-` bekerja tanpa
+//      jaminan presisi yang dijaga money.ts — dan bila konversi di server suatu
+//      saat lepas, `<` membandingkan dua objek sebagai teks ("900000000" lebih
+//      kecil dari "99000000") sementara `-` menghasilkan NaN, keduanya tanpa
+//      satu pun peringatan dari tsc.
+//
+// `angkaRupiah` tetap dipakai: ia memformat, bukan menghitung.
+import { angkaRupiah } from '@/lib/money';
 
 /**
  * Bentuk pesanan yang BOLEH menyeberang ke browser.
@@ -26,8 +36,8 @@ import { angkaRupiah, kurang, lebihKecil, nol, persen } from '@/lib/money';
  * di sini lebih dulu.
  *
  * Nominal sudah berupa `number` karena halaman induk mengubahnya dengan
- * `uangUntukClient`. Tetap gunakan pembantu di `@/lib/money` untuk menghitung,
- * bukan operator langsung — lihat catatan di kepala berkas ini.
+ * `uangUntukClient`, dan setiap angka turunan sudah dihitung di sana sebagai
+ * Decimal. Komponen ini hanya menampilkannya — lihat catatan di kepala berkas.
  */
 export type PesananUntukKartu = {
   id: string;
@@ -35,7 +45,17 @@ export type PesananUntukKartu = {
   /** ISO string; `null` pada pesanan lama yang tenggatnya tidak pernah dicatat. */
   expiresAt: string | null;
   totalPrice: number;
-  dpAmount: number | null;
+  /**
+   * Pesanan ini direncanakan dibayar bertahap (DP), menurut catatan saat dibuat.
+   *
+   * Kesimpulan server, bukan hasil membandingkan dua nominal di sini. Ia BUKAN
+   * bukti uang diterima — itu selalu `pokokMasuk`, dari baris `Payment` PAID.
+   */
+  rencanaDp: boolean;
+  /** Nominal yang direncanakan dibayar di muka; `null` bila tidak tercatat. */
+  dpRencana: number | null;
+  /** Sisa menurut RENCANA setelah DP; `null` bila pesanan bukan skema DP. */
+  sisaSetelahDpRencana: number | null;
   designOption: string | null;
   designFileUrl: string | null;
   designStatus: string | null;
@@ -49,6 +69,20 @@ export type PesananUntukKartu = {
   } | null;
   /** Hasil kesimpulan server: masih ada tagihan `PENDING` yang dapat dibayar. */
   adaTagihanPending: boolean;
+  /** Uang pokok yang sudah benar-benar diterima (`Payment PAID`, tanpa TAMBAHAN). */
+  pokokMasuk: number;
+  /** Sisa pokok sewa yang belum dibayar; nol bila lunas. */
+  sisaPokok: number;
+  /** Sudah ada setidaknya satu rupiah pokok yang diterima. */
+  adaUangMasuk: boolean;
+  /** Sudah ada uang masuk TAPI belum lunas — pesanan DP yang menggantung. */
+  dibayarSebagian: boolean;
+  /** Pokok sewa sudah lunas menurut ledger. */
+  pokokLunas: boolean;
+  /** Perkiraan refund dari uang yang sudah masuk; nominal pasti dihitung server. */
+  perkiraanRefund: number;
+  /** Refund yang sudah ditetapkan server, atau `null` bila belum diproses. */
+  refundAmount: number | null;
 };
 
 export default function BookingCard({ order }: { order: PesananUntukKartu }) {
@@ -278,16 +312,6 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'ACTIVE'].includes(order.status);
   const isImageProof = order.refundProof?.startsWith('data:image');
 
-  // Apakah pesanan ini dibayar dengan skema DP, dan berapa sisanya?
-  //
-  // `dpAmount` bernilai 0 pada pesanan lunas, jadi "bukan nol DAN lebih kecil
-  // dari total" adalah tanda skema DP. Keduanya diperiksa lewat money.ts, bukan
-  // `!==` dan `<`, karena nominal bisa berupa objek Decimal — lihat catatan di
-  // kepala berkas ini.
-  const pakaiDp =
-      !!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice);
-  const sisaTagihan = pakaiDp ? kurang(order.totalPrice, order.dpAmount) : null;
-
   // Pesanan yang uangnya sudah keluar lagi, atau tidak akan pernah masuk, tidak
   // punya sisa tagihan yang perlu ditagih. Menampilkan "sisa" pada pesanan yang
   // sedang direfund berarti menagih orang yang justru sedang menunggu uangnya
@@ -340,46 +364,61 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                     <p className="text-lg font-bold text-gray-900">Rp {angkaRupiah(order.totalPrice)}</p>
 
                     {/*
-                      Pesanan DP: yang harus dibayar SEKARANG bukan totalnya.
-                      Tanpa baris ini pembeli hanya melihat nilai penuh dan
-                      mengira itulah tagihannya — padahal ia memilih DP 60%.
+                      Pesanan DP yang BELUM dibayar: yang harus disetor sekarang
+                      bukan totalnya. Tanpa baris ini pembeli hanya melihat nilai
+                      penuh dan mengira itulah tagihannya — padahal ia memilih DP.
+
+                      Syaratnya sengaja mencakup "belum ada uang masuk": begitu
+                      pembayaran pertama diterima, panel di bawah yang berlaku,
+                      karena angkanya berasal dari fakta dan bukan rencana lagi.
                     */}
-                    {pakaiDp && order.status === 'PENDING_PAYMENT' && (
+                    {order.rencanaDp && order.status === 'PENDING_PAYMENT' && !order.adaUangMasuk && (
                         <div className="mt-1 bg-orange-50 border border-orange-100 rounded px-2 py-1">
                             <p className="text-[9px] text-orange-600 font-bold uppercase">Dibayar Sekarang (DP)</p>
-                            <p className="text-sm font-bold text-orange-700">Rp {angkaRupiah(order.dpAmount)}</p>
-                            {/*
-                              Dulu `order.totalPrice - order.dpAmount`. Itu
-                              berfungsi hanya selama halaman induk sempat
-                              mengubah kedua nominal menjadi angka biasa. Bila
-                              konversi itu suatu saat lepas, `-` atas dua objek
-                              Decimal menghasilkan NaN diam-diam — pelanggan
-                              membaca "Sisa Rp NaN", dan tsc tidak berkata
-                              apa-apa karena `order` bertipe `any`. `kurang`
-                              dari money.ts benar pada kedua bentuk.
-                            */}
-                            <p className="text-[9px] text-orange-500">Sisa Rp {angkaRupiah(sisaTagihan)} dibayar H-3 tayang</p>
+                            <p className="text-sm font-bold text-orange-700">Rp {angkaRupiah(order.dpRencana)}</p>
+                            <p className="text-[9px] text-orange-500">
+                                Sisa Rp {angkaRupiah(order.sisaSetelahDpRencana)} dibayar H-3 tayang
+                            </p>
                         </div>
                     )}
 
                     {/*
-                      Sisa tagihan setelah DP diterima.
+                      Sisa tagihan setelah sebagian uang diterima.
 
-                      Panel di atas hanya hidup saat status PENDING_PAYMENT, jadi
-                      begitu DP masuk dan statusnya menjadi PAID_CONFIRMED,
-                      pembeli DP TIDAK PERNAH melihat sisa tagihannya lagi
-                      sepanjang sisa alur pesanan — sampai billboard-nya tayang
-                      dan selesai. Satu-satunya tempat angka itu pernah muncul
-                      lagi adalah email "sudah tayang". Panel ini membuat
-                      kewajiban yang masih menggantung itu terlihat di setiap
-                      tahap, karena pembeli tidak bisa melunasi sesuatu yang
-                      tidak pernah ditagihkan kepadanya.
+                      Angka di panel ini dulu `totalPrice - dpAmount`, yaitu sisa
+                      MENURUT RENCANA. `dpAmount` tidak pernah berubah ketika
+                      pembeli melunasi sisanya, jadi pesanan DP yang sudah lunas
+                      tetap menampilkan sisa penuh — pembeli ditagih untuk kedua
+                      kalinya atas uang yang sudah ia kirim. Sekarang angkanya
+                      `sisaPokok`, hasil `totalPrice` dikurangi seluruh
+                      `Payment PAID`, dan panelnya hilang dengan sendirinya
+                      begitu pesanan lunas.
+
+                      Syarat `dibayarSebagian` juga menutup celah kedua: panel
+                      "Dibayar Sekarang" di atas hanya hidup saat
+                      PENDING_PAYMENT, sehingga tanpa panel ini pembeli DP tidak
+                      pernah melihat sisa tagihannya lagi sepanjang alur pesanan.
                     */}
-                    {pakaiDp && order.status !== 'PENDING_PAYMENT' && !tagihanSudahSelesai && (
+                    {order.dibayarSebagian && !tagihanSudahSelesai && (
                         <div className="mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
                             <p className="text-[9px] text-amber-700 font-bold uppercase">Sisa Yang Harus Dilunasi</p>
-                            <p className="text-sm font-bold text-amber-800">Rp {angkaRupiah(sisaTagihan)}</p>
-                            <p className="text-[9px] text-amber-600">DP Rp {angkaRupiah(order.dpAmount)} sudah diterima. Pelunasan paling lambat H-3 sebelum tanggal tayang.</p>
+                            <p className="text-sm font-bold text-amber-800">Rp {angkaRupiah(order.sisaPokok)}</p>
+                            <p className="text-[9px] text-amber-600">
+                                Rp {angkaRupiah(order.pokokMasuk)} sudah kami terima. Pelunasan paling lambat H-3 sebelum tanggal tayang.
+                            </p>
+                        </div>
+                    )}
+
+                    {/*
+                      Pesanan lunas perlu dinyatakan lunas. Tanpa ini pembeli
+                      yang sudah membayar penuh tidak pernah melihat konfirmasi
+                      apa pun di kartunya — hanya "Total Tagihan" yang terlihat
+                      sama saja dengan pesanan yang belum dibayar sepeser pun.
+                    */}
+                    {order.adaUangMasuk && order.pokokLunas && !tagihanSudahSelesai && (
+                        <div className="mt-1 bg-green-50 border border-green-200 rounded px-2 py-1">
+                            <p className="text-[9px] text-green-700 font-bold uppercase">Lunas</p>
+                            <p className="text-[9px] text-green-600">Rp {angkaRupiah(order.pokokMasuk)} sudah kami terima.</p>
                         </div>
                     )}
                 </div>
@@ -560,11 +599,23 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                       biaya admin 10%") membuat pembeli mengira ia akan
                       menerima 90% dari total pesanan — termasuk bagian yang
                       belum pernah ia bayarkan.
+
+                      Angkanya dulu dihitung di sini sebagai `persen(dpAmount, 90)`
+                      — 90% dari RENCANA DP. Pembeli DP yang sudah melunasi
+                      sisanya diberi tahu bahwa ia hanya akan menerima 90% dari
+                      DP-nya, padahal server menghitung dari seluruh uang yang
+                      masuk: angka di layar jauh lebih kecil dari yang
+                      sebenarnya ia terima. Sekarang `perkiraanRefund` dihitung
+                      server dari `Payment PAID`.
                     */}
                     <div className="bg-yellow-50 text-yellow-800 text-xs p-3 rounded border border-yellow-200">
                         ⚠ Dana yang dikembalikan adalah <b>90% dari pembayaran yang sudah Anda lakukan</b> (dipotong biaya admin 10%).
-                        {!!order.dpAmount && !nol(order.dpAmount) && lebihKecil(order.dpAmount, order.totalPrice) && (
-                            <> Anda baru membayar DP <b>Rp {angkaRupiah(order.dpAmount)}</b>, sehingga perkiraan refund <b>Rp {angkaRupiah(persen(order.dpAmount, 90))}</b>.</>
+                        {order.adaUangMasuk && (
+                            <>
+                                {' '}Pembayaran yang sudah kami terima <b>Rp {angkaRupiah(order.pokokMasuk)}</b>,
+                                sehingga perkiraan refund <b>Rp {angkaRupiah(order.perkiraanRefund)}</b>.
+                                Nominal pastinya dihitung ulang saat pengajuan Anda diproses.
+                            </>
                         )}
                     </div>
                     <textarea name="reason" placeholder="Jelaskan alasan..." className="w-full border rounded-lg p-3 text-sm mt-1 h-24 focus:outline-none focus:border-utero" required></textarea>
@@ -580,10 +631,17 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
             <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
                 <div className="bg-green-50 px-6 py-4 border-b flex justify-between items-center"><h3 className="font-bold text-green-800 flex items-center gap-2"><Landmark size={18}/> Input Rekening</h3><button onClick={() => setModalType('NONE')} className="text-gray-400 hover:text-red-500">✕</button></div>
                 <form onSubmit={handleSubmitBank} className="p-6 space-y-4">
-                    {/* Nominal pasti dihitung server dari uang yang sudah masuk;
-                        di sini hanya disebut dasarnya, bukan angka yang mengikat. */}
+                    {/* `refundAmount` ditetapkan server saat pengajuan disetujui.
+                        Bila sudah ada, itulah angka yang akan ditransfer — bukan
+                        perkiraan. Bila belum, hanya dasarnya yang disebut. */}
                     <p className="text-sm text-gray-600 mb-2">
-                        Dana refund (90% dari pembayaran yang sudah masuk) akan ditransfer ke:
+                        {order.refundAmount === null ? (
+                            <>Dana refund (90% dari pembayaran yang sudah masuk) akan ditransfer ke:</>
+                        ) : (
+                            <>
+                                Dana refund <b>Rp {angkaRupiah(order.refundAmount)}</b> akan ditransfer ke:
+                            </>
+                        )}
                     </p>
                     <div className="grid grid-cols-2 gap-4">
                         <input name="bankName" placeholder="Bank (cth: BCA)" className="w-full border rounded-lg p-3 text-sm font-bold" required />

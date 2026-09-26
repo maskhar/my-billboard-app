@@ -5,8 +5,17 @@ import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
-import { keAngka, kurang, lebihKecil, nol, rupiah } from "@/lib/money";
+import { keAngka, lebihBesar, rupiah } from "@/lib/money";
+import { masihAdaSisa, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
 import { Prisma } from "@prisma/client";
+
+/**
+ * Kolom Payment yang cukup untuk menjawab "berapa uang yang sudah masuk".
+ *
+ * Kaitan ke gerbang pembayaran sengaja tidak diambil: tidak ada keputusan di
+ * route ini yang membutuhkannya, dan baris ini ikut menyusun isi email.
+ */
+const PILIH_PEMBAYARAN = { tujuan: true, status: true, jumlah: true } as const;
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -42,50 +51,11 @@ export async function POST(req: Request) {
   }
 
   try {
-      // Pesanan dibaca SEKALI di sini, lalu dipakai ulang untuk pemeriksaan
-      // transisi dan pengisian timestamp di bawah. Sebelumnya baris yang sama
-      // diambil sampai dua kali dalam satu permintaan.
-      const currentOrder = await prisma.booking.findUnique({ where: { id: orderId } });
-
-      if (!currentOrder) {
-          return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
-      }
-
-      // Enum hanya memastikan kata yang dikirim DIKENAL, bukan bahwa
-      // perpindahannya masuk akal. Sebelum pemeriksaan ini ada, satu salah klik
-      // bisa memindahkan pesanan `REFUNDED` kembali ke `ACTIVE`: dananya sudah
-      // ditransfer keluar, tapi pesanannya hidup lagi, tanggal billboard
-      // terkunci lagi, dan pelanggan menerima email "Pembayaran Berhasil! Order
-      // Aktif." untuk pesanan yang baru saja dikembalikan dananya. Peta lengkap
-      // beserta alasan tiap jalurnya ada di src/lib/transisi-status.ts.
-      if (!transisiSah(currentOrder.status, newStatus)) {
-          return NextResponse.json(
-              { message: pesanTransisiDitolak(currentOrder.status, newStatus) },
-              { status: 409 }
-          );
-      }
-
-      // `updateData` dulu bertipe `any` dan menyebar nilai body apa adanya:
-      // apa pun yang dikirim klien — angka, objek, teks sepanjang apa pun —
-      // ikut ditulis. Dua di antaranya (`refundProof`, `installationProof`)
-      // adalah URL gambar yang kemudian dirender di dashboard pelanggan sebagai
-      // bukti transfer dan bukti pemasangan, jadi isinya bukan hal sepele.
-      //
-      // Tipenya kini mengikuti `Prisma.BookingUpdateInput`, sehingga kolom
-      // salah ketik tertangkap `tsc` alih-alih baru ketahuan sebagai "Gagal
-      // Update" saat dipakai.
-      const updateData: Prisma.BookingUpdateInput = {
-          status: newStatus,
-      };
-
       const teksOpsional = (nilai: unknown, batas: number): string | null => {
           if (typeof nilai !== 'string') return null;
           const rapi = nilai.trim();
           return rapi === "" ? null : rapi.slice(0, batas);
       };
-
-      const alasan = teksOpsional(reason, 1000);
-      if (alasan) updateData.cancelReason = alasan;
 
       // Kedua kolom bukti hanya menerima URL http/https. Tanpa pemeriksaan ini,
       // teks apa pun bisa masuk ke atribut `src` gambar di dashboard pelanggan
@@ -101,60 +71,158 @@ export async function POST(req: Request) {
           }
       };
 
+      const alasan = teksOpsional(reason, 1000);
       const buktiRefund = urlBukti(refundProof);
-      if (buktiRefund) updateData.refundProof = buktiRefund;
-
       const buktiPasang = urlBukti(installationProof);
-      if (buktiPasang) updateData.installationProof = buktiPasang;
 
-      // Hanya boolean asli yang diterima; string "false" dari form akan
-      // terbaca sebagai `true` kalau dibiarkan lewat.
-      if (typeof isLocked === 'boolean') updateData.isLocked = isLocked;
+      // Pembacaan pesanan, pemeriksaan transisi, gerbang refund, dan penulisan
+      // hidup dalam satu transaksi. Sebelumnya `payments` dan `status` dibaca di
+      // luar transaksi: nominal yang divalidasi belum tentu nominal yang berlaku
+      // saat baris ditulis.
+      const hasil = await prisma.$transaction(async (tx) => {
+          const currentOrder = await tx.booking.findUnique({
+              where: { id: orderId },
+              include: { payments: { select: PILIH_PEMBAYARAN } },
+          });
 
-      if (newStatus === 'REFUNDED' && !currentOrder.refundedAt) {
-          updateData.refundedAt = new Date();
-      }
+          if (!currentOrder) return { keadaan: 'TIDAK_DITEMUKAN' } as const;
 
-      // Dua timestamp di bawah ada di skema tapi TIDAK PERNAH diisi kode mana
-      // pun. Akibatnya timeline pesanan milik pelanggan
-      // (`dashboard/order/[id]/page.tsx`, yang membaca `!!productionStartedAt`
-      // dan `!!installedAt`) menampilkan langkah "Cetak" dan "Pasang" permanen
-      // abu-abu — walaupun admin sudah menekan tombolnya dan statusnya sudah
-      // berubah. Diisi saat status pertama kali mencapai tahap itu; `findFirst`
-      // di bawah menjaga agar penekanan tombol kedua tidak menggeser waktunya.
-      if (newStatus === BookingStatus.IN_PRODUCTION && !currentOrder.productionStartedAt) {
-          updateData.productionStartedAt = new Date();
-      }
-      if (newStatus === BookingStatus.INSTALLATION && !currentOrder.installedAt) {
-          updateData.installedAt = new Date();
-      }
+          // Enum hanya memastikan kata yang dikirim DIKENAL, bukan bahwa
+          // perpindahannya masuk akal. Sebelum pemeriksaan ini ada, satu salah
+          // klik bisa memindahkan pesanan `REFUNDED` kembali ke `ACTIVE`:
+          // dananya sudah ditransfer keluar, tapi pesanannya hidup lagi,
+          // tanggal billboard terkunci lagi, dan pelanggan menerima email
+          // "Pembayaran Berhasil! Order Aktif." untuk pesanan yang baru saja
+          // dikembalikan dananya. Peta lengkap beserta alasan tiap jalurnya ada
+          // di src/lib/transisi-status.ts.
+          if (!transisiSah(currentOrder.status, newStatus)) {
+              return {
+                  keadaan: 'TRANSISI_DITOLAK',
+                  pesan: pesanTransisiDitolak(currentOrder.status, newStatus),
+              } as const;
+          }
 
-      // 2. Update Database & SEKALIGUS AMBIL DATA USER DAN BILLBOARD (Untuk Email)
-      // Ini adalah perbaikan utamanya (include user, include billboard)
-      //
-      // `status` ikut disyaratkan pada `where` agar dua admin yang menekan
-      // tombol bersamaan tidak sama-sama lolos pemeriksaan transisi di atas
-      // lalu menimpa satu sama lain. `updateMany` dipakai karena `update()`
-      // hanya menerima kolom unik pada `where`.
-      const { count } = await prisma.booking.updateMany({
-          where: { id: orderId, status: currentOrder.status },
-          data: updateData,
+          // `updateData` dulu bertipe `any` dan menyebar nilai body apa adanya:
+          // apa pun yang dikirim klien — angka, objek, teks sepanjang apa pun —
+          // ikut ditulis. Dua di antaranya (`refundProof`, `installationProof`)
+          // adalah URL gambar yang kemudian dirender di dashboard pelanggan
+          // sebagai bukti transfer dan bukti pemasangan, jadi isinya bukan hal
+          // sepele.
+          //
+          // Tipenya kini mengikuti `Prisma.BookingUpdateInput`, sehingga kolom
+          // salah ketik tertangkap `tsc` alih-alih baru ketahuan sebagai "Gagal
+          // Update" saat dipakai.
+          const updateData: Prisma.BookingUpdateInput = { status: newStatus };
+
+          if (alasan) updateData.cancelReason = alasan;
+          if (buktiRefund) updateData.refundProof = buktiRefund;
+          if (buktiPasang) updateData.installationProof = buktiPasang;
+
+          // Hanya boolean asli yang diterima; string "false" dari form akan
+          // terbaca sebagai `true` kalau dibiarkan lewat.
+          if (typeof isLocked === 'boolean') updateData.isLocked = isLocked;
+
+          if (newStatus === BookingStatus.REFUNDED) {
+              // `REFUNDED` berarti uang sudah keluar dari rekening perusahaan.
+              // Sebelum gerbang ini ada, satu klik cukup untuk menyatakannya
+              // tanpa bukti transfer apa pun, dengan nominal nol, atau dengan
+              // nominal yang melebihi uang yang pernah benar-benar diterima —
+              // dan angka itulah yang kemudian dipakai laporan sebagai
+              // pengurang omzet.
+              const bukti = buktiRefund ?? currentOrder.refundProof;
+              if (!bukti) {
+                  return {
+                      keadaan: 'REFUND_TAK_LENGKAP',
+                      pesan:
+                          "Bukti transfer wajib dilampirkan sebelum pesanan ditandai REFUNDED. " +
+                          "Unggah bukti berupa URL http/https lewat tombol Transfer.",
+                  } as const;
+              }
+
+              const nominalRefund = currentOrder.refundAmount;
+              if (nominalRefund === null || !lebihBesar(nominalRefund, 0)) {
+                  return {
+                      keadaan: 'REFUND_TAK_LENGKAP',
+                      pesan:
+                          "Nominal refund belum tercatat pada pesanan ini. Pelanggan harus " +
+                          "mengirim data rekening lebih dulu agar nominalnya terhitung.",
+                  } as const;
+              }
+
+              // Plafonnya uang pokok yang sudah masuk, bukan `totalPrice`:
+              // pesanan yang baru membayar DP tidak boleh direfund sebesar
+              // nilai kontraknya.
+              const pokokMasuk = uangMasuk(currentOrder.payments);
+              if (lebihBesar(nominalRefund, pokokMasuk)) {
+                  return {
+                      keadaan: 'REFUND_TAK_LENGKAP',
+                      pesan:
+                          `Nominal refund ${rupiah(nominalRefund)} melebihi uang yang pernah ` +
+                          `diterima (${rupiah(pokokMasuk)}). Periksa kembali pembayaran pesanan ini.`,
+                  } as const;
+              }
+
+              if (!currentOrder.refundedAt) updateData.refundedAt = new Date();
+          }
+
+          // Dua timestamp di bawah ada di skema tapi TIDAK PERNAH diisi kode
+          // mana pun. Akibatnya timeline pesanan milik pelanggan
+          // (`dashboard/order/[id]/page.tsx`, yang membaca
+          // `!!productionStartedAt` dan `!!installedAt`) menampilkan langkah
+          // "Cetak" dan "Pasang" permanen abu-abu — walaupun admin sudah
+          // menekan tombolnya dan statusnya sudah berubah. Diisi saat status
+          // pertama kali mencapai tahap itu; syarat `!currentOrder...` menjaga
+          // agar penekanan tombol kedua tidak menggeser waktunya.
+          if (newStatus === BookingStatus.IN_PRODUCTION && !currentOrder.productionStartedAt) {
+              updateData.productionStartedAt = new Date();
+          }
+          if (newStatus === BookingStatus.INSTALLATION && !currentOrder.installedAt) {
+              updateData.installedAt = new Date();
+          }
+
+          // `status` ikut disyaratkan pada `where` agar dua admin yang menekan
+          // tombol bersamaan tidak sama-sama lolos pemeriksaan transisi di atas
+          // lalu menimpa satu sama lain. `updateMany` dipakai karena `update()`
+          // hanya menerima kolom unik pada `where`.
+          const { count } = await tx.booking.updateMany({
+              where: { id: orderId, status: currentOrder.status },
+              data: updateData,
+          });
+
+          if (count === 0) return { keadaan: 'BERUBAH' } as const;
+
+          const updatedOrder = await tx.booking.findUniqueOrThrow({
+              where: { id: orderId },
+              include: {
+                  user: true,
+                  billboard: true, // Penting buat template email
+                  payments: { select: PILIH_PEMBAYARAN },
+              },
+          });
+
+          return { keadaan: 'TERSIMPAN', updatedOrder } as const;
       });
 
-      if (count === 0) {
+      if (hasil.keadaan === 'TIDAK_DITEMUKAN') {
+          return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
+      }
+
+      if (hasil.keadaan === 'TRANSISI_DITOLAK') {
+          return NextResponse.json({ message: hasil.pesan }, { status: 409 });
+      }
+
+      if (hasil.keadaan === 'REFUND_TAK_LENGKAP') {
+          return NextResponse.json({ message: hasil.pesan }, { status: 422 });
+      }
+
+      if (hasil.keadaan === 'BERUBAH') {
           return NextResponse.json(
               { message: "Status pesanan sudah berubah oleh proses lain. Muat ulang halaman lalu coba lagi." },
               { status: 409 }
           );
       }
 
-      const updatedOrder = await prisma.booking.findUniqueOrThrow({
-          where: { id: orderId },
-          include: { 
-              user: true, 
-              billboard: true // Penting buat template email
-          }
-      });
+      const { updatedOrder } = hasil;
 
       // 3. LOGIC KIRIM EMAIL NOTIFIKASI
       // Pastikan User & Emailnya Ada
@@ -174,20 +242,24 @@ export async function POST(req: Request) {
         //
         // Sekarang isinya menyebut apa yang benar-benar terjadi (billboard
         // tayang), dan sisa tagihan disebut apa adanya bila memang masih ada.
+        //
+        // Sisa dihitung dari `Payment PAID`, bukan dari `dpAmount`. `dpAmount`
+        // adalah rencana saat pesanan dibuat: pesanan DP yang sudah dilunasi
+        // dulu tetap menerima email ini dengan tagihan sisa yang tidak ada.
         if (newStatus === 'ACTIVE') {
-            const dp = updatedOrder.dpAmount;
-            const masihAdaSisa = !nol(dp) && lebihKecil(dp, updatedOrder.totalPrice);
-            const sisaTagihan = kurang(updatedOrder.totalPrice, dp);
+            const belumLunas = masihAdaSisa(updatedOrder.totalPrice, updatedOrder.payments);
+            const sisa = sisaTagihan(updatedOrder.totalPrice, updatedOrder.payments);
+            const sudahDibayar = uangMasuk(updatedOrder.payments);
 
             subject = `📢 Billboard Anda Sudah Tayang - Order #${updatedOrder.id.slice(-6).toUpperCase()}`;
             title = "Billboard Anda Sudah Tayang!";
             message =
                 `Halo ${updatedOrder.user.name}, billboard "${updatedOrder.billboard.title}" sudah terpasang ` +
                 `dan berstatus AKTIF. Foto bukti pemasangan dapat dilihat di dashboard Anda.` +
-                (masihAdaSisa
-                    ? `<br/><br/>Catatan tagihan: Anda membayar DP sebesar ${rupiah(dp)} dari total ` +
-                      `${rupiah(updatedOrder.totalPrice)}. Sisa <b>${rupiah(sisaTagihan)}</b> masih perlu dilunasi — ` +
-                      `tim kami akan menghubungi Anda untuk prosesnya.`
+                (belumLunas
+                    ? `<br/><br/>Catatan tagihan: pembayaran yang sudah kami terima ${rupiah(sudahDibayar)} ` +
+                      `dari total ${rupiah(updatedOrder.totalPrice)}. Sisa <b>${rupiah(sisa)}</b> masih perlu ` +
+                      `dilunasi — tim kami akan menghubungi Anda untuk prosesnya.`
                     : "");
         }
         // Skenario B: Refund Selesai

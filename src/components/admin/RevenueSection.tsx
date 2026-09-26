@@ -43,8 +43,14 @@ export default function RevenueSection({ initialData }: { initialData: ChartData
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100">
       <div className="flex justify-between items-center mb-4">
         <div>
-          <h3 className="font-bold text-gray-800">Tren Pendapatan</h3>
-          <p className="text-sm text-gray-500">Omzet berdasarkan tanggal pembayaran dikonfirmasi.</p>
+          <h3 className="font-bold text-gray-800">Tren Uang Masuk</h3>
+          {/* Keterangan ini dulu berbunyi "Omzet berdasarkan tanggal pembayaran
+              dikonfirmasi" — padahal yang dijumlahkan adalah nilai kontrak
+              pesanan, bukan uang yang diterima. Sekarang isinya memang uang,
+              dan refund yang sudah ditransfer menguranginya. */}
+          <p className="text-sm text-gray-500">
+            Pembayaran yang diterima per tanggal terima, dikurangi refund yang sudah ditransfer.
+          </p>
         </div>
         <div className="flex items-center gap-1 bg-gray-100 p-1 rounded-lg">
           {filterOptions.map(option => (

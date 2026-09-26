@@ -27,6 +27,12 @@ export type BarisPengguna = {
     authProvider: string | null;
     createdAt: string;
     jumlahOrder: number;
+    /**
+     * Uang yang benar-benar diterima dari pelanggan ini (`Payment PAID`),
+     * dikurangi refund yang sudah selesai ditransfer. Bukan nilai kontrak
+     * pesanan-pesanannya. Dihitung server sebagai Decimal, sampai di sini
+     * sudah berupa angka jadi.
+     */
     totalSpent: number;
 };
 
@@ -58,19 +64,22 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                             <th className="px-6 py-4">Role</th>
                             <th className="px-6 py-4">Metode Daftar</th>
                             <th className="px-6 py-4">Riwayat Order</th>
-                            <th className="px-6 py-4">Total Spending</th>
+                            {/* "Total Dibayar", bukan "Total Spending": isinya
+                                uang yang benar-benar diterima dari pelanggan
+                                ini, bukan nilai pesanan yang pernah ia buat. */}
+                            <th className="px-6 py-4">Total Dibayar</th>
                             <th className="px-6 py-4 text-center">Aksi</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 text-sm">
                         {users.map((user) => {
-                            // Penjumlahan "Total Spending" dulu dilakukan di
-                            // sini, di browser, atas seluruh baris pesanan yang
-                            // dikirim serta. Kini sudah dihitung database
-                            // (lihat `page.tsx`), memakai daftar status yang
-                            // sama persis dengan kartu omzet admin — sehingga
-                            // dua halaman tidak bisa lagi menampilkan angka
-                            // yang berbeda untuk hal yang sama.
+                            // Penjumlahan kolom ini dulu dilakukan di sini, di
+                            // browser, atas seluruh baris pesanan yang dikirim
+                            // serta — dan yang dijumlahkan adalah nilai
+                            // kontrak, bukan uang. Kini dihitung server dari
+                            // `Payment PAID` dikurangi refund yang sudah
+                            // selesai (lihat `page.tsx`), dari sumber yang sama
+                            // dengan KPI "Uang Masuk" di dashboard admin.
                             return (
                                 <tr key={user.id} className="hover:bg-gray-50 transition">
                                     <td className="px-6 py-4">

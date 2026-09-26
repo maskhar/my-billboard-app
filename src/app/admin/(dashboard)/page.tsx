@@ -1,15 +1,17 @@
 import { prisma } from '@/lib/prisma';
 import RevenueSection from '@/components/admin/RevenueSection';
 import { getRevenueData } from './actions';
-import { DollarSign, ShoppingBag, Map as MapIcon, Users, ArrowRight } from 'lucide-react';
+import {
+  DollarSign, ShoppingBag, Map as MapIcon, Users, ArrowRight, Undo2, Wallet,
+} from 'lucide-react';
 import Link from 'next/link';
 
 // [BARU] Impor untuk logika percabangan
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import CS_Dashboard from '../_components/cs/CS_Dashboard';
-import { angkaRupiah, rupiah } from '@/lib/money';
-import { wherePendapatan } from '@/lib/revenue';
+import { angkaRupiah, kurang, rupiah } from '@/lib/money';
+import { BookingStatus, PaymentStatus } from '@prisma/client';
 
 // Supaya data selalu fresh
 export const dynamic = 'force-dynamic';
@@ -30,37 +32,62 @@ export default async function AdminDashboard() {
   const totalBillboardsPromise = prisma.billboard.count();
   const totalOrdersPromise = prisma.booking.count();
   const totalCustomersPromise = prisma.user.count({ where: { role: 'USER' } });
-  // Daftar status diambil dari `wherePendapatan()`, bukan ditulis ulang di sini.
+
+  // UANG MASUK DIHITUNG DARI LEDGER PEMBAYARAN, BUKAN DARI STATUS PESANAN.
   //
-  // Dulu daftarnya ditulis langsung di baris ini dan memuat `REFUNDED`: uang
-  // yang sudah dikembalikan ke pelanggan tetap dihitung sebagai omzet, jadi
-  // kartu "Total Omzet" selalu lebih besar dari uang yang benar-benar diterima,
-  // persis sebesar seluruh refund yang pernah terjadi. Daftar itu juga
-  // melewatkan tahap DESIGN_RECEIVED, IN_PRODUCTION, dan INSTALLATION —
-  // pesanan yang sudah dibayar tapi sedang dikerjakan hilang dari omzet sampai
-  // ia tayang. Lihat src/lib/revenue.ts untuk alasan lengkapnya.
-  const revenueResultPromise = prisma.booking.aggregate({
-    _sum: { totalPrice: true },
-    where: wherePendapatan()
+  // Kartu ini dulu menjumlahkan `Booking.totalPrice` atas pesanan yang
+  // statusnya masuk daftar pendapatan. Dua hal salah pada rumus itu, dan
+  // keduanya membuat angkanya lebih besar dari uang yang benar-benar ada:
+  //
+  //   1. `totalPrice` adalah nilai KONTRAK, bukan uang yang diterima. Pesanan
+  //      DP yang baru menyetor 40% tetap dihitung 100%.
+  //   2. Status bukan bukti pembayaran. `PAID_CONFIRMED` hanya berarti admin
+  //      menandainya; ia bisa disetel tanpa satu rupiah pun masuk.
+  //
+  // Sekarang sumbernya baris `Payment` berstatus PAID — satu baris per uang
+  // yang benar-benar diterima. `TAMBAHAN` ikut dijumlahkan karena pembeli
+  // memang membayarnya, dan label kartunya menyebut "Uang Masuk", bukan omzet.
+  const uangMasukPromise = prisma.payment.aggregate({
+    _sum: { jumlah: true },
+    where: { status: PaymentStatus.PAID },
+  });
+
+  // Refund yang benar-benar sudah ditransfer keluar. Hanya `REFUNDED`:
+  // pesanan di tengah alur refund (REVIEW_REFUND, WAITING_BANK,
+  // PROCESS_REFUND) uangnya masih di rekening perusahaan hari ini.
+  const refundPromise = prisma.booking.aggregate({
+    _sum: { refundAmount: true },
+    where: { status: BookingStatus.REFUNDED },
   });
 
   const [
     totalBillboards,
     totalOrders,
     totalCustomers,
-    revenueResult
+    hasilUangMasuk,
+    hasilRefund
   ] = await Promise.all([
     totalBillboardsPromise,
     totalOrdersPromise,
     totalCustomersPromise,
-    revenueResultPromise
+    uangMasukPromise,
+    refundPromise
   ]);
 
-  const totalRevenue = revenueResult._sum.totalPrice || 0;
+  // `_sum` mengembalikan null bila tidak ada baris yang cocok. Dibiarkan
+  // masuk ke helper money.ts, yang memperlakukan null sebagai nol.
+  const uangMasuk = hasilUangMasuk._sum.jumlah;
+  const refundSelesai = hasilRefund._sum.refundAmount;
+  const omzetBersih = kurang(uangMasuk, refundSelesai);
 
   // 2. Definisikan kartu statistik menggunakan data yang sudah di-fetch
+  //
+  // Tiga angka uang ditulis terpisah supaya definisinya tidak bisa
+  // disalahpahami: bruto, pengurang, dan hasilnya.
   const stats = [
-    { title: "Total Omzet", value: rupiah(totalRevenue), icon: DollarSign, color: "bg-green-600" },
+    { title: "Omzet Bersih", value: rupiah(omzetBersih), icon: DollarSign, color: "bg-green-600" },
+    { title: "Uang Masuk", value: rupiah(uangMasuk), icon: Wallet, color: "bg-emerald-600" },
+    { title: "Refund Selesai", value: rupiah(refundSelesai), icon: Undo2, color: "bg-rose-600" },
     { title: "Total Pesanan", value: totalOrders, icon: ShoppingBag, color: "bg-blue-600" },
     { title: "Titik Billboard", value: totalBillboards, icon: MapIcon, color: "bg-orange-500" },
     { title: "Pelanggan", value: totalCustomers, icon: Users, color: "bg-purple-600" },
@@ -88,7 +115,7 @@ export default async function AdminDashboard() {
         </div>
 
         {/* STATS CARDS */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
             {stats.map((stat, idx) => (
                 <div key={idx} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:translate-y-[-2px] transition duration-200">
                     <div className={`${stat.color} w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-md`}>
@@ -101,6 +128,16 @@ export default async function AdminDashboard() {
                 </div>
             ))}
         </div>
+
+        {/* Definisi ditulis di layar, bukan hanya di komentar kode. Tanpa ini
+            "Omzet Bersih" tetap bisa dibaca sebagai nilai seluruh pesanan yang
+            pernah masuk — yang justru rumus lamanya. */}
+        <p className="text-[11px] text-gray-400 leading-relaxed -mt-4">
+            <b>Uang Masuk</b> = seluruh pembayaran yang benar-benar diterima, termasuk biaya tambahan.
+            <b> Refund Selesai</b> = dana yang sudah ditransfer kembali ke pelanggan.
+            <b> Omzet Bersih</b> = Uang Masuk − Refund Selesai.
+            Nilai pesanan yang belum dibayar tidak dihitung di sini.
+        </p>
 
         {/* CHART & ACTIVITY (Grid 3:1) */}
                 <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -140,7 +177,12 @@ export default async function AdminDashboard() {
                             <th className="px-8 py-3 pl-8">Order ID</th>
                             <th className="px-6 py-3">Customer</th>
                             <th className="px-6 py-3">Status</th>
-                            <th className="px-6 py-3 text-right">Nilai</th>
+                            {/* "Nilai Pesanan", bukan "Nilai": kolom ini
+                                menampilkan `totalPrice` — nilai kontrak saat
+                                pemesanan, bukan uang yang sudah diterima.
+                                Uang yang diterima per pesanan ada di halaman
+                                Transaksi. */}
+                            <th className="px-6 py-3 text-right">Nilai Pesanan</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 text-sm">

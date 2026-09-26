@@ -2,8 +2,31 @@
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import Image from 'next/image';
 import { angkaRupiah, jumlah, kurang, lebihBesar, nol } from '@/lib/money';
+import { sisaTagihan as sisaPokokLedger, sudahLunas, uangMasuk } from '@/lib/pembayaran';
+import { PaymentStatus, PaymentTujuan } from '@prisma/client';
+
+/**
+ * Kolom Payment yang cukup untuk menyusun riwayat pembayaran di invoice.
+ *
+ * Invoice ini dibuka pelanggan. Baris Payment juga memuat kaitan ke gerbang
+ * pembayaran (`providerSessionId`, `providerPaymentId`, `callbackPayload`) —
+ * tidak satu pun boleh ikut tertanam di halaman yang dilihat pelanggan.
+ */
+const PILIH_PEMBAYARAN = {
+  id: true,
+  tujuan: true,
+  status: true,
+  jumlah: true,
+  paidAt: true,
+} as const;
+
+const LABEL_TUJUAN: Record<PaymentTujuan, string> = {
+  DP: 'Pembayaran DP',
+  FULL: 'Pembayaran penuh',
+  PELUNASAN: 'Pelunasan sisa',
+  TAMBAHAN: 'Pembayaran biaya tambahan',
+};
 
 // 1. UPDATE TIPE DATA PROPS
 type Props = {
@@ -27,7 +50,12 @@ export default async function InvoicePage(props: Props) {
   // dengan "Grand Total" yang dilihat admin di TransactionClient.tsx.
   const order = await prisma.booking.findUnique({
       where: { id: params.id },
-      include: { user: true, billboard: true, additionalCharges: true }
+      include: {
+          user: true,
+          billboard: true,
+          additionalCharges: true,
+          payments: { select: PILIH_PEMBAYARAN, orderBy: { createdAt: 'asc' } },
+      }
   });
 
   if(!order) return <div className="text-center p-10 font-bold">Invoice Tidak Ditemukan</div>;
@@ -68,18 +96,37 @@ export default async function InvoicePage(props: Props) {
   // muncul belakangan dan berada di luar angka itu.
   const totalTagihan = jumlah(order.totalPrice, totalBiayaTambahan);
 
-  // DP yang sudah dibayar mengurangi sisa tagihan.
+  // PEMBAYARAN YANG SUDAH MASUK
+  // ---------------------------
+  // Sumbernya baris `Payment` berstatus PAID, bukan `order.dpAmount`.
   //
-  // Sebelumnya baris "DP Masuk" ditulis di layar lengkap dengan tanda minus,
-  // tapi angka di baris "Total" tetap `totalPrice` — pengurangnya tidak pernah
-  // benar-benar diterapkan. Invoice berbunyi "Subtotal 33.350.000 − DP
-  // 20.010.000 = Total 33.350.000", dan pelanggan yang sudah membayar DP
-  // diminta membayar seluruh nilai pesanan sekali lagi.
-  const adaDp =
-    order.dpAmount !== null &&
-    !nol(order.dpAmount) &&
-    lebihBesar(totalTagihan, order.dpAmount);
-  const sisaTagihan = adaDp ? kurang(totalTagihan, order.dpAmount) : totalTagihan;
+  // `dpAmount` adalah RENCANA yang dicatat saat pesanan dibuat: berapa yang
+  // hendak dibayar di muka. Ia tidak berubah ketika pelanggan melunasi sisanya,
+  // jadi invoice pesanan DP yang sudah lunas tetap menampilkan sisa tagihan
+  // penuh — pelanggan diminta membayar dua kali. Lebih buruk lagi, baris "DP
+  // Masuk" dulu ditulis lengkap dengan tanda minus sementara angka "Total" tetap
+  // `totalPrice`: pengurangnya tidak pernah benar-benar diterapkan.
+  //
+  // Pokok dan tambahan dihitung terpisah. `uangMasuk()` mengecualikan
+  // `TAMBAHAN` justru supaya pembayaran biaya tambahan tidak pernah membuat
+  // sisa pokok terlihat lunas.
+  const riwayatPembayaran = order.payments.filter((p) => p.status === PaymentStatus.PAID);
+
+  const pokokMasuk = uangMasuk(order.payments);
+  const sisaPokok = sisaPokokLedger(order.totalPrice, order.payments);
+  const pokokLunas = sudahLunas(order.totalPrice, order.payments);
+
+  const tambahanDibayar = jumlah(
+    ...order.payments
+      .filter((p) => p.status === PaymentStatus.PAID && p.tujuan === PaymentTujuan.TAMBAHAN)
+      .map((p) => p.jumlah)
+  );
+  const sisaTambahanMentah = kurang(totalBiayaTambahan, tambahanDibayar);
+  const sisaTambahan = lebihBesar(sisaTambahanMentah, 0) ? sisaTambahanMentah : 0;
+
+  const sisaTotal = jumlah(sisaPokok, sisaTambahan);
+  const adaPembayaran = lebihBesar(jumlah(pokokMasuk, tambahanDibayar), 0);
+  const lunasSeluruhnya = pokokLunas && nol(sisaTambahan);
 
   return (
     <div className="bg-gray-100 min-h-screen py-10 print:bg-white print:p-0 font-sans">
@@ -107,14 +154,26 @@ export default async function InvoicePage(props: Props) {
                     <p className="text-gray-600 text-sm">{order.user.whatsapp || '-'}</p>
                 </div>
                 <div className="text-right">
+                    {/*
+                      Badge ini dulu menampilkan `order.status` — status
+                      PENGERJAAN, bukan status pembayaran. `ACTIVE` diwarnai
+                      hijau sebagai "sudah dibayar", padahal billboard bisa
+                      tayang sementara sisa pokoknya belum masuk; `IN_PRODUCTION`
+                      diwarnai kuning walau pesanannya sudah lunas. Sekarang
+                      isinya diturunkan dari ledger, dan status pengerjaan
+                      ditulis di bawahnya dengan label sendiri.
+                    */}
                     <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-2">Status Pembayaran</p>
                     <div className={`inline-block px-4 py-2 rounded-lg font-bold uppercase text-xs ${
-                        order.status === 'ACTIVE' || order.status === 'REFUNDED' ? 'bg-green-100 text-green-700' : 
-                        order.status === 'CANCELLED' ? 'bg-red-100 text-red-700' : 'bg-yellow-100 text-yellow-700'
+                        lunasSeluruhnya ? 'bg-green-100 text-green-700' :
+                        adaPembayaran ? 'bg-orange-100 text-orange-700' : 'bg-yellow-100 text-yellow-700'
                     }`}>
-                        {order.status.replace('_',' ')}
+                        {lunasSeluruhnya ? 'Lunas' : adaPembayaran ? 'Dibayar Sebagian' : 'Belum Dibayar'}
                     </div>
-                    <p className="text-xs text-gray-400 mt-2 font-mono">Tgl: {new Date(order.createdAt).toLocaleDateString()}</p>
+                    <p className="text-[10px] text-gray-400 mt-2">
+                        Status pesanan: <span className="font-bold">{order.status.replace(/_/g, ' ')}</span>
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1 font-mono">Tgl: {new Date(order.createdAt).toLocaleDateString('id-ID')}</p>
                 </div>
             </div>
 
@@ -192,33 +251,80 @@ export default async function InvoicePage(props: Props) {
                         </div>
                     ))}
 
-                    {/* DP Info (Jika ada) */}
-                    {/*
-                      Syarat di bawah dulu salah pada dua hal sekaligus, dan
-                      keduanya lolos TypeScript tanpa peringatan:
+                    <div className="flex justify-between py-2 border-b-2 border-gray-200">
+                        <span className="text-gray-700 text-sm font-bold">Total Tagihan</span>
+                        <span className="font-bold text-gray-900">Rp {angkaRupiah(totalTagihan)}</span>
+                    </div>
 
-                      1. `order.dpAmount &&` — nominal Decimal adalah objek,
-                         dan objek selalu dianggap "ada" oleh JavaScript.
-                         Jadi baris "DP Masuk" ikut muncul pada pesanan yang
-                         dibayar lunas (dpAmount = 0), memotong nol rupiah
-                         dari invoice.
-                      2. `dpAmount < totalPrice` — dua objek Decimal
-                         dibandingkan sebagai teks, bukan angka. "9000000"
-                         dinilai lebih besar dari "10000000" karena huruf '9'
-                         datang setelah '1'. DP yang sah justru disembunyikan.
+                    {/* RIWAYAT PEMBAYARAN
+                        Satu baris per `Payment` berstatus PAID — uang yang
+                        benar-benar diterima, bukan rencana pembayaran.
 
-                      Dan yang paling mahal: angkanya tertulis di layar tapi
-                      tidak pernah dikurangkan dari "Total" di bawah.
-                    */}
-                    {adaDp && (
-                         <div className="flex justify-between py-2 border-b border-gray-100 text-orange-600 bg-orange-50 px-2 rounded">
-                            <span className="text-xs font-bold">DP Masuk</span>
-                            <span className="font-bold text-sm">- Rp {angkaRupiah(order.dpAmount)}</span>
-                         </div>
+                        Blok ini menggantikan satu baris "DP Masuk" yang dulu
+                        dihitung dari `order.dpAmount` dan salah pada tiga hal
+                        sekaligus, ketiganya lolos TypeScript tanpa peringatan:
+
+                        1. `order.dpAmount &&` — Decimal adalah objek, dan
+                           objek selalu dianggap "ada" oleh JavaScript. Baris
+                           itu ikut muncul pada pesanan yang dibayar lunas
+                           (dpAmount = 0), memotong nol rupiah dari invoice.
+                        2. `dpAmount < totalPrice` — dua objek Decimal
+                           dibandingkan sebagai teks. "9000000" dinilai lebih
+                           besar dari "10000000" karena '9' datang setelah '1',
+                           jadi DP yang sah justru disembunyikan.
+                        3. `dpAmount` adalah RENCANA saat pesanan dibuat dan
+                           tidak berubah ketika pelanggan melunasi sisanya.
+                           Invoice pesanan DP yang sudah lunas tetap menagih
+                           sisa penuh.
+
+                        Dan yang paling mahal: angkanya tertulis di layar tapi
+                        tidak pernah dikurangkan dari "Total" di bawahnya. */}
+                    {riwayatPembayaran.length > 0 ? (
+                        riwayatPembayaran.map((p) => (
+                            <div key={p.id} className="flex justify-between py-2 border-b border-gray-100 text-green-700">
+                                <span className="text-xs">
+                                    {LABEL_TUJUAN[p.tujuan]}
+                                    {p.paidAt && (
+                                        <span className="text-gray-400 ml-1">
+                                            · {new Date(p.paidAt).toLocaleDateString('id-ID')}
+                                        </span>
+                                    )}
+                                </span>
+                                <span className="font-bold text-sm whitespace-nowrap">- Rp {angkaRupiah(p.jumlah)}</span>
+                            </div>
+                        ))
+                    ) : (
+                        <div className="flex justify-between py-2 border-b border-gray-100">
+                            <span className="text-gray-400 text-xs italic">Belum ada pembayaran yang diterima</span>
+                            <span className="font-bold text-sm text-gray-400">- Rp 0</span>
+                        </div>
                     )}
+
+                    {/* Sisa pokok dan sisa tambahan ditulis terpisah karena
+                        memang dua tagihan yang berbeda: pokok sudah disepakati
+                        saat pemesanan, tambahan ditagihkan admin belakangan.
+                        Pembayaran bertujuan TAMBAHAN tidak boleh membuat sisa
+                        pokok terlihat lunas, dan sebaliknya. */}
+                    {lebihBesar(totalBiayaTambahan, 0) && (
+                        <>
+                            <div className="flex justify-between py-2 border-b border-gray-100">
+                                <span className="text-gray-500 text-xs">Sisa pokok sewa</span>
+                                <span className="font-bold text-sm text-gray-700">Rp {angkaRupiah(sisaPokok)}</span>
+                            </div>
+                            <div className="flex justify-between py-2 border-b border-gray-100">
+                                <span className="text-gray-500 text-xs">Sisa biaya tambahan</span>
+                                <span className="font-bold text-sm text-gray-700">Rp {angkaRupiah(sisaTambahan)}</span>
+                            </div>
+                        </>
+                    )}
+
                     <div className="flex justify-between py-4 mt-2 bg-gray-50 px-4 rounded-xl">
-                        <span className="text-lg font-bold text-gray-800">{adaDp ? 'Sisa Tagihan' : 'Total'}</span>
-                        <span className="text-lg font-extrabold text-utero">Rp {angkaRupiah(sisaTagihan)}</span>
+                        <span className="text-lg font-bold text-gray-800">
+                            {lunasSeluruhnya ? 'Lunas' : 'Sisa Tagihan'}
+                        </span>
+                        <span className={`text-lg font-extrabold ${lunasSeluruhnya ? 'text-green-600' : 'text-utero'}`}>
+                            Rp {angkaRupiah(sisaTotal)}
+                        </span>
                     </div>
 
                     {/*

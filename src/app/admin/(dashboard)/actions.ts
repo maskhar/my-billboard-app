@@ -2,11 +2,10 @@
 'use server';
 
 import { getServerSession } from 'next-auth';
-import { Prisma } from '@prisma/client';
+import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import { jumlah, keAngka } from '@/lib/money';
-import { wherePendapatan } from '@/lib/revenue';
+import { jumlah, keAngka, kurang } from '@/lib/money';
 
 // Mendefinisikan tipe data yang akan dikembalikan
 type ChartData = {
@@ -62,84 +61,140 @@ export async function getRevenueData(
       break;
   }
 
-  // Query ke database untuk mengambil data booking yang relevan.
+  // GRAFIK DIBUKUKAN DARI LEDGER, BUKAN DARI STATUS PESANAN.
   //
-  // Daftar statusnya dipakai bersama kartu "Total Omzet" lewat
-  // `wherePendapatan()`. Dulu daftar itu ditulis ulang di sini, dan keduanya
-  // sama-sama memasukkan `REFUNDED` — batang grafik ikut meninggi pada bulan
-  // terjadinya refund, seolah bulan itu penjualannya bagus, padahal uangnya
-  // justru keluar. Karena daftarnya kini satu, grafik dan kartu KPI tidak lagi
-  // bisa menyimpang diam-diam satu sama lain.
-  const revenueRecords = await prisma.booking.findMany({
-    where: {
-      ...wherePendapatan(),
-      paidAt: {
-        gte: startDate,
+  // Sebelumnya grafik ini menjumlahkan `Booking.totalPrice` dan membukukannya
+  // pada `Booking.paidAt`. Tiga akibatnya:
+  //
+  //   1. Nilai KONTRAK dihitung sebagai uang. Pesanan DP yang baru menyetor
+  //      40% memunculkan batang setinggi 100% pada bulan DP-nya masuk.
+  //   2. Pelunasan sisa tidak pernah muncul sama sekali — `Booking.paidAt`
+  //      hanya satu kolom dan tidak berubah saat sisanya dibayar, jadi uang
+  //      yang masuk berbulan-bulan kemudian tercatat di bulan DP.
+  //   3. Refund ikut menaikkan batang, karena daftar statusnya dulu memuat
+  //      `REFUNDED` — bulan terjadinya pengembalian dana justru terlihat
+  //      sebagai bulan penjualan terbaik.
+  //
+  // Sekarang setiap penerimaan dibukukan pada `Payment.paidAt` miliknya
+  // sendiri, dan refund yang selesai menjadi PENGURANG pada
+  // `Booking.refundedAt`. Satu batang bisa bernilai negatif bila pada periode
+  // itu yang keluar lebih besar dari yang masuk; itu memang keadaannya.
+  const [penerimaan, refund] = await Promise.all([
+    prisma.payment.findMany({
+      where: {
+        status: PaymentStatus.PAID,
+        paidAt: { gte: startDate },
       },
-    },
-    select: {
-      totalPrice: true,
-      paidAt: true,
-    },
-    orderBy: {
-      paidAt: 'asc',
-    },
-  });
+      select: { jumlah: true, paidAt: true },
+    }),
+    prisma.booking.findMany({
+      where: {
+        status: BookingStatus.REFUNDED,
+        refundedAt: { gte: startDate },
+      },
+      select: { refundAmount: true, refundedAt: true },
+    }),
+  ]);
+
+  const masuk: Titik[] = penerimaan.flatMap((p) =>
+    p.paidAt === null ? [] : [{ waktu: p.paidAt, nominal: p.jumlah }]
+  );
+  const keluar: Titik[] = refund.flatMap((b) =>
+    b.refundedAt === null ? [] : [{ waktu: b.refundedAt, nominal: b.refundAmount }]
+  );
 
   // Proses data mentah menjadi format grafik
   if (period === 'daily') {
-    return processDataForDailyView(revenueRecords, startDate);
+    return prosesHarian(masuk, keluar, startDate);
   } else {
-    return processDataForMonthlyView(revenueRecords, startDate);
+    return prosesBulanan(masuk, keluar);
   }
 }
 
 // Catatan untuk kedua helper di bawah:
 //
-// `totalPrice` bertipe Decimal (objek), bukan angka biasa. Menjumlahkannya
-// dengan `+` menyambung teks alih-alih menambah: 0 + Decimal(100000) menjadi
-// "0100000", lalu angka berikutnya disambung lagi. Grafik omzet akan
-// menampilkan deretan digit tanpa arti, tanpa satu pun pesan error.
-// Penjumlahan dikerjakan sebagai Decimal, baru dijadikan angka biasa di
-// akhir karena pustaka grafik menuntut `number`.
+// Nominal bertipe Decimal (objek), bukan angka biasa. Menjumlahkannya dengan
+// `+` menyambung teks alih-alih menambah: 0 + Decimal(100000) menjadi
+// "0100000", lalu angka berikutnya disambung lagi. Grafik akan menampilkan
+// deretan digit tanpa arti, tanpa satu pun pesan error. Penjumlahan dikerjakan
+// sebagai Decimal, baru dijadikan angka biasa di akhir karena pustaka grafik
+// menuntut `number`.
 
-type RekamOmzet = { paidAt: Date | null; totalPrice: Prisma.Decimal };
+/** Satu peristiwa uang: kapan terjadi dan berapa nominalnya. */
+type Titik = { waktu: Date; nominal: Prisma.Decimal | null };
 
-// Helper function untuk memproses data menjadi tampilan per bulan
-function processDataForMonthlyView(records: RekamOmzet[], startDate: Date): ChartData[] {
-    const monthNames = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
-    const dataMap = new Map<string, Prisma.Decimal>();
+const NAMA_BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
 
-    records.forEach(record => {
-        if (record.paidAt) {
-            const monthKey = `${monthNames[record.paidAt.getMonth()]} '${record.paidAt.getFullYear().toString().slice(-2)}`;
-            const currentTotal = dataMap.get(monthKey) ?? new Prisma.Decimal(0);
-            dataMap.set(monthKey, jumlah(currentTotal, record.totalPrice));
-        }
-    });
+/**
+ * Lipat penerimaan dan refund ke dalam satu ember per periode.
+ *
+ * Kuncinya `YYYY-MM[-DD]` yang bisa diurutkan sebagai teks, TERPISAH dari label
+ * yang dibaca manusia. Dulu labelnya sendiri yang menjadi kunci Map, sehingga
+ * urutan batang mengikuti urutan baris yang datang dari database. Begitu refund
+ * ikut dibukukan, sebuah periode yang hanya berisi refund akan muncul di ujung
+ * grafik — tidak pada tempatnya di garis waktu.
+ */
+function lipat(
+  masuk: Titik[],
+  keluar: Titik[],
+  kunciDari: (d: Date) => string,
+  awal: Map<string, Prisma.Decimal>
+): Map<string, Prisma.Decimal> {
+  const ember = awal;
 
-    return Array.from(dataMap, ([name, total]) => ({ name, total: keAngka(total) }));
+  for (const t of masuk) {
+    const k = kunciDari(t.waktu);
+    ember.set(k, jumlah(ember.get(k) ?? new Prisma.Decimal(0), t.nominal));
+  }
+  for (const t of keluar) {
+    const k = kunciDari(t.waktu);
+    ember.set(k, kurang(ember.get(k) ?? new Prisma.Decimal(0), t.nominal));
+  }
+
+  return ember;
 }
 
-// Helper function untuk memproses data menjadi tampilan per hari (untuk 30 hari terakhir)
-function processDataForDailyView(records: RekamOmzet[], startDate: Date): ChartData[] {
-    const dataMap = new Map<string, Prisma.Decimal>();
+function prosesBulanan(masuk: Titik[], keluar: Titik[]): ChartData[] {
+  const kunciBulan = (d: Date) =>
+    `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}`;
 
-    // Inisialisasi 30 hari terakhir dengan omzet 0
-    for (let i = 0; i < 30; i++) {
-        const d = new Date(startDate);
-        d.setDate(d.getDate() + i);
-        const dayKey = `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
-        dataMap.set(dayKey, new Prisma.Decimal(0));
-    }
+  // Bulan tanpa satu pun peristiwa uang sengaja tidak dimunculkan sebagai nol —
+  // perilaku yang sama dengan sebelumnya.
+  const ember = lipat(masuk, keluar, kunciBulan, new Map());
 
-    records.forEach(record => {
-        if (record.paidAt) {
-            const dayKey = `${record.paidAt.getDate().toString().padStart(2, '0')}/${(record.paidAt.getMonth() + 1).toString().padStart(2, '0')}`;
-            const currentTotal = dataMap.get(dayKey) ?? new Prisma.Decimal(0);
-            dataMap.set(dayKey, jumlah(currentTotal, record.totalPrice));
-        }
+  return Array.from(ember.keys())
+    .sort()
+    .map((kunci) => {
+      const [tahun, bulan] = kunci.split('-');
+      return {
+        name: `${NAMA_BULAN[Number(bulan) - 1]} '${tahun.slice(-2)}`,
+        total: keAngka(ember.get(kunci)),
+      };
     });
+}
 
-    return Array.from(dataMap, ([name, total]) => ({ name, total: keAngka(total) }));
+function prosesHarian(masuk: Titik[], keluar: Titik[], startDate: Date): ChartData[] {
+  const kunciHari = (d: Date) =>
+    `${d.getFullYear()}-${(d.getMonth() + 1).toString().padStart(2, '0')}-${d
+      .getDate()
+      .toString()
+      .padStart(2, '0')}`;
+
+  // Inisialisasi 30 hari terakhir dengan nol, supaya hari tanpa transaksi tetap
+  // terlihat sebagai celah di grafik, bukan hilang dari garis waktu.
+  const awal = new Map<string, Prisma.Decimal>();
+  for (let i = 0; i < 30; i++) {
+    const d = new Date(startDate);
+    d.setDate(d.getDate() + i);
+    awal.set(kunciHari(d), new Prisma.Decimal(0));
+  }
+
+  const ember = lipat(masuk, keluar, kunciHari, awal);
+
+  return Array.from(ember.keys())
+    .sort()
+    .map((kunci) => {
+      const [, bulan, hari] = kunci.split('-');
+      return { name: `${hari}/${bulan}`, total: keAngka(ember.get(kunci)) };
+    });
 }
