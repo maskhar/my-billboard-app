@@ -6,7 +6,7 @@
 // memanggil URL API langsung. Sebaliknya, pemeriksaan di sini membuat admin dan
 // pemilik yang bukan pemesan tidak pernah menerima HTML halaman pembayaran.
 
-import { BookingStatus, PaymentStatus } from '@prisma/client';
+import { PaymentStatus, PaymentTujuan } from '@prisma/client';
 import { getServerSession } from 'next-auth/next';
 import { notFound, redirect } from 'next/navigation';
 import { AlertCircle, ArrowLeft, CalendarClock, CreditCard } from 'lucide-react';
@@ -14,6 +14,12 @@ import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import { authOptions } from '@/lib/auth';
 import { uangUntukClient } from '@/lib/money';
+import {
+  bayarLanjutan,
+  periksaKelayakanSesi,
+  tenggatPelunasan,
+  tenggatPelunasanLewat,
+} from '@/lib/pembayaran';
 import { prisma } from '@/lib/prisma';
 import PaymentClient from './PaymentClient';
 
@@ -35,6 +41,15 @@ function waktuIndonesia(tanggal: Date): string {
   }).format(tanggal);
 }
 
+/**
+ * Tanpa jam. Tenggat pelunasan jatuh pada 23:59:59.999, dan menuliskannya
+ * apa adanya ("3 Oktober 2026, 23.59") membuat pembeli mengira ada hitungan
+ * menit yang harus dikejar — padahal yang berlaku adalah batas harinya.
+ */
+function tanggalIndonesia(tanggal: Date): string {
+  return new Intl.DateTimeFormat('id-ID', { dateStyle: 'long' }).format(tanggal);
+}
+
 export default async function PaymentPage({ params }: Props) {
   const session = await getServerSession(authOptions);
   if (!session?.user?.id) redirect('/login');
@@ -53,6 +68,9 @@ export default async function PaymentPage({ params }: Props) {
       id: true,
       status: true,
       expiresAt: true,
+      // Acuan tenggat pelunasan H-3. Bukan `installedAt` — lihat
+      // `tenggatPelunasan` di `src/lib/pembayaran.ts`.
+      startDate: true,
       billboard: {
         select: { title: true },
       },
@@ -72,15 +90,27 @@ export default async function PaymentPage({ params }: Props) {
   // orang lain. Ini mencegah ID pesanan menjadi oracle untuk pengguna asing.
   if (!pesanan) notFound();
 
+  // Urutan `createdAt: 'asc'` di atas sama dengan `tagihanBerikutnya` di
+  // `src/lib/sesi-pembayaran.ts`, jadi tagihan yang ditampilkan di sini adalah
+  // tagihan yang benar-benar akan dibuatkan sesi oleh endpoint.
   const tagihan = pesanan.payments[0] ?? null;
   const sekarang = new Date();
-  const tidakLayak =
-    pesanan.status !== BookingStatus.PENDING_PAYMENT ||
-    !tagihan ||
-    pesanan.expiresAt === null ||
-    pesanan.expiresAt.getTime() <= sekarang.getTime();
 
-  if (tidakLayak) {
+  // Aturannya dibaca dari `src/lib/pembayaran.ts`, bukan ditulis ulang di sini.
+  // Syarat lama (`status !== PENDING_PAYMENT` dan `expiresAt` wajib hidup)
+  // menutup halaman ini bagi SETIAP pelunasan yang sah: pesanan yang sudah
+  // dibayar DP tidak lagi `PENDING_PAYMENT`, dan `expiresAt`-nya — tenggat 24
+  // jam waktu pesanan masih baru — sudah lewat.
+  const kelayakan = tagihan
+    ? periksaKelayakanSesi({
+        statusPesanan: pesanan.status,
+        tujuanTagihan: tagihan.tujuan,
+        tenggatPesanan: pesanan.expiresAt,
+        sekarang,
+      })
+    : null;
+
+  if (!tagihan || !kelayakan?.boleh) {
     return (
       <div className="bg-gray-50 min-h-screen pb-20 font-sans">
         <Navbar />
@@ -99,15 +129,50 @@ export default async function PaymentPage({ params }: Props) {
             <h1 className="text-xl font-bold text-gray-900 mb-2">
               Pembayaran belum dapat dibuka
             </h1>
+            {/* Alasannya diambil dari `periksaKelayakanSesi` supaya halaman ini
+                dan endpoint sesi menyebut sebab yang sama; tanpa tagihan sama
+                sekali tidak ada alasan untuk dibaca. */}
             <p className="text-sm text-gray-600 leading-relaxed">
-              Pesanan ini tidak memiliki tagihan aktif atau tenggat pembayarannya
-              sudah lewat. Buka Dashboard untuk melihat status terbaru.
+              {kelayakan?.boleh === false
+                ? kelayakan.pesan
+                : 'Pesanan ini tidak memiliki tagihan yang menunggu pembayaran.'}{' '}
+              Buka Dashboard untuk melihat status terbaru.
             </p>
           </div>
         </main>
       </div>
     );
   }
+
+  // Satu pesanan bisa punya beberapa tagihan sepanjang hidupnya, jadi judulnya
+  // menyebut tagihan mana yang sedang dibuka. "Selesaikan tagihan pesanan"
+  // benar untuk semuanya dan karena itu tidak memberi tahu apa pun.
+  const judulTagihan =
+    tagihan.tujuan === PaymentTujuan.PELUNASAN
+      ? 'Lunasi sisa pembayaran'
+      : tagihan.tujuan === PaymentTujuan.TAMBAHAN
+        ? 'Bayar biaya tambahan'
+        : 'Selesaikan tagihan pesanan';
+
+  const badgeTenggat = bayarLanjutan(tagihan.tujuan)
+    ? tenggatPelunasanLewat(pesanan.startDate, sekarang)
+      ? {
+          label: 'Terlambat sejak',
+          waktu: tanggalIndonesia(tenggatPelunasan(pesanan.startDate)),
+          nada: 'merah' as const,
+        }
+      : {
+          label: 'Lunasi paling lambat',
+          waktu: tanggalIndonesia(tenggatPelunasan(pesanan.startDate)),
+          nada: 'kuning' as const,
+        }
+    : pesanan.expiresAt
+      ? {
+          label: 'Selesaikan sebelum',
+          waktu: waktuIndonesia(pesanan.expiresAt),
+          nada: 'merah' as const,
+        }
+      : null;
 
   return (
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
@@ -127,20 +192,35 @@ export default async function PaymentPage({ params }: Props) {
                 <CreditCard size={18} />
                 <span className="text-sm font-bold">Pembayaran Otomatis</span>
               </div>
-              <h1 className="text-2xl font-bold text-gray-900 mb-1">
-                Selesaikan tagihan pesanan
-              </h1>
+              <h1 className="text-2xl font-bold text-gray-900 mb-1">{judulTagihan}</h1>
               <p className="text-sm text-gray-500">
                 {pesanan.billboard?.title ?? `Pesanan #${pesanan.id.slice(-8).toUpperCase()}`}
               </p>
             </div>
 
-            {pesanan.expiresAt && (
-              <div className="flex items-center gap-2 bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm md:text-right">
+            {/* Tenggat yang ditampilkan mengikuti tujuan tagihan, karena yang
+                berlaku pada keduanya memang tenggat yang berbeda:
+
+                - `DP`/`FULL` dibatasi `Booking.expiresAt` — 24 jam, dan
+                  melewatinya berarti slot tanggal dilepas ke pembeli lain.
+                - `PELUNASAN`/`TAMBAHAN` dibatasi H-3 sebelum tayang, dan
+                  melewatinya TIDAK memblokir pembayaran (keputusan fase ini):
+                  uangnya tetap dibutuhkan untuk mencetak dan memasang, jadi
+                  menolaknya hanya membuat pesanan mandek tanpa jalan keluar.
+                  Yang berubah hanya nada peringatannya. */}
+            {badgeTenggat && (
+              <div
+                className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm md:text-right ${
+                  badgeTenggat.nada === 'merah'
+                    ? 'border-red-100 bg-red-50 text-red-700'
+                    : 'border-amber-100 bg-amber-50 text-amber-800'
+                }`}
+              >
                 <CalendarClock size={17} className="shrink-0" />
                 <span>
-                  Selesaikan sebelum<br />
-                  <strong>{waktuIndonesia(pesanan.expiresAt)}</strong>
+                  {badgeTenggat.label}
+                  <br />
+                  <strong>{badgeTenggat.waktu}</strong>
                 </span>
               </div>
             )}

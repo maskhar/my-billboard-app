@@ -2,8 +2,13 @@
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
-import { angkaRupiah, jumlah, kurang, lebihBesar, nol } from '@/lib/money';
-import { sisaTagihan as sisaPokokLedger, sudahLunas, uangMasuk } from '@/lib/pembayaran';
+import { angkaRupiah, jumlah, lebihBesar, nol } from '@/lib/money';
+import {
+  sisaTagihan as sisaPokokLedger,
+  sisaTambahan as sisaTambahanLedger,
+  sudahLunas,
+  uangMasuk,
+} from '@/lib/pembayaran';
 import { PaymentStatus, PaymentTujuan } from '@prisma/client';
 
 /**
@@ -121,8 +126,11 @@ export default async function InvoicePage(props: Props) {
       .filter((p) => p.status === PaymentStatus.PAID && p.tujuan === PaymentTujuan.TAMBAHAN)
       .map((p) => p.jumlah)
   );
-  const sisaTambahanMentah = kurang(totalBiayaTambahan, tambahanDibayar);
-  const sisaTambahan = lebihBesar(sisaTambahanMentah, 0) ? sisaTambahanMentah : 0;
+  // Rumus sisanya dibaca dari `src/lib/pembayaran.ts`, bukan ditulis ulang di
+  // sini. Salinan kedua ada di halaman transaksi admin, dan dua salinan dari satu
+  // aturan berarti invoice pelanggan dan layar admin bisa menyebut sisa yang
+  // berbeda untuk pesanan yang sama.
+  const sisaTambahan = sisaTambahanLedger(order.additionalCharges, order.payments);
 
   const sisaTotal = jumlah(sisaPokok, sisaTambahan);
   const adaPembayaran = lebihBesar(jumlah(pokokMasuk, tambahanDibayar), 0);

@@ -78,6 +78,12 @@ function pesanAmanDariJawaban(error: JawabanGagal): string {
     return error.message ?? 'Tenggat pembayaran pesanan ini sudah lewat.';
   }
   if (error.kode === 'SEDANG_DISIAPKAN') return error.message ?? 'Pembayaran sedang disiapkan. Tunggu sebentar lalu coba lagi.';
+  // Pesanan yang sedang direfund atau sudah tutup tidak lagi menerima uang baru.
+  // Tanpa cabang ini pembeli hanya melihat "Coba lagi sebentar" dan akan terus
+  // mencoba membayar tagihan yang tidak akan pernah dibuka.
+  if (error.kode === 'STATUS_TIDAK_MENUNGGU_BAYAR' || error.kode === 'STATUS_TIDAK_MENERIMA_BAYAR') {
+    return error.message ?? 'Pesanan ini sudah tidak menerima pembayaran. Hubungi kami bila ini keliru.';
+  }
   return error.message ?? 'Pembayaran belum dapat dibuka. Coba lagi sebentar.';
 }
 

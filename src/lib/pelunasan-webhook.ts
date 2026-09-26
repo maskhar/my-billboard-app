@@ -6,9 +6,10 @@
 
 import 'server-only';
 
-import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
+import { BookingStatus, PaymentStatus, PaymentTujuan, Prisma } from '@prisma/client';
 import { adalahDuplikatUnik } from './db-error';
-import { keDecimal, lebihKecil, nol } from './money';
+import { keDecimal, lebihBesar, lebihKecil, nol } from './money';
+import { sisaTagihan, tenggatPelunasan, type BarisPembayaran } from './pembayaran';
 import { prisma as prismaAsli } from './prisma';
 import { transisiSah } from './transisi-status';
 
@@ -50,6 +51,9 @@ type BarisBooking = {
   id: string;
   status: BookingStatus;
   paidAt: Date | null;
+  /** Acuan tenggat pelunasan H-3 — lihat `tenggatPelunasan`. */
+  startDate: Date;
+  totalPrice: Prisma.Decimal;
   user: { email: string; name: string | null };
   billboard: { title: string; address: string };
   duration: number;
@@ -58,7 +62,7 @@ type BarisBooking = {
 type BarisPayment = {
   id: string;
   bookingId: string;
-  tujuan: string;
+  tujuan: PaymentTujuan;
   status: PaymentStatus;
   jumlah: Prisma.Decimal;
   providerReferenceId: string | null;
@@ -69,6 +73,8 @@ type BarisPayment = {
 
 type TabelPaymentWebhook = {
   findFirst(args: unknown): Promise<BarisPayment | null>;
+  findMany(args: unknown): Promise<BarisPembayaran[]>;
+  create(args: unknown): Promise<{ id: string }>;
   updateMany(args: unknown): Promise<{ count: number }>;
 };
 
@@ -216,9 +222,19 @@ export type NotifikasiPembayaran = {
   durasi: number;
   tujuan: string;
   jumlah: Prisma.Decimal;
+  /**
+   * Sisa pokok SESUDAH pembayaran ini tercatat, supaya surat tidak menagih uang
+   * yang baru saja diterima.
+   */
+  sisaPokok: Prisma.Decimal;
+  /** Tenggat pelunasan H-3; null bila tidak ada sisa pokok lagi. */
+  tenggatPelunasan: Date | null;
 };
 
-function notifikasiDari(payment: BarisPayment): NotifikasiPembayaran {
+function notifikasiDari(
+  payment: BarisPayment,
+  sisaPokok: Prisma.Decimal
+): NotifikasiPembayaran {
   return {
     bookingId: payment.booking.id,
     emailPembeli: payment.booking.user.email,
@@ -228,7 +244,71 @@ function notifikasiDari(payment: BarisPayment): NotifikasiPembayaran {
     durasi: payment.booking.duration,
     tujuan: payment.tujuan,
     jumlah: payment.jumlah,
+    sisaPokok,
+    tenggatPelunasan: lebihBesar(sisaPokok, 0)
+      ? tenggatPelunasan(payment.booking.startDate)
+      : null,
   };
+}
+
+/**
+ * Terbitkan tagihan pelunasan bila masih ada sisa pokok. Kembalikan sisa itu.
+ *
+ * Dipanggil DI DALAM transaksi yang baru saja menandai sebuah tagihan PAID, jadi
+ * pembacaan di bawah sudah melihat setoran terbaru. Di sinilah pembeli DP
+ * mendapat jalur melunasi: tanpa ini tidak ada kode mana pun yang pernah menulis
+ * baris `Payment` bertujuan PELUNASAN, sehingga panel "Sisa Yang Harus Dilunasi"
+ * di kartu pesanan adalah angka tanpa tombol.
+ *
+ * Syaratnya "masih ada sisa pokok", BUKAN `tujuan === DP`. Dengan begitu `FULL`
+ * yang lunas tidak menerbitkan apa pun tanpa perlu cabang sendiri, dan sebuah
+ * pelunasan sebagian (bila suatu saat diizinkan) tetap menghasilkan tagihan
+ * lanjutan yang benar.
+ *
+ * `TAMBAHAN` dilewati sepenuhnya: biaya tambahan berada DI LUAR `totalPrice`,
+ * jadi membayarnya tidak mengubah sisa pokok dan tidak boleh memicu tagihan
+ * pokok baru.
+ */
+async function terbitkanPelunasanBila(
+  tx: { payment: TabelPaymentWebhook },
+  payment: BarisPayment
+): Promise<Prisma.Decimal> {
+  const seluruhTagihan = await tx.payment.findMany({
+    where: { bookingId: payment.booking.id },
+    select: { tujuan: true, status: true, jumlah: true },
+  });
+
+  const sisa = sisaTagihan(payment.booking.totalPrice, seluruhTagihan);
+
+  if (payment.tujuan === PaymentTujuan.TAMBAHAN) return sisa;
+  if (!lebihBesar(sisa, 0)) return sisa;
+
+  // Indeks unik bersyarat `payment_satu_tagihan_menganggur` hanya mengizinkan
+  // SATU baris PENDING per (bookingId, tujuan). Keberadaannya diperiksa di sini,
+  // bukan dengan menangkap P2002 sesudahnya: di Postgres, galat di tengah
+  // transaksi membuat transaksi itu aborted, sehingga query berikutnya gagal dan
+  // `catch` tidak menyelamatkan apa pun.
+  //
+  // Bila dua penulis paralel tetap bertemu di indeks itu, seluruh transaksi ini
+  // rollback — termasuk penandaan PAID — dan delivery webhook berikutnya dari
+  // Xendit mengulanginya dengan bersih. Tidak ada uang yang hilang dan tidak ada
+  // surat ganda, karena email hanya dikirim oleh jalur yang benar-benar commit.
+  const sudahAda = seluruhTagihan.some(
+    (t) => t.tujuan === PaymentTujuan.PELUNASAN && t.status === PaymentStatus.PENDING
+  );
+  if (sudahAda) return sisa;
+
+  await tx.payment.create({
+    data: {
+      bookingId: payment.booking.id,
+      tujuan: PaymentTujuan.PELUNASAN,
+      jumlah: sisa,
+      status: PaymentStatus.PENDING,
+    },
+    select: { id: true },
+  });
+
+  return sisa;
 }
 
 function paymentSama(payment: BarisPayment, webhook: WebhookSesiSelesai): boolean {
@@ -286,7 +366,32 @@ export async function selesaikanDariWebhook(
         throw new GalatWebhookPembayaran(409, 'TAGIHAN_TIDAK_MENUNGGU', 'Tagihan tidak lagi menunggu pembayaran.');
       }
 
-      if (!transisiSah(payment.booking.status, BookingStatus.PAID_CONFIRMED)) {
+      // TUJUAN MENENTUKAN APAKAH STATUS PESANAN BERGERAK.
+      //
+      // `DP` dan `FULL` adalah pembayaran PERTAMA: menerimanya berarti pesanan
+      // berpindah dari "menunggu bayar" ke "sudah dibayar". Di situ
+      // `PAID_CONFIRMED` adalah transisi yang benar dan harus divalidasi.
+      //
+      // `PELUNASAN` dan `TAMBAHAN` adalah pembayaran LANJUTAN pada pesanan yang
+      // sudah berjalan, dan keduanya TIDAK memindahkan status sama sekali.
+      // Sebelumnya `PAID_CONFIRMED` dipaksakan tanpa syarat di sini, dan itu
+      // menghanguskan uang: pelunasan yang tiba ketika pesanan sudah
+      // `IN_PRODUCTION` gagal di `transisiSah` (`IN_PRODUCTION` tidak punya
+      // `PAID_CONFIRMED` sebagai tujuan), webhook dijawab 409, Xendit mengulang
+      // selamanya, dan baris Payment tidak pernah menjadi PAID — padahal
+      // uangnya sudah diterima gerbang pembayaran. Menariknya balik ke
+      // `PAID_CONFIRMED` pun salah arah: pesanan yang sedang dicetak tidak
+      // kembali menjadi pesanan yang baru dibayar.
+      //
+      // Jejak waktunya tidak hilang: `Payment.paidAt` mencatat kapan setiap
+      // setoran masuk, dan itu memang satuan yang dipakai laporan.
+      const pembayaranPertama =
+        payment.tujuan === PaymentTujuan.DP || payment.tujuan === PaymentTujuan.FULL;
+
+      if (
+        pembayaranPertama &&
+        !transisiSah(payment.booking.status, BookingStatus.PAID_CONFIRMED)
+      ) {
         throw new GalatWebhookPembayaran(409, 'STATUS_PESANAN_TIDAK_SESUAI', 'Status pesanan tidak dapat dilunasi.');
       }
 
@@ -313,19 +418,23 @@ export async function selesaikanDariWebhook(
         throw new GalatWebhookPembayaran(409, 'PEMBAYARAN_SEDANG_DIPROSES', 'Pembayaran sedang diproses.');
       }
 
-      const bookingTertulis = await tx.booking.updateMany({
-        where: { id: payment.booking.id, status: payment.booking.status },
-        data: {
-          status: BookingStatus.PAID_CONFIRMED,
-          paidAt: payment.booking.paidAt ?? sekarang,
-        },
-      });
+      if (pembayaranPertama) {
+        const bookingTertulis = await tx.booking.updateMany({
+          where: { id: payment.booking.id, status: payment.booking.status },
+          data: {
+            status: BookingStatus.PAID_CONFIRMED,
+            paidAt: payment.booking.paidAt ?? sekarang,
+          },
+        });
 
-      if (bookingTertulis.count === 0) {
-        throw new GalatWebhookPembayaran(409, 'PESANAN_SEDANG_DIPROSES', 'Pesanan sedang diproses.');
+        if (bookingTertulis.count === 0) {
+          throw new GalatWebhookPembayaran(409, 'PESANAN_SEDANG_DIPROSES', 'Pesanan sedang diproses.');
+        }
       }
 
-      return { keadaan: 'DISELESAIKAN', notifikasi: notifikasiDari(payment) };
+      const sisaPokok = await terbitkanPelunasanBila(tx, payment);
+
+      return { keadaan: 'DISELESAIKAN', notifikasi: notifikasiDari(payment, sisaPokok) };
     });
   } catch (error) {
     if (error instanceof GalatWebhookPembayaran) throw error;

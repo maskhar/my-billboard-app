@@ -57,6 +57,10 @@ export type TransaksiUntukClient = {
     sisaTambahan: number;
     grandTotal: number;
     adaUangMasuk: boolean;
+    /** ISO string tenggat pelunasan H-3 sebelum tanggal tayang; dihitung server. */
+    tenggatPelunasanISO: string;
+    /** Masih ada sisa pokok DAN H-3 sudah lewat. Ditandai, tidak memblokir bayar. */
+    terlambatLunas: boolean;
   };
 };
 
@@ -344,6 +348,29 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                             </p>
                             <InfoPair label="Pokok diterima" value={rupiah(selected.uang.pokokMasuk)} />
                             <InfoPair label="Sisa pokok" value={rupiah(selected.uang.sisaPokok)} />
+
+                            {/* Pesanan yang sisa pokoknya belum masuk melewati
+                                H-3 perlu ditindaklanjuti admin, bukan diblokir
+                                sistem: pembayarannya tetap dibuka (keputusan
+                                fase ini), karena uangnya justru dibutuhkan untuk
+                                mencetak dan memasang. Tanpa penanda ini pesanan
+                                seperti itu tidak terlihat berbeda dari pesanan DP
+                                yang tenggatnya masih jauh. */}
+                            {selected.uang.terlambatLunas && (
+                                <div className="mt-2 flex items-start gap-2 rounded border border-red-200 bg-red-50 px-2 py-1.5">
+                                    <span className="rounded bg-red-600 px-1.5 py-0.5 text-[9px] font-bold uppercase text-white">
+                                        Pelunasan terlambat
+                                    </span>
+                                    <span className="text-[10px] leading-relaxed text-red-700">
+                                        Batas H-3 lewat sejak{' '}
+                                        {new Date(selected.uang.tenggatPelunasanISO).toLocaleDateString('id-ID', {
+                                            dateStyle: 'long',
+                                        })}
+                                        . Pembayaran masih dibuka untuk pembeli.
+                                    </span>
+                                </div>
+                            )}
+
                             {selected.uang.totalTambahan > 0 && (
                                 <>
                                     <InfoPair label="Tambahan dibayar" value={rupiah(selected.uang.tambahanDibayar)} />

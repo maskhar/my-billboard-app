@@ -18,7 +18,7 @@
 
 import { NextResponse } from 'next/server';
 import { sendEmail } from '@/lib/mail';
-import { keAngka, rupiah } from '@/lib/money';
+import { keAngka, lebihBesar, rupiah } from '@/lib/money';
 import {
   GalatWebhookPembayaran,
   selesaikanDariWebhook,
@@ -107,10 +107,42 @@ function labelTujuan(tujuan: string): string {
   return 'Pembayaran penuh';
 }
 
+/**
+ * Kalimat tambahan tentang sisa pokok, atau string kosong bila sudah lunas.
+ *
+ * Sisa dan tenggatnya dihitung server di `pelunasan-webhook.ts` — `sisaPokok` di
+ * sana adalah sisa SESUDAH pembayaran ini tercatat, jadi surat tidak pernah
+ * menagih uang yang baru saja diterima. Tenggatnya tidak dihitung ulang di sini:
+ * satu rumus (`tenggatPelunasan` atas `startDate`) untuk email, kartu pesanan,
+ * dan layar admin.
+ *
+ * Keterlambatan DITANDAI, tidak ditegakkan: tagihannya tetap bisa dibayar
+ * setelah tanggal itu, jadi suratnya menyebut batas tanpa mengancam pembatalan
+ * yang tidak akan terjadi.
+ */
+function kalimatSisaPokok(notifikasi: NotifikasiPembayaran): string {
+  if (!lebihBesar(notifikasi.sisaPokok, 0)) return '';
+
+  const sisa = rupiah(notifikasi.sisaPokok);
+  if (!notifikasi.tenggatPelunasan) {
+    return `<br/><br/>Sisa yang masih perlu dilunasi: <b>${sisa}</b>.`;
+  }
+
+  const tenggat = new Intl.DateTimeFormat('id-ID', { dateStyle: 'long' }).format(
+    notifikasi.tenggatPelunasan
+  );
+  return (
+    `<br/><br/>Sisa yang masih perlu dilunasi: <b>${sisa}</b>, ` +
+    `paling lambat <b>${tenggat}</b>. ` +
+    'Tagihan pelunasannya sudah kami siapkan di halaman pesanan Anda.'
+  );
+}
+
 async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> {
   const nomor = notifikasi.bookingId.slice(-6).toUpperCase();
   const label = labelTujuan(notifikasi.tujuan);
   const nominal = rupiah(notifikasi.jumlah);
+  const sisaPokok = lebihBesar(notifikasi.sisaPokok, 0) ? rupiah(notifikasi.sisaPokok) : null;
   const detail = {
     id: notifikasi.bookingId,
     billboardTitle: notifikasi.judulBillboard,
@@ -129,6 +161,9 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
       message:
         `${label} sebesar <b>${nominal}</b> masuk untuk pesanan #${nomor} ` +
         `dari <b>${notifikasi.namaPembeli ?? 'pembeli'}</b>.<br/>` +
+        // Sisa pokok ikut di surat admin supaya pesanan DP langsung terbaca
+        // sebagai pesanan yang masih menggantung, tanpa membuka dashboard.
+        (sisaPokok ? `Sisa pokok setelah setoran ini: <b>${sisaPokok}</b>.<br/>` : '') +
         'Silakan cek dashboard lalu tekan Verifikasi.',
       orderDetail: detail,
     });
@@ -148,7 +183,8 @@ async function kirimNotifikasi(notifikasi: NotifikasiPembayaran): Promise<void> 
       title: `${label} Telah Diterima`,
       message:
         `Terima kasih, ${label.toLowerCase()} sebesar <b>${nominal}</b> sudah masuk ke sistem kami. ` +
-        'Tim Admin akan memverifikasi dalam waktu singkat.',
+        'Tim Admin akan memverifikasi dalam waktu singkat.' +
+        kalimatSisaPokok(notifikasi),
       orderDetail: { ...detail, status: 'SEDANG DIVERIFIKASI' },
     });
   }

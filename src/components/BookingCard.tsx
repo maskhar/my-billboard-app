@@ -67,8 +67,28 @@ export type PesananUntukKartu = {
     address: string;
     mainImage: string;
   } | null;
-  /** Hasil kesimpulan server: masih ada tagihan `PENDING` yang dapat dibayar. */
-  adaTagihanPending: boolean;
+  /**
+   * Tujuan tagihan yang akan dibuka berikutnya, atau `null` bila tidak ada.
+   *
+   * Sengaja `string`, bukan enum `PaymentTujuan` milik Prisma: mengimpor enum itu
+   * ke berkas `'use client'` menarik runtime Prisma ke bundle browser.
+   */
+  tujuanTagihan: string | null;
+  /**
+   * Bolehkah tagihan itu dibayar sekarang?
+   *
+   * Kesimpulan `periksaKelayakanSesi` di server — SATU aturan untuk kartu ini,
+   * halaman pembayaran, dan endpoint sesi. Sebelumnya kartu ini menebaknya dari
+   * empat syarat hardcode yang menyembunyikan tombol dari setiap pelunasan yang
+   * sah, karena pesanan yang sudah dibayar DP bukan lagi `PENDING_PAYMENT`.
+   */
+  bolehBayar: boolean;
+  /** Sisa biaya tambahan yang belum dibayar; di luar `totalPrice`. */
+  sisaTambahan: number;
+  /** ISO string tenggat pelunasan H-3 sebelum tanggal tayang. */
+  tenggatPelunasanISO: string;
+  /** Masih ada sisa pokok DAN tenggat H-3 sudah lewat. Ditandai, tidak diblokir. */
+  terlambatLunas: boolean;
   /** Uang pokok yang sudah benar-benar diterima (`Payment PAID`, tanpa TAMBAHAN). */
   pokokMasuk: number;
   /** Sisa pokok sewa yang belum dibayar; nol bila lunas. */
@@ -319,6 +339,26 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const tagihanSudahSelesai = ['CANCELLED', 'REFUNDED', 'REVIEW_REFUND', 'WAITING_BANK', 'PROCESS_REFUND']
       .includes(order.status);
 
+  // Pembayaran PERTAMA (`DP`/`FULL`) adalah satu-satunya yang hidup di bawah
+  // hitung mundur 24 jam. Pelunasan dan biaya tambahan terjadi pada pesanan yang
+  // tanggalnya sudah benar-benar dipegang, jadi timer di kartu ini tidak berlaku
+  // bagi keduanya — menampilkannya berarti mengancam pembeli dengan tenggat yang
+  // sudah lewat sejak lama.
+  const bayarPertama =
+    order.tujuanTagihan === 'DP' || order.tujuanTagihan === 'FULL';
+
+  const labelTombolBayar =
+    order.tujuanTagihan === 'PELUNASAN'
+      ? 'Lunasi Sekarang'
+      : order.tujuanTagihan === 'TAMBAHAN'
+        ? 'Bayar Biaya Tambahan'
+        : 'Bayar';
+
+  // Tenggat pelunasan ditampilkan tanpa jam: ia jatuh pada 23:59:59.999, dan
+  // menuliskan jamnya membuat pembeli mengira ada hitungan menit yang dikejar.
+  const tenggatLunas = new Intl.DateTimeFormat('id-ID', { dateStyle: 'long' })
+    .format(new Date(order.tenggatPelunasanISO));
+
   // Badge Status Warna-warni
   let statusBadge = <span className="bg-gray-100 text-gray-600 px-3 py-1 rounded-full text-[10px] font-bold uppercase">{order.status.replace('_', ' ')}</span>;
   if (order.status === 'PENDING_PAYMENT') statusBadge = <span className={`px-3 py-1 rounded-full text-[10px] font-bold uppercase ${isExpired ? 'bg-red-100 text-red-600' : 'bg-yellow-100 text-yellow-700'}`}>{isExpired ? 'EXPIRED' : 'MENUNGGU PEMBAYARAN'}</span>;
@@ -400,12 +440,57 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                       pernah melihat sisa tagihannya lagi sepanjang alur pesanan.
                     */}
                     {order.dibayarSebagian && !tagihanSudahSelesai && (
-                        <div className="mt-1 bg-amber-50 border border-amber-200 rounded px-2 py-1">
-                            <p className="text-[9px] text-amber-700 font-bold uppercase">Sisa Yang Harus Dilunasi</p>
-                            <p className="text-sm font-bold text-amber-800">Rp {angkaRupiah(order.sisaPokok)}</p>
-                            <p className="text-[9px] text-amber-600">
-                                Rp {angkaRupiah(order.pokokMasuk)} sudah kami terima. Pelunasan paling lambat H-3 sebelum tanggal tayang.
+                        <div
+                          className={`mt-1 rounded px-2 py-1 border ${
+                            order.terlambatLunas
+                              ? 'bg-red-50 border-red-200'
+                              : 'bg-amber-50 border-amber-200'
+                          }`}
+                        >
+                            <p className={`text-[9px] font-bold uppercase ${order.terlambatLunas ? 'text-red-700' : 'text-amber-700'}`}>
+                                Sisa Yang Harus Dilunasi
                             </p>
+                            <p className={`text-sm font-bold ${order.terlambatLunas ? 'text-red-800' : 'text-amber-800'}`}>
+                                Rp {angkaRupiah(order.sisaPokok)}
+                            </p>
+                            {/*
+                              Tenggat H-3 ditandai, TIDAK ditegakkan: tagihannya
+                              tetap bisa dibayar setelah tanggal itu. Uangnya
+                              dibutuhkan untuk mencetak dan memasang, jadi menolak
+                              pembayaran hanya membuat pesanan mandek tanpa jalan
+                              keluar. Teksnya karena itu menyebut keterlambatan
+                              sekaligus menegaskan pembayaran masih dibuka.
+
+                              Tanggalnya dihitung server (`tenggatPelunasan` atas
+                              `startDate`), bukan di sini: tenggat yang dihitung
+                              browser mengikuti zona waktu perangkat pembeli, dan
+                              dua pembeli akan melihat batas yang berbeda untuk
+                              tagihan yang sama.
+                            */}
+                            {order.terlambatLunas ? (
+                                <p className="text-[9px] text-red-600">
+                                    Terlambat sejak {tenggatLunas}. Pembayaran masih dibuka — Rp {angkaRupiah(order.pokokMasuk)} sudah kami terima.
+                                </p>
+                            ) : (
+                                <p className="text-[9px] text-amber-600">
+                                    Rp {angkaRupiah(order.pokokMasuk)} sudah kami terima. Pelunasan paling lambat {tenggatLunas}.
+                                </p>
+                            )}
+                        </div>
+                    )}
+
+                    {/*
+                      Biaya tambahan punya panelnya sendiri, TIDAK dicampur ke
+                      sisa pokok di atas. `AdditionalCharge` berada di luar
+                      `totalPrice`, jadi menjumlahkannya ke pokok membuat pesanan
+                      yang pokoknya sudah lunas terlihat belum lunas — dan pembeli
+                      tidak bisa tahu angka mana yang sedang ditagih.
+                    */}
+                    {order.sisaTambahan > 0 && !tagihanSudahSelesai && (
+                        <div className="mt-1 bg-sky-50 border border-sky-200 rounded px-2 py-1">
+                            <p className="text-[9px] text-sky-700 font-bold uppercase">Biaya Tambahan</p>
+                            <p className="text-sm font-bold text-sky-800">Rp {angkaRupiah(order.sisaTambahan)}</p>
+                            <p className="text-[9px] text-sky-600">Di luar total tagihan sewa.</p>
                         </div>
                     )}
 
@@ -424,16 +509,21 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                 </div>
 
                 {/* Skenario 1: tagihan aktif -> buka Pembayaran Otomatis.
-                    `adaTagihanPending` berasal dari query server. Browser tidak
-                    boleh menebak bahwa PENDING_PAYMENT selalu punya tagihan yang
-                    masih dapat dibayar. */}
-                {order.status === 'PENDING_PAYMENT' &&
-                  !!order.expiresAt &&
-                  !isExpired &&
-                  order.adaTagihanPending && (
+                    `bolehBayar` berasal dari `periksaKelayakanSesi` di server.
+                    Browser tidak menebak syaratnya: gerbang lama di sini —
+                    `status === 'PENDING_PAYMENT' && expiresAt masih hidup` —
+                    menyembunyikan tombol dari setiap pelunasan yang sah, karena
+                    pesanan yang sudah dibayar DP bukan lagi PENDING_PAYMENT dan
+                    tenggat 24 jamnya sudah lewat. Pembeli DP melihat panel
+                    "Sisa Yang Harus Dilunasi" tanpa satu pun tombol.
+
+                    `isExpired` hanya menutup tombol pada pembayaran PERTAMA,
+                    karena hitung mundur itu memang menghitung tenggat 24 jam
+                    pesanan baru — bukan tenggat pelunasan. */}
+                {order.bolehBayar && !(bayarPertama && isExpired) && (
                      <div className='flex flex-col gap-2'>
                         {/* Sisa waktu dibaca dari kolom expiresAt — lihat catatan timer di atas. */}
-                        {timeLeft && (
+                        {bayarPertama && timeLeft && (
                             <div className="flex items-center gap-1 text-[10px] font-bold text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-1">
                                 <Clock size={11} /> Sisa waktu bayar: {timeLeft}
                             </div>
@@ -443,9 +533,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                               href={`/dashboard/order/${encodeURIComponent(order.id)}/payment`}
                               className="flex-1 bg-utero text-white text-xs py-2 rounded font-bold text-center hover:opacity-90 transition"
                             >
-                              Bayar
+                              {labelTombolBayar}
                             </Link>
-                            <button onClick={handleCancelPending} disabled={loading} className="px-3 bg-gray-100 text-gray-500 text-xs py-2 rounded hover:bg-gray-200 font-bold disabled:opacity-50">Batal</button>
+                            {/* Pembatalan hanya berlaku pada pesanan yang belum
+                                dibayar sepeser pun. Pesanan yang uangnya sudah
+                                masuk dibatalkan lewat jalur refund, bukan lewat
+                                tombol ini. */}
+                            {order.status === 'PENDING_PAYMENT' && !order.adaUangMasuk && (
+                                <button onClick={handleCancelPending} disabled={loading} className="px-3 bg-gray-100 text-gray-500 text-xs py-2 rounded hover:bg-gray-200 font-bold disabled:opacity-50">Batal</button>
+                            )}
                         </div>
                      </div>
                 )}

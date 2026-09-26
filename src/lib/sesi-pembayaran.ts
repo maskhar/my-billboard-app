@@ -35,6 +35,7 @@ import { Prisma, PaymentStatus, PaymentTujuan, BookingStatus } from '@prisma/cli
 import { randomUUID } from 'node:crypto';
 import { prisma as prismaAsli } from './prisma';
 import { uangUntukClient } from './money';
+import { bayarLanjutan, periksaKelayakanSesi } from './pembayaran';
 import { keE164 } from './telepon';
 import {
   GalatXendit,
@@ -48,16 +49,9 @@ import {
 /** Umur sesi pembayaran yang kita minta. */
 const UMUR_SESI_MS = 30 * 60 * 1000;
 
-/**
- * Sisa waktu paling sedikit yang membuat sesi masih layak dibuat.
- *
- * Sesi tidak boleh hidup lebih lama daripada tenggat pesanannya — kalau boleh,
- * pembeli bisa membayar pesanan yang tanggalnya sudah dilepas ke orang lain.
- * Tapi sesi yang hanya berumur beberapa detik juga tidak berguna: pembeli baru
- * selesai mengisi kartu ketika sesinya sudah mati. Di bawah ambang ini lebih
- * jujur mengatakan tenggatnya habis.
- */
-const SISA_WAKTU_MIN_MS = 2 * 60 * 1000;
+// Ambang sisa waktu minimum sebuah sesi masih layak dibuka tinggal bersama
+// aturan kelayakan lainnya di `./pembayaran` (`SISA_WAKTU_MIN_MS`), karena
+// halaman pembayaran harus menjawab pertanyaan itu dengan jawaban yang sama.
 
 /**
  * Berapa lama satu upaya pembuatan sesi menahan tagihan.
@@ -289,9 +283,17 @@ function tagihanBerikutnya(payments: BarisTagihan[]): BarisTagihan | null {
  * Dijepit oleh tenggat pesanan: sesi yang hidup lebih lama daripada tenggatnya
  * berarti pembeli masih bisa membayar pesanan yang tanggalnya sudah dilepas ke
  * orang lain oleh penyapu.
+ *
+ * `tenggatPesanan` boleh `null`, dan itu bukan kelonggaran yang tidak dijaga:
+ * yang bernilai null hanyalah pembayaran LANJUTAN (pelunasan dan biaya
+ * tambahan), dan pesanannya sudah benar-benar memegang tanggal tayang karena
+ * uangnya sebagian sudah masuk. Tidak ada slot yang bisa dilepas penyapu, jadi
+ * tidak ada yang perlu dijepit — sesi memakai umur penuhnya. Kelayakannya sudah
+ * diputuskan `periksaKelayakanSesi` sebelum fungsi ini dipanggil.
  */
-function tenggatSesi(sekarang: Date, tenggatPesanan: Date): Date {
+function tenggatSesi(sekarang: Date, tenggatPesanan: Date | null): Date {
   const batasSesi = sekarang.getTime() + UMUR_SESI_MS;
+  if (!tenggatPesanan) return new Date(batasSesi);
   return new Date(Math.min(batasSesi, tenggatPesanan.getTime()));
 }
 
@@ -376,41 +378,10 @@ export async function siapkanSesiPembayaran(
     throw new GalatSesiPembayaran(404, 'PESANAN_TIDAK_DITEMUKAN', 'Pesanan tidak ditemukan.');
   }
 
-  if (pesanan.status !== BookingStatus.PENDING_PAYMENT) {
-    throw new GalatSesiPembayaran(
-      409,
-      'STATUS_TIDAK_MENUNGGU_BAYAR',
-      'Pesanan ini tidak sedang menunggu pembayaran.'
-    );
-  }
-
-  // Tenggat null tidak berarti "selamanya". Tanpa tenggat, sesi tidak bisa
-  // dijepit ke umur pesanan dan pembeli dapat membayar setelah slot dilepas.
-  if (!pesanan.expiresAt) {
-    throw new GalatSesiPembayaran(
-      409,
-      'TENGGAT_TIDAK_TERSEDIA',
-      'Tenggat pembayaran pesanan ini tidak tersedia. Silakan buat pesanan baru.'
-    );
-  }
-
-  if (pesanan.expiresAt.getTime() <= sekarang.getTime()) {
-    throw new GalatSesiPembayaran(
-      409,
-      'TENGGAT_LEWAT',
-      'Tenggat pembayaran pesanan ini sudah lewat. Silakan buat pesanan baru.'
-    );
-  }
-
-  const tenggat = tenggatSesi(sekarang, pesanan.expiresAt);
-  if (tenggat.getTime() - sekarang.getTime() < SISA_WAKTU_MIN_MS) {
-    throw new GalatSesiPembayaran(
-      409,
-      'TENGGAT_TERLALU_DEKAT',
-      'Sisa waktu pembayaran tidak cukup untuk menyelesaikan transaksi. Silakan buat pesanan baru.'
-    );
-  }
-
+  // TAGIHAN DIPILIH SEBELUM KELAYAKAN DIPERIKSA, dan urutan itu penting.
+  // Syarat membuka sesi berbeda menurut tujuan tagihan — pembayaran pertama
+  // hidup di bawah tenggat 24 jam pesanan, pembayaran lanjutan tidak — jadi
+  // aturannya tidak bisa diputuskan sebelum diketahui tagihan mana yang dibayar.
   let tagihan = tagihanBerikutnya(pesanan.payments);
   if (!tagihan) {
     throw new GalatSesiPembayaran(
@@ -419,6 +390,23 @@ export async function siapkanSesiPembayaran(
       'Tidak ada tagihan yang menunggu pembayaran untuk pesanan ini.'
     );
   }
+
+  // Aturannya tinggal di `src/lib/pembayaran.ts` supaya modul ini, halaman
+  // pembayaran, dan kartu pesanan menjawab pertanyaan yang sama dengan jawaban
+  // yang sama. Tiga salinan dari satu aturan adalah tiga tempat yang menyimpang.
+  const kelayakan = periksaKelayakanSesi({
+    statusPesanan: pesanan.status,
+    tujuanTagihan: tagihan.tujuan,
+    tenggatPesanan: pesanan.expiresAt,
+    sekarang,
+  });
+
+  if (!kelayakan.boleh) {
+    throw new GalatSesiPembayaran(kelayakan.status, kelayakan.kode, kelayakan.pesan);
+  }
+
+  // Pembayaran lanjutan tidak dijepit tenggat pesanan (lihat `tenggatSesi`).
+  const tenggatPesananSesi = bayarLanjutan(tagihan.tujuan) ? null : pesanan.expiresAt;
 
   // PROFIL DIPERIKSA SEBELUM GERBANG DIPANGGIL. Data yang kurang akan ditolak di
   // sana dengan galat yang tidak menyebut kolom mana yang salah, dan penolakan
@@ -555,7 +543,7 @@ export async function siapkanSesiPembayaran(
     customerId,
     nominal,
     deskripsi: deskripsiTagihan(pesanan.id, tagihan.tujuan),
-    tenggat,
+    tenggat: tenggatSesi(sekarang, tenggatPesananSesi),
   });
 
   // --- Simpan dulu, baru serahkan kuncinya --------------------------------

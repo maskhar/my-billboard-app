@@ -112,6 +112,17 @@ const JALUR_ROUTE_UPDATE_ORDER = path.join(
   'update-order',
   'route.ts'
 );
+const JALUR_ROUTE_ADD_CHARGE = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'admin',
+  'orders',
+  'add-charge',
+  'route.ts'
+);
 const JALUR_LAPORAN = path.join(
   __dirname,
   '..',
@@ -2679,6 +2690,13 @@ describe('pelunasan webhook Payment Session', () => {
           status: BookingStatus.PENDING_PAYMENT,
           paidAt: null,
           duration: 30,
+          // `totalPrice` dan `startDate` dibutuhkan penerbit tagihan pelunasan:
+          // yang pertama menghitung sisa pokok, yang kedua menjadi acuan tenggat
+          // H-3 yang ikut di notifikasi. Default di sini sama dengan nominal
+          // tagihan FULL, jadi pesanan bawaan lunas dan TIDAK menerbitkan
+          // pelunasan — test yang menguji penerbitannya menyetel keduanya sendiri.
+          totalPrice: new Prisma.Decimal('1500000'),
+          startDate: new Date('2026-10-20T00:00:00.000Z'),
           user: { email: 'pembeli@contoh.test', name: 'Budi Santoso' },
           billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
           ...(options.booking ?? {}),
@@ -2726,6 +2744,45 @@ describe('pelunasan webhook Payment Session', () => {
           }
           simpan(rows.map((row) => (cocokWebhook(row, args.where) ? { ...row, ...args.data } : row)));
           return { count: cocok.length };
+        },
+        async findMany(args) {
+          calls.push('payment.findMany');
+          return ambil()
+            .filter((row) => cocokWebhook(row, args.where))
+            .map((row) => ({ ...row }));
+        },
+        async create(args) {
+          calls.push('payment.create');
+          const rows = ambil();
+          // Indeks unik bersyarat `payment_satu_tagihan_menganggur`: maksimum satu
+          // baris PENDING per (bookingId, tujuan). Dimodelkan di sini supaya test
+          // membuktikan penerbit tagihan memeriksanya SEBELUM create, bukan
+          // mengandalkan catch P2002 yang di Postgres sudah terlambat.
+          const bentrok = rows.some(
+            (row) =>
+              row.bookingId === args.data.bookingId &&
+              row.tujuan === args.data.tujuan &&
+              row.status === PaymentStatus.PENDING &&
+              args.data.status === PaymentStatus.PENDING
+          );
+          if (bentrok) {
+            throw new Prisma.PrismaClientKnownRequestError('tagihan menganggur duplikat', {
+              code: 'P2002',
+              clientVersion: 'test',
+              meta: { target: ['bookingId', 'tujuan'] },
+            });
+          }
+          const baris = {
+            id: `pay-baru-${rows.length + 1}`,
+            providerReferenceId: null,
+            providerSessionId: null,
+            providerPaymentId: null,
+            paidAt: null,
+            callbackPayload: null,
+            ...args.data,
+          };
+          simpan([...rows, baris]);
+          return { id: baris.id };
         },
       };
     }
@@ -2987,6 +3044,135 @@ describe('pelunasan webhook Payment Session', () => {
     assert.equal(fake.payments()[0].status, PaymentStatus.PAID);
     assert.equal(fake.calls.filter((nama) => nama === 'booking.updateMany').length, 1);
   });
+
+  it('DP yang lunas menerbitkan satu tagihan PELUNASAN sebesar sisa pokok di transaksi yang sama', async () => {
+    const fake = buatDbPelunasan({
+      payments: [buatPaymentWebhook({ tujuan: PaymentTujuan.DP })],
+      booking: { totalPrice: new Prisma.Decimal('5000000') },
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(fake.booking().status, BookingStatus.PAID_CONFIRMED);
+
+    // Tanpa baris ini pembeli DP tidak punya tagihan yang bisa dibayar sama
+    // sekali: `tagihanBerikutnya` tidak menemukan apa pun dan halaman bayar
+    // menjawab TIDAK_ADA_TAGIHAN.
+    const pelunasan = fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN);
+    assert.equal(pelunasan.length, 1);
+    assert.equal(pelunasan[0].status, PaymentStatus.PENDING);
+    assert.equal(pelunasan[0].jumlah.toString(), '3500000');
+    // Tagihan baru belum pernah menyentuh gerbang pembayaran.
+    assert.equal(pelunasan[0].providerSessionId, null);
+    assert.equal(pelunasan[0].providerPaymentId, null);
+
+    // Satu transaksi, satu commit: tidak ada jendela di mana DP sudah PAID tapi
+    // tagihan pelunasannya belum ada.
+    assert.equal(fake.calls.filter((nama) => nama === 'transaction.begin').length, 1);
+    assert.equal(fake.calls.filter((nama) => nama === 'transaction.commit').length, 1);
+    assert.equal(fake.calls.includes('transaction.rollback'), false);
+
+    // Notifikasi membawa sisa SESUDAH setoran ini, bukan sisa sebelumnya —
+    // surat tidak boleh menagih uang yang baru saja diterima.
+    assert.equal(hasil.notifikasi.sisaPokok.toString(), '3500000');
+    assert.ok(hasil.notifikasi.tenggatPelunasan instanceof Date);
+  });
+
+  it('FULL yang lunas tidak menerbitkan tagihan apa pun', async () => {
+    const fake = buatDbPelunasan();
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    // Syaratnya "masih ada sisa pokok", bukan "tujuannya DP". FULL yang lunas
+    // karena itu tidak butuh cabang khusus untuk berhenti.
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.calls.includes('payment.create'), false);
+    assert.equal(hasil.notifikasi.sisaPokok.toString(), '0');
+    assert.equal(hasil.notifikasi.tenggatPelunasan, null);
+  });
+
+  it('PELUNASAN pada pesanan IN_PRODUCTION tercatat PAID tanpa menyentuh tabel Booking', async () => {
+    // REGRESI PALING PENTING DI FASE INI.
+    //
+    // Gerbang lama menuntut `transisiSah(status, PAID_CONFIRMED)` untuk SETIAP
+    // tujuan, dan `PAID_CONFIRMED` hanya sah dari `PENDING_PAYMENT`. Akibatnya
+    // setiap webhook pelunasan pada pesanan yang sudah berjalan dijawab 409,
+    // Xendit mengulanginya selamanya, dan `Payment` tidak pernah menjadi `PAID`
+    // walaupun uangnya sudah diterima di sisi Xendit — uang masuk yang tidak
+    // pernah tercatat di pembukuan.
+    const fake = buatDbPelunasan({
+      payments: [buatPaymentWebhook({ tujuan: PaymentTujuan.PELUNASAN })],
+      booking: { status: BookingStatus.IN_PRODUCTION, paidAt: new Date('2026-09-20T00:00:00.000Z') },
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+    const payment = fake.payments()[0];
+
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(payment.status, PaymentStatus.PAID);
+    assert.equal(payment.paidAt.getTime(), SEKARANG.getTime());
+
+    // Nol penulisan ke tabel Booking. Menarik pesanan `IN_PRODUCTION` balik ke
+    // `PAID_CONFIRMED` akan membatalkan kemajuan pengerjaan yang sudah nyata,
+    // dan `Payment.paidAt` sudah menjadi jejak waktu uangnya.
+    assert.equal(fake.calls.includes('booking.updateMany'), false);
+    assert.equal(fake.booking().status, BookingStatus.IN_PRODUCTION);
+    assert.equal(fake.booking().paidAt.getTime(), new Date('2026-09-20T00:00:00.000Z').getTime());
+  });
+
+  it('TAMBAHAN pada pesanan ACTIVE tidak memindahkan status dan tidak mengubah sisa pokok', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook({ id: 'pay-pokok', tujuan: PaymentTujuan.DP, status: PaymentStatus.PAID, jumlah: new Prisma.Decimal('1000000'), providerSessionId: 'ps-lama', providerReferenceId: 'ref-lama', providerPaymentId: 'pi-lama' }),
+        buatPaymentWebhook({ id: 'pay-tambahan', tujuan: PaymentTujuan.TAMBAHAN }),
+      ],
+      booking: { status: BookingStatus.ACTIVE, totalPrice: new Prisma.Decimal('5000000') },
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(fake.payments().find((p) => p.id === 'pay-tambahan').status, PaymentStatus.PAID);
+    assert.equal(fake.calls.includes('booking.updateMany'), false);
+    assert.equal(fake.booking().status, BookingStatus.ACTIVE);
+
+    // Biaya tambahan berada DI LUAR pokok. Membayarnya tidak boleh membuat sisa
+    // pokok terlihat mengecil, dan karena itu juga tidak menerbitkan pelunasan.
+    assert.equal(fake.calls.includes('payment.create'), false);
+    assert.equal(fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN).length, 0);
+  });
+
+  it('tidak membuat tagihan PELUNASAN kedua bila yang menganggur sudah ada', async () => {
+    const fake = buatDbPelunasan({
+      payments: [
+        buatPaymentWebhook({ tujuan: PaymentTujuan.DP }),
+        buatPaymentWebhook({
+          id: 'pay-pelunasan',
+          tujuan: PaymentTujuan.PELUNASAN,
+          jumlah: new Prisma.Decimal('3500000'),
+          providerSessionId: null,
+          providerReferenceId: null,
+        }),
+      ],
+      booking: { totalPrice: new Prisma.Decimal('5000000') },
+    });
+    const { selesaikanDariWebhook, uraikanWebhookSesiSelesai } = muatPelunasan();
+
+    const hasil = await selesaikanDariWebhook(uraikanWebhookSesiSelesai(dataWebhook()), depsDb(fake));
+
+    // Indeks `payment_satu_tagihan_menganggur` akan menolak baris kedua dengan
+    // P2002 — dan di Postgres galat itu sudah mengaborsi transaksi, jadi
+    // penerbitnya harus memeriksa lebih dulu, bukan menangkapnya.
+    assert.equal(hasil.keadaan, 'DISELESAIKAN');
+    assert.equal(fake.calls.includes('payment.create'), false);
+    assert.equal(fake.calls.includes('transaction.rollback'), false);
+    assert.equal(fake.payments().filter((p) => p.tujuan === PaymentTujuan.PELUNASAN).length, 1);
+  });
 });
 
 // ===========================================================================
@@ -3012,7 +3198,15 @@ describe('POST /api/xendit/webhook', () => {
           if (gagalEmail) throw new Error('SMTP menolak');
         },
       },
-      '@/lib/money': { keAngka: (nilai) => Number(nilai), rupiah: () => 'Rp1.500.000' },
+      '@/lib/money': {
+        keAngka: (nilai) => Number(nilai),
+        rupiah: () => 'Rp1.500.000',
+        // Dipakai route untuk memutuskan apakah surat menyebut sisa pokok. Tanpa
+        // ini `kirimNotifikasi` melempar TypeError, dan karena pengiriman surat
+        // sengaja dibungkus try/catch, kegagalannya lolos sebagai "tidak ada email
+        // terkirim" — bukan sebagai galat yang terlihat.
+        lebihBesar: (a, b) => Number(a) > Number(b),
+      },
       '@/lib/xendit': {
         tokenWebhookCocok: (nilai) => {
           calls.token.push(nilai);
@@ -3146,6 +3340,9 @@ describe('POST /api/xendit/webhook', () => {
       durasi: 30,
       tujuan: 'FULL',
       jumlah: new (require('@prisma/client').Prisma.Decimal)('1500000'),
+      // Pembayaran penuh: tidak ada sisa, jadi tidak ada tenggat pelunasan.
+      sisaPokok: new (require('@prisma/client').Prisma.Decimal)('0'),
+      tenggatPelunasan: null,
     };
     const fake = buatRouteWebhook({ hasil: { keadaan: 'DISELESAIKAN', notifikasi } });
 
@@ -3172,6 +3369,8 @@ describe('POST /api/xendit/webhook', () => {
           durasi: 30,
           tujuan: 'FULL',
           jumlah: new (require('@prisma/client').Prisma.Decimal)('1500000'),
+          sisaPokok: new (require('@prisma/client').Prisma.Decimal)('0'),
+          tenggatPelunasan: null,
         },
       },
     });
@@ -3315,6 +3514,175 @@ describe('ledger pembayaran', () => {
     // jadi ini bukan "pesanan DP yang menunggu pelunasan".
     assert.equal(uangMasuk(kosong).toString(), '0');
     assert.equal(masihAdaSisa('1000000', kosong), false);
+  });
+
+  it('sisaTambahan: hanya TAMBAHAN yang PAID mengurangi, dan hasilnya ditahan di nol', () => {
+    const { sisaTambahan } = require(JALUR_LEDGER);
+    const charges = [{ amount: new Prisma.Decimal('300000') }, { amount: new Prisma.Decimal('200000') }];
+
+    // PENDING bukan uang: tagihan biaya tambahan yang sudah dibuka tapi belum
+    // dibayar tidak boleh mengecilkan sisa yang ditagihkan ke pembeli.
+    assert.equal(
+      sisaTambahan(charges, [baris(PaymentTujuan.TAMBAHAN, PaymentStatus.PENDING, '500000')]).toString(),
+      '500000'
+    );
+
+    // Pembayaran pokok tidak pernah menyentuh sisa biaya tambahan, dan sebaliknya.
+    assert.equal(
+      sisaTambahan(charges, [baris(PaymentTujuan.DP, PaymentStatus.PAID, '400000')]).toString(),
+      '500000'
+    );
+
+    assert.equal(
+      sisaTambahan(charges, [baris(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '300000')]).toString(),
+      '200000'
+    );
+
+    // Kelebihan bayar ditahan di nol, bukan menjadi sisa negatif yang akan
+    // dibaca layar sebagai "pembeli masih berutang minus dua ratus ribu".
+    assert.equal(
+      sisaTambahan(charges, [baris(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '700000')]).toString(),
+      '0'
+    );
+
+    assert.equal(sisaTambahan([], []).toString(), '0');
+  });
+
+  it('tenggat pelunasan H-3 dihitung dari startDate, bukan installedAt', () => {
+    const { HARI_TENGGAT_PELUNASAN, tenggatPelunasan, tenggatPelunasanLewat } = require(JALUR_LEDGER);
+
+    // Tanggal tayang 20 Oktober → tenggat 17 Oktober akhir hari. Acuannya
+    // `startDate`: uang pelunasan justru dibutuhkan untuk MENCETAK dan MEMASANG,
+    // jadi memakai `installedAt` berarti menunggu tenggat yang baru ada setelah
+    // pekerjaan yang uangnya belum masuk sudah selesai dikerjakan.
+    // Dibangun sebagai tanggal LOKAL, bukan dari string UTC: `tenggatPelunasan`
+    // memundurkan hari dan mematok jam pada zona waktu server, jadi fixture UTC
+    // membuat test ini lulus atau gagal tergantung zona mesin yang menjalankannya.
+    const tayang = new Date(2026, 9, 20, 0, 0, 0, 0);
+    const tenggat = tenggatPelunasan(tayang);
+
+    assert.equal(HARI_TENGGAT_PELUNASAN, 3);
+    assert.equal(tenggat.getDate(), 17);
+    assert.equal(tenggat.getMonth(), 9);
+    assert.equal(tenggat.getHours(), 23);
+    assert.equal(tenggat.getMinutes(), 59);
+
+    // Batasnya inklusif: sesaat sebelum tengah malam belum terlambat.
+    assert.equal(tenggatPelunasanLewat(tayang, tenggat), false);
+    assert.equal(tenggatPelunasanLewat(tayang, new Date(tenggat.getTime() + 1)), true);
+    assert.equal(tenggatPelunasanLewat(tayang, new Date(2026, 9, 1)), false);
+  });
+});
+
+// ===========================================================================
+// KELAYAKAN BAYAR: SATU ATURAN UNTUK MODUL SESI, HALAMAN BAYAR, DAN KARTU
+// ===========================================================================
+describe('periksaKelayakanSesi', () => {
+  const { BookingStatus, PaymentTujuan } = require('@prisma/client');
+  const { SISA_WAKTU_MIN_MS, STATUS_BOLEH_BAYAR_LANJUTAN, periksaKelayakanSesi, bayarLanjutan } = require(JALUR_LEDGER);
+
+  const SEKARANG = new Date('2026-09-27T10:00:00.000Z');
+
+  function periksa(ganti = {}) {
+    return periksaKelayakanSesi({
+      statusPesanan: BookingStatus.PENDING_PAYMENT,
+      tujuanTagihan: PaymentTujuan.DP,
+      tenggatPesanan: new Date(SEKARANG.getTime() + 60 * 60 * 1000),
+      sekarang: SEKARANG,
+      ...ganti,
+    });
+  }
+
+  it('DP/FULL: hanya PENDING_PAYMENT, dan tenggat 24 jam pesanan tetap ditegakkan', () => {
+    for (const tujuan of [PaymentTujuan.DP, PaymentTujuan.FULL]) {
+      assert.deepEqual(periksa({ tujuanTagihan: tujuan }), { boleh: true });
+
+      // Pesanan yang sudah dibayar DP bukan lagi PENDING_PAYMENT; tagihan DP
+      // kedua di sana tidak boleh dibuka.
+      const statusSalah = periksa({ tujuanTagihan: tujuan, statusPesanan: BookingStatus.PAID_CONFIRMED });
+      assert.equal(statusSalah.boleh, false);
+      assert.equal(statusSalah.kode, 'STATUS_TIDAK_MENUNGGU_BAYAR');
+      assert.equal(statusSalah.status, 409);
+
+      const tanpaTenggat = periksa({ tujuanTagihan: tujuan, tenggatPesanan: null });
+      assert.equal(tanpaTenggat.kode, 'TENGGAT_TIDAK_TERSEDIA');
+
+      const lewat = periksa({
+        tujuanTagihan: tujuan,
+        tenggatPesanan: new Date(SEKARANG.getTime() - 1),
+      });
+      assert.equal(lewat.kode, 'TENGGAT_LEWAT');
+
+      // Sesi yang dibuka beberapa detik sebelum tenggat hangus di tengah pembeli
+      // mengisi datanya, dan uangnya masuk setelah pesanan sudah dihanguskan.
+      const terlaluDekat = periksa({
+        tujuanTagihan: tujuan,
+        tenggatPesanan: new Date(SEKARANG.getTime() + SISA_WAKTU_MIN_MS - 1),
+      });
+      assert.equal(terlaluDekat.kode, 'TENGGAT_TERLALU_DEKAT');
+    }
+  });
+
+  it('PELUNASAN/TAMBAHAN: pesanan berjalan boleh bayar, dan tenggat 24 jam TIDAK diperiksa', () => {
+    for (const tujuan of [PaymentTujuan.PELUNASAN, PaymentTujuan.TAMBAHAN]) {
+      assert.equal(bayarLanjutan(tujuan), true);
+
+      for (const status of STATUS_BOLEH_BAYAR_LANJUTAN) {
+        // `tenggatPesanan: null` DAN tenggat yang sudah lewat keduanya harus
+        // lolos. Pada pesanan yang sudah dibayar DP, `Booking.expiresAt` adalah
+        // tenggat 24 jam waktu pesanan masih baru — nilainya hampir pasti sudah
+        // lewat, dan memeriksanya menutup setiap pelunasan yang sah.
+        assert.deepEqual(
+          periksaKelayakanSesi({
+            statusPesanan: status,
+            tujuanTagihan: tujuan,
+            tenggatPesanan: null,
+            sekarang: SEKARANG,
+          }),
+          { boleh: true },
+          `${tujuan} pada ${status} tanpa tenggat`
+        );
+
+        assert.deepEqual(
+          periksaKelayakanSesi({
+            statusPesanan: status,
+            tujuanTagihan: tujuan,
+            tenggatPesanan: new Date(SEKARANG.getTime() - 30 * 24 * 60 * 60 * 1000),
+            sekarang: SEKARANG,
+          }),
+          { boleh: true },
+          `${tujuan} pada ${status} dengan tenggat lewat`
+        );
+      }
+    }
+
+    assert.equal(STATUS_BOLEH_BAYAR_LANJUTAN.includes(BookingStatus.IN_PRODUCTION), true);
+  });
+
+  it('PELUNASAN/TAMBAHAN: pesanan yang direfund atau sudah tutup tidak menerima uang baru', () => {
+    // Menerima setoran baru pada pesanan yang sedang direfund berarti uang masuk
+    // dan uang keluar berjalan bersamaan di satu pesanan — dan nominal refundnya
+    // dihitung dari uang masuk, jadi angkanya berubah di tengah proses.
+    for (const status of [
+      BookingStatus.REVIEW_REFUND,
+      BookingStatus.WAITING_BANK,
+      BookingStatus.PROCESS_REFUND,
+      BookingStatus.REFUNDED,
+      BookingStatus.CANCELLED,
+    ]) {
+      for (const tujuan of [PaymentTujuan.PELUNASAN, PaymentTujuan.TAMBAHAN]) {
+        const hasil = periksaKelayakanSesi({
+          statusPesanan: status,
+          tujuanTagihan: tujuan,
+          tenggatPesanan: null,
+          sekarang: SEKARANG,
+        });
+
+        assert.equal(hasil.boleh, false, `${tujuan} pada ${status} harus ditolak`);
+        assert.equal(hasil.kode, 'STATUS_TIDAK_MENERIMA_BAYAR');
+        assert.equal(hasil.status, 409);
+      }
+    }
   });
 });
 
@@ -3786,6 +4154,332 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
 });
 
 // ===========================================================================
+// BIAYA TAMBAHAN: SATU TAGIHAN SISA, BUKAN SATU TAGIHAN PER BIAYA
+// ===========================================================================
+describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan } = require('@prisma/client');
+
+  /**
+   * Database stateful dengan transaksi yang benar-benar rollback.
+   *
+   * Rollback harus dimodelkan, bukan dilewati: salah satu hal yang diuji di sini
+   * adalah bahwa penolakan 409 tidak meninggalkan `AdditionalCharge` yatim —
+   * kewajiban yang tercatat tanpa tagihan yang bisa dibayar.
+   */
+  function buatDbCharge(options = {}) {
+    let charges = (options.charges ?? []).map((c) => ({ ...c }));
+    let payments = (options.payments ?? []).map((p) => ({ ...p }));
+    const calls = [];
+
+    function tabel(ambilCharge, simpanCharge, ambilPayment, simpanPayment) {
+      return {
+        additionalCharge: {
+          async create(args) {
+            calls.push('additionalCharge.create');
+            simpanCharge([...ambilCharge(), { id: `ac-${ambilCharge().length + 1}`, ...args.data }]);
+          },
+        },
+        booking: {
+          async update(args) {
+            calls.push('booking.update');
+            if (args.where.id !== 'booking-1') {
+              throw new Prisma.PrismaClientKnownRequestError('pesanan tidak ada', {
+                code: 'P2025',
+                clientVersion: 'test',
+              });
+            }
+            return {
+              id: 'booking-1',
+              duration: 30,
+              user: { email: 'pembeli@contoh.test', name: 'Budi Santoso' },
+              billboard: { title: 'Billboard Sudirman', address: 'Jl. Sudirman' },
+              additionalCharges: ambilCharge().map((c) => ({ amount: c.amount })),
+              payments: ambilPayment().map((p) => ({
+                id: p.id,
+                tujuan: p.tujuan,
+                status: p.status,
+                jumlah: p.jumlah,
+                providerSessionId: p.providerSessionId,
+              })),
+            };
+          },
+        },
+        payment: {
+          async updateMany(args) {
+            calls.push('payment.updateMany');
+            const rows = ambilPayment();
+            const cocok = rows.filter(
+              (row) =>
+                row.id === args.where.id &&
+                row.status === args.where.status &&
+                row.providerSessionId === args.where.providerSessionId
+            );
+            if (cocok.length === 0) return { count: 0 };
+            simpanPayment(
+              rows.map((row) => (row.id === args.where.id ? { ...row, ...args.data } : row))
+            );
+            return { count: cocok.length };
+          },
+          async create(args) {
+            calls.push('payment.create');
+            const rows = ambilPayment();
+            // Indeks unik bersyarat `payment_satu_tagihan_menganggur`.
+            if (
+              rows.some(
+                (row) =>
+                  row.tujuan === args.data.tujuan && row.status === PaymentStatus.PENDING
+              )
+            ) {
+              throw new Prisma.PrismaClientKnownRequestError('tagihan menganggur duplikat', {
+                code: 'P2002',
+                clientVersion: 'test',
+                meta: { target: ['bookingId', 'tujuan'] },
+              });
+            }
+            const baris = {
+              id: `pay-baru-${rows.length + 1}`,
+              providerSessionId: null,
+              ...args.data,
+            };
+            simpanPayment([...rows, baris]);
+            return { id: baris.id };
+          },
+        },
+      };
+    }
+
+    const prismaPalsu = {
+      async $transaction(kerja) {
+        let chargeSalinan = charges.map((c) => ({ ...c }));
+        let paymentSalinan = payments.map((p) => ({ ...p }));
+        try {
+          const hasil = await kerja(
+            tabel(
+              () => chargeSalinan,
+              (nilai) => {
+                chargeSalinan = nilai;
+              },
+              () => paymentSalinan,
+              (nilai) => {
+                paymentSalinan = nilai;
+              }
+            )
+          );
+          charges = chargeSalinan;
+          payments = paymentSalinan;
+          calls.push('transaction.commit');
+          return hasil;
+        } catch (error) {
+          calls.push('transaction.rollback');
+          throw error;
+        }
+      },
+    };
+
+    return {
+      prisma: prismaPalsu,
+      calls,
+      charges: () => charges.map((c) => ({ ...c })),
+      payments: () => payments.map((p) => ({ ...p })),
+    };
+  }
+
+  function buatRouteCharge(fake, peran = 'ADMIN') {
+    const emails = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ADD_CHARGE, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': { sendEmail: async (args) => { emails.push(args); } },
+    });
+    return { route, emails };
+  }
+
+  function permintaan(isi) {
+    return new Request('https://contoh.test/api/admin/orders/add-charge', {
+      method: 'POST',
+      body: JSON.stringify({ orderId: 'booking-1', description: 'Revisi cetak', amount: '250000', ...isi }),
+    });
+  }
+
+  function tagihan(ganti = {}) {
+    return {
+      id: 'pay-tambahan',
+      tujuan: PaymentTujuan.TAMBAHAN,
+      status: PaymentStatus.PENDING,
+      jumlah: new Prisma.Decimal('0'),
+      providerSessionId: null,
+      ...ganti,
+    };
+  }
+
+  it('menolak pemanggil yang bukan admin tanpa menulis apa pun', async () => {
+    const fake = buatDbCharge();
+    const { route, emails } = buatRouteCharge(fake, 'USER');
+
+    const response = await route.POST(permintaan({}));
+
+    assert.equal(response.status, 401);
+    assert.equal(fake.charges().length, 0);
+    assert.equal(fake.calls.length, 0);
+    assert.equal(emails.length, 0);
+  });
+
+  it('pesanan tanpa tagihan TAMBAHAN: membuat satu baris sebesar seluruh sisa tambahan', async () => {
+    const fake = buatDbCharge();
+    const { route, emails } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '250000' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.charges().length, 1);
+
+    const baru = fake.payments();
+    assert.equal(baru.length, 1);
+    assert.equal(baru[0].tujuan, PaymentTujuan.TAMBAHAN);
+    assert.equal(baru[0].status, PaymentStatus.PENDING);
+    assert.equal(baru[0].jumlah.toString(), '250000');
+    assert.equal(fake.calls.includes('transaction.commit'), true);
+
+    // Surat dikirim setelah commit, menyebut sisa — bukan hanya biaya barunya.
+    assert.equal(emails.length, 1);
+    assert.equal(emails[0].to, 'pembeli@contoh.test');
+  });
+
+  it('biaya kedua tidak membuat baris kedua, hanya menaikkan jumlah yang ada', async () => {
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('250000') }],
+      payments: [tagihan({ jumlah: new Prisma.Decimal('250000') })],
+    });
+    const { route } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '300000' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.charges().length, 2);
+
+    // Satu baris, bukan dua. Indeks `payment_satu_tagihan_menganggur` hanya
+    // mengizinkan satu tagihan TAMBAHAN menganggur per pesanan, jadi tidak ada
+    // tempat untuk satu tagihan per biaya — dan memang tidak perlu ada: yang
+    // ditagihkan kepada pembeli adalah satu angka.
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.payments()[0].jumlah.toString(), '550000');
+    assert.equal(fake.calls.includes('payment.create'), false);
+    assert.equal(fake.calls.includes('payment.updateMany'), true);
+  });
+
+  it('nominal tagihan adalah SISA: yang sudah dibayar tidak ditagih ulang', async () => {
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('400000') }],
+      payments: [
+        // Tagihan lama sudah dibayar, jadi tidak lagi menganggur.
+        tagihan({ id: 'pay-lunas', status: PaymentStatus.PAID, jumlah: new Prisma.Decimal('400000'), providerSessionId: 'ps-lama' }),
+      ],
+    });
+    const { route } = buatRouteCharge(fake);
+
+    await route.POST(permintaan({ amount: '150000' }));
+
+    const baru = fake.payments().filter((p) => p.status === PaymentStatus.PENDING);
+    assert.equal(baru.length, 1);
+    // 550.000 total ditagihkan, 400.000 sudah masuk → 150.000, bukan 550.000.
+    assert.equal(baru[0].jumlah.toString(), '150000');
+  });
+
+  it('tagihan TAMBAHAN yang sesinya sudah dibuka menolak 409 dan biayanya rollback', async () => {
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('250000') }],
+      payments: [tagihan({ jumlah: new Prisma.Decimal('250000'), providerSessionId: 'ps-hidup' })],
+    });
+    const { route, emails } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '300000' }));
+
+    assert.equal(response.status, 409);
+
+    // Sesi Xendit dibuat atas nominal tertentu, dan webhook menolak pembayaran
+    // yang nominalnya tidak sama (`NOMINAL_TIDAK_SESUAI`). Menaikkan `jumlah`
+    // baris yang sesinya hidup berarti uang pembeli diterima gerbang lalu
+    // ditolak sistem kita: masuk ke Xendit, tidak pernah tercatat di sini.
+    assert.equal(fake.payments()[0].jumlah.toString(), '250000');
+
+    // Biayanya TIDAK tertulis. Tanpa rollback, admin melihat "gagal" lalu
+    // mencoba lagi, dan `AdditionalCharge` kedua ikut tertinggal — kewajiban
+    // yang tidak punya tagihan.
+    assert.equal(fake.charges().length, 1);
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+    assert.equal(fake.calls.includes('transaction.commit'), false);
+    assert.equal(emails.length, 0);
+  });
+
+  it('pembuatan sesi yang menang balapan membatalkan seluruh penulisan', async () => {
+    const fake = buatDbCharge({
+      charges: [{ id: 'ac-1', amount: new Prisma.Decimal('250000') }],
+      // Baris yang dibaca masih `PENDING` + `providerSessionId: null`, tetapi CAS
+      // di bawah tidak menemukan pasangannya: status berubah di antara keduanya.
+      payments: [tagihan({ status: PaymentStatus.EXPIRED, jumlah: new Prisma.Decimal('250000') })],
+    });
+    // Pembacaan melaporkan PENDING, penulisan menemui EXPIRED.
+    const aslinya = fake.prisma.$transaction;
+    fake.prisma.$transaction = (kerja) =>
+      aslinya((tx) => {
+        const bookingAsli = tx.booking.update;
+        tx.booking.update = async (args) => {
+          const pesanan = await bookingAsli(args);
+          return {
+            ...pesanan,
+            payments: pesanan.payments.map((p) => ({ ...p, status: PaymentStatus.PENDING })),
+          };
+        };
+        return kerja(tx);
+      });
+
+    const { route, emails } = buatRouteCharge(fake);
+
+    const response = await route.POST(permintaan({ amount: '300000' }));
+
+    assert.equal(response.status, 409);
+    assert.equal(fake.charges().length, 1);
+    assert.equal(fake.payments()[0].jumlah.toString(), '250000');
+    assert.equal(fake.calls.includes('transaction.rollback'), true);
+    assert.equal(emails.length, 0);
+  });
+
+  it('kegagalan email tidak membatalkan biaya yang sudah commit', async () => {
+    const fake = buatDbCharge();
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ADD_CHARGE, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'SUPER_ADMIN' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+      '@/lib/mail': { sendEmail: async () => { throw new Error('smtp mati'); } },
+    });
+
+    const response = await route.POST(permintaan({}));
+
+    // SMTP bukan fakta uang. Biaya dan tagihannya sudah sah tercatat.
+    assert.equal(response.status, 200);
+    assert.equal(fake.charges().length, 1);
+    assert.equal(fake.payments().length, 1);
+    assert.equal(fake.calls.includes('transaction.commit'), true);
+  });
+
+  it('menolak nominal yang bukan angka positif sebelum menyentuh database', async () => {
+    const fake = buatDbCharge();
+    const { route } = buatRouteCharge(fake);
+
+    for (const amount of ['0', '-5000', 'seratus ribu']) {
+      const response = await route.POST(permintaan({ amount }));
+      assert.equal(response.status, 400, `amount ${amount}`);
+    }
+
+    assert.equal(fake.calls.length, 0);
+    assert.equal(fake.charges().length, 0);
+  });
+});
+
+// ===========================================================================
 // LAPORAN: DIBUKUKAN PADA WAKTU UANG, BUKAN PADA STATUS PESANAN
 // ===========================================================================
 describe('getRevenueData', () => {
@@ -4008,5 +4702,66 @@ describe('batas serialisasi props client', () => {
     assert.match(sumber, /uangMasuk\(order\.payments\)/);
     assert.match(sumber, /sisaPokokLedger\(order\.totalPrice, order\.payments\)/);
     assert.match(sumber, /p\.tujuan === PaymentTujuan\.TAMBAHAN/);
+  });
+
+  it('rumus sisa biaya tambahan dibaca dari ledger, tidak ditulis ulang per halaman', () => {
+    // Rumusnya dulu ada tiga salinan: invoice pelanggan, halaman transaksi admin,
+    // dan (setelah fase ini) route biaya tambahan. Tiga salinan dari satu aturan
+    // berarti invoice pelanggan dan layar admin bisa menyebut sisa yang berbeda
+    // untuk pesanan yang sama — dan yang salah tetap ditagihkan.
+    const pembaca = [
+      ['invoice', JALUR_INVOICE],
+      ['orders/page', path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'orders', 'page.tsx')],
+      ['add-charge', JALUR_ROUTE_ADD_CHARGE],
+    ];
+
+    for (const [nama, jalur] of pembaca) {
+      const sumber = fs.readFileSync(jalur, 'utf8');
+      assert.match(sumber, /from ['"]@\/lib\/pembayaran['"]/, `${nama} tidak membaca ledger`);
+      assert.match(sumber, /sisaTambahan/, `${nama} tidak memakai sisaTambahan`);
+    }
+  });
+
+  it('tenggat pelunasan H-3 dihitung server atas startDate, bukan installedAt dan bukan di browser', () => {
+    const penulisTenggat = [
+      ['DashboardWrapper', JALUR_DASHBOARD_WRAPPER],
+      ['orders/page', path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'orders', 'page.tsx')],
+    ];
+
+    for (const [nama, jalur] of penulisTenggat) {
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+
+      // `installedAt` baru terisi setelah pemasangan benar-benar dilakukan, jadi
+      // memakainya berarti tenggat pelunasan tidak pernah ada sampai billboard
+      // terpasang — padahal uangnya dibutuhkan justru untuk mencetak dan memasang.
+      assert.match(kode, /tenggatPelunasanLewat\(\s*[\w.]*startDate/, `${nama} tidak memakai startDate`);
+      assert.doesNotMatch(kode, /tenggatPelunasan\w*\(\s*[\w.]*installedAt/, `${nama} memakai installedAt`);
+
+      // Hasilnya menyeberang sebagai ISO string dan boolean yang sudah diputuskan
+      // server. Kalau browser menghitungnya sendiri, "terlambat" bergantung pada
+      // jam mesin pembeli — dan jam itu bisa disetel.
+      assert.match(kode, /tenggatPelunasanISO/, `${nama} tidak menyerialisasi tenggat sebagai ISO`);
+    }
+
+    // Komponen browser tidak boleh memegang rumusnya sama sekali.
+    for (const [nama, jalur] of [['BookingCard', JALUR_BOOKING_CARD], ['TransactionClient', JALUR_TRANSACTION_CLIENT]]) {
+      const kode = kodeSaja(fs.readFileSync(jalur, 'utf8'));
+      assert.doesNotMatch(kode, /tenggatPelunasan\s*\(/, `${nama} menghitung tenggat sendiri`);
+      assert.doesNotMatch(kode, /HARI_TENGGAT_PELUNASAN/, `${nama} memegang konstanta tenggat`);
+    }
+  });
+
+  it('kelayakan bayar diputuskan server; kartu pesanan hanya membaca hasilnya', () => {
+    const wrapper = kodeSaja(fs.readFileSync(JALUR_DASHBOARD_WRAPPER, 'utf8'));
+    assert.match(wrapper, /periksaKelayakanSesi/);
+
+    // Gerbang tombol dulu empat syarat hardcode di komponen browser. Boolean dari
+    // client tidak pernah menjadi dasar penulisan — sesi tetap diperiksa ulang di
+    // server — tetapi tombol yang syaratnya menyimpang dari server berarti pembeli
+    // menekan tombol yang selalu dijawab 409.
+    const kartu = kodeSaja(fs.readFileSync(JALUR_BOOKING_CARD, 'utf8'));
+    assert.match(kartu, /bolehBayar/);
+    assert.doesNotMatch(kartu, /periksaKelayakanSesi/, 'BookingCard mengulang aturan kelayakan');
+    assert.doesNotMatch(kartu, /STATUS_BOLEH_BAYAR_LANJUTAN/, 'BookingCard memegang daftar status');
   });
 });

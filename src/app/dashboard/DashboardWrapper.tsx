@@ -6,7 +6,17 @@ import { authOptions } from "@/lib/auth";
 import { redirect } from 'next/navigation';
 import DashboardClientPage from './DashboardClientPage'; // Impor komponen client yang baru kita buat
 import { jumlah, keAngka, kurang, lebihBesar, lebihKecil, persen, uangUntukClient } from '@/lib/money';
-import { masihAdaSisa, sisaTagihan, sudahLunas, uangMasuk, uangMasukSemua } from '@/lib/pembayaran';
+import {
+  masihAdaSisa,
+  periksaKelayakanSesi,
+  sisaTagihan,
+  sisaTambahan,
+  sudahLunas,
+  tenggatPelunasan,
+  tenggatPelunasanLewat,
+  uangMasuk,
+  uangMasukSemua,
+} from '@/lib/pembayaran';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
 
 /**
@@ -55,6 +65,10 @@ export default async function DashboardWrapper() {
         id: true,
         status: true,
         expiresAt: true,
+        // Acuan tenggat pelunasan H-3 (`tenggatPelunasan`). Bukan `installedAt`:
+        // itu baru terisi setelah pemasangan, sedangkan uang pelunasannya justru
+        // dibutuhkan untuk mencetak dan memasang.
+        startDate: true,
         totalPrice: true,
         // `dpAmount` tetap diambil, tapi hanya sebagai catatan RENCANA: berapa
         // yang hendak dibayar di muka saat pesanan dibuat. Ia TIDAK dipakai
@@ -84,8 +98,17 @@ export default async function DashboardWrapper() {
         // `providerSessionId`, `providerReferenceId`, `providerPaymentId`, dan
         // `callbackPayload`; tidak satu pun boleh menyeberang ke browser.
         payments: {
-          select: { tujuan: true, status: true, jumlah: true },
+          // `createdAt` ikut karena tagihan mana yang dibayar berikutnya
+          // ditentukan urutan pembuatannya — aturan yang sama dengan
+          // `tagihanBerikutnya` di `src/lib/sesi-pembayaran.ts`. Tanpa itu kartu
+          // pesanan bisa memberi label "Lunasi Sekarang" pada pesanan yang
+          // sebenarnya akan membuka tagihan biaya tambahan.
+          select: { tujuan: true, status: true, jumlah: true, createdAt: true },
         },
+        // Pasangan angka untuk biaya tambahan: tagihannya di sini,
+        // pembayarannya pada baris Payment bertujuan TAMBAHAN. Keduanya berada
+        // DI LUAR `totalPrice` dan tidak pernah dicampur ke pokok.
+        additionalCharges: { select: { amount: true } },
       },
   });
 
@@ -99,6 +122,10 @@ export default async function DashboardWrapper() {
   // sebagai angka jadi. Kartu pesanan tidak menghitung uang sendiri: begitu
   // Decimal menjadi angka biasa, rumus apa pun di browser kehilangan jaminan
   // presisi yang dijaga `src/lib/money.ts`.
+  // Satu jam untuk seluruh kartu di halaman ini. Memanggil `new Date()` per
+  // pesanan membuat dua kartu bisa menilai tenggat yang sama secara berbeda.
+  const sekarang = new Date();
+
   const siapkanPesanan = (b: (typeof myBookings)[number]) => {
     const pokokMasuk = uangMasuk(b.payments);
     const sisaPokok = sisaTagihan(b.totalPrice, b.payments);
@@ -117,6 +144,33 @@ export default async function DashboardWrapper() {
     // sepeser pun — di sana belum ada fakta yang bisa dipakai. Dihitung di sini
     // supaya kartu pesanan tidak perlu mengurangkan dua nominal sendiri.
     const sisaSetelahDpRencana = rencanaDp ? kurang(b.totalPrice, b.dpAmount) : null;
+
+    // TAGIHAN BERIKUTNYA DIPUTUSKAN DI SINI, bukan di browser.
+    //
+    // Yang paling tua menang — aturan yang sama dengan `tagihanBerikutnya` di
+    // `src/lib/sesi-pembayaran.ts`, supaya label tombol di kartu menyebut
+    // tagihan yang benar-benar akan dibuka endpoint sesi. Satu pesanan bisa
+    // punya pelunasan dan biaya tambahan menganggur bersamaan.
+    const tagihanBerikutnya =
+      [...b.payments]
+        .filter((p) => p.status === PaymentStatus.PENDING)
+        .sort((x, y) => x.createdAt.getTime() - y.createdAt.getTime())[0] ?? null;
+
+    // Boleh-tidaknya membayar adalah keputusan SERVER, dan aturannya dibaca dari
+    // satu tempat. Gerbang lama di kartu pesanan ("PENDING_PAYMENT dan expiresAt
+    // masih hidup") menyembunyikan tombol dari setiap pelunasan yang sah:
+    // pesanan yang sudah dibayar DP tidak lagi PENDING_PAYMENT, dan `expiresAt`
+    // -nya — tenggat 24 jam waktu pesanan masih baru — sudah lewat.
+    const bolehBayar = tagihanBerikutnya
+      ? periksaKelayakanSesi({
+          statusPesanan: b.status,
+          tujuanTagihan: tagihanBerikutnya.tujuan,
+          tenggatPesanan: b.expiresAt,
+          sekarang,
+        }).boleh
+      : false;
+
+    const sisaBiayaTambahan = sisaTambahan(b.additionalCharges, b.payments);
 
     return {
       id: b.id,
@@ -137,10 +191,21 @@ export default async function DashboardWrapper() {
       designRejectionReason: b.designRejectionReason,
       refundProof: b.refundProof,
       billboard: b.billboard,
-      // Tombol bayar hanya boleh tampil bila memang ada tagihan yang masih dapat
-      // dibayar. Status `PENDING_PAYMENT` saja tidak cukup: tagihannya bisa sudah
-      // ditutup sebagai EXPIRED oleh alur sesi pembayaran.
-      adaTagihanPending: b.payments.some((p) => p.status === PaymentStatus.PENDING),
+      // Tujuan tagihan sebagai teks biasa, BUKAN nilai enum Prisma: mengimpor
+      // `PaymentTujuan` di komponen client menarik runtime Prisma ke bundle
+      // browser. Tipe union di sisi kartu pesanan menjaga nilainya tetap benar.
+      tujuanTagihan: (tagihanBerikutnya?.tujuan ?? null) as string | null,
+      /** Kesimpulan `periksaKelayakanSesi` di server; kartu hanya membacanya. */
+      bolehBayar,
+      // Biaya tambahan punya panelnya sendiri. Dicampur ke sisa pokok, pesanan
+      // yang pokoknya sudah lunas akan terlihat belum lunas.
+      sisaTambahan: uangUntukClient(sisaBiayaTambahan),
+      // Tenggat H-3 ditandai, TIDAK ditegakkan: tagihan tetap bisa dibayar
+      // setelahnya. Uangnya dibutuhkan untuk mencetak dan memasang, jadi
+      // menolaknya hanya membuat pesanan mandek tanpa jalan keluar.
+      tenggatPelunasanISO: tenggatPelunasan(b.startDate).toISOString(),
+      terlambatLunas:
+        lebihBesar(sisaPokok, 0) && tenggatPelunasanLewat(b.startDate, sekarang),
       // Fakta ledger. `pokokMasuk` adalah uang yang benar-benar diterima untuk
       // pokok sewa; `sisaPokok` sisanya. `masihAdaSisa` sengaja terpisah dari
       // "sisaPokok > 0": pesanan yang belum dibayar sepeser pun juga punya sisa

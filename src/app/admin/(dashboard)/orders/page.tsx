@@ -1,7 +1,13 @@
 // src/app/admin/(dashboard)/orders/page.tsx
 import { prisma } from '@/lib/prisma';
-import { jumlah, kurang, lebihBesar, uangUntukClient } from '@/lib/money';
-import { sisaTagihan, uangMasuk } from '@/lib/pembayaran';
+import { jumlah, lebihBesar, uangUntukClient } from '@/lib/money';
+import {
+  sisaTagihan,
+  sisaTambahan,
+  tenggatPelunasan,
+  tenggatPelunasanLewat,
+  uangMasuk,
+} from '@/lib/pembayaran';
 import { PaymentStatus, PaymentTujuan } from '@prisma/client';
 import TransactionClient, { type TransaksiUntukClient } from './TransactionClient';
 import Link from 'next/link';
@@ -108,6 +114,10 @@ export default async function AdminTransactionsPage({
   // sebagai number. Komponen client tidak pernah menghitung uang sendiri: di
   // sana Decimal sudah menjadi number biasa, sehingga rumus apa pun di sana
   // kehilangan jaminan presisi yang dijaga `src/lib/money.ts`.
+  // Satu jam untuk seluruh tabel. `new Date()` per baris membuat dua pesanan
+  // dengan tanggal tayang sama dinilai berbeda soal keterlambatannya.
+  const sekarang = new Date();
+
   const transactionsUntukClient: TransaksiUntukClient[] = transactions.map(({ dpAmount: _dpAmount, ...trx }) => {
     // `dpAmount` dicabut di sini, di destructuring, BUKAN sekadar tidak ditulis
     // ulang di bawah. `...trx` menyalin seluruh kolom pesanan, jadi kolom uang
@@ -122,14 +132,23 @@ export default async function AdminTransactionsPage({
     // `TAMBAHAN` berada DI LUAR `totalPrice`, jadi punya pasangan angkanya
     // sendiri: tagihannya dari `AdditionalCharge`, pembayarannya dari baris
     // Payment bertujuan TAMBAHAN. Keduanya tidak pernah dicampur ke pokok.
+    //
+    // Rumus sisanya dulu ditulis ulang di sini, dan salinan kedua ada di halaman
+    // invoice. Sekarang keduanya membaca `sisaTambahan` di
+    // `src/lib/pembayaran.ts` — dua salinan dari satu aturan adalah dua tempat
+    // yang bisa menyimpang, dan yang menyimpang adalah angka yang ditagihkan.
     const totalTambahan = jumlah(...trx.additionalCharges.map((c) => c.amount));
+    const belumDibayarTambahan = sisaTambahan(trx.additionalCharges, trx.payments);
+
+    // `tambahanDibayar` TIDAK diturunkan dari `totalTambahan - sisaTambahan`:
+    // sisanya ditahan di nol, jadi pada pesanan yang kelebihan bayar selisih itu
+    // melaporkan uang masuk lebih kecil daripada yang benar-benar diterima.
+    // Angka ini dibaca admin sebagai kas, jadi ia dijumlahkan dari barisnya.
     const tambahanDibayar = jumlah(
       ...trx.payments
         .filter((p) => p.status === PaymentStatus.PAID && p.tujuan === PaymentTujuan.TAMBAHAN)
         .map((p) => p.jumlah)
     );
-    const sisaTambahanMentah = kurang(totalTambahan, tambahanDibayar);
-    const sisaTambahan = lebihBesar(sisaTambahanMentah, 0) ? sisaTambahanMentah : 0;
 
     return {
       ...trx,
@@ -151,9 +170,17 @@ export default async function AdminTransactionsPage({
         sisaPokok: uangUntukClient(sisaPokok),
         totalTambahan: uangUntukClient(totalTambahan),
         tambahanDibayar: uangUntukClient(tambahanDibayar),
-        sisaTambahan: uangUntukClient(sisaTambahan),
+        sisaTambahan: uangUntukClient(belumDibayarTambahan),
         grandTotal: uangUntukClient(jumlah(trx.totalPrice, totalTambahan)),
         adaUangMasuk: lebihBesar(pokokMasuk, 0),
+        // Tenggat H-3 (`tenggatPelunasan` atas `startDate`) dihitung di sini,
+        // bukan di komponen client: tenggat yang dihitung browser mengikuti zona
+        // waktu perangkat admin, dan dua admin akan melihat batas yang berbeda
+        // untuk pesanan yang sama. Ia DITANDAI, tidak ditegakkan — pelunasan
+        // tetap diterima setelahnya (lihat `periksaKelayakanSesi`).
+        tenggatPelunasanISO: tenggatPelunasan(trx.startDate).toISOString(),
+        terlambatLunas:
+          lebihBesar(sisaPokok, 0) && tenggatPelunasanLewat(trx.startDate, sekarang),
       },
     };
   });
