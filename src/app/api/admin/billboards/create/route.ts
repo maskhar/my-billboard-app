@@ -15,8 +15,14 @@ import {
 export async function POST(req: Request) {
   try {
     // 1. Cek Apakah User adalah Admin
+    //
+    // Syaratnya dulu `role !== 'ADMIN'`, yang justru MENOLAK `SUPER_ADMIN`:
+    // pemegang peran tertinggi tidak bisa menambah billboard sama sekali dan
+    // hanya menerima "Akses Ditolak". Dua puluh route admin lain sudah memakai
+    // bentuk daftar di bawah — kesalahan yang sama pernah diperbaiki di
+    // `admin/users/delete/route.ts`.
     const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== 'ADMIN') {
+    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 

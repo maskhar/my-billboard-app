@@ -9,6 +9,7 @@ import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, lebihBesar, rupiah } from "@/lib/money";
 import { masihAdaSisa, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
 import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
+import { urlBuktiSah } from "@/lib/url-bukti";
 import { Prisma } from "@prisma/client";
 
 /**
@@ -59,23 +60,20 @@ export async function POST(req: Request) {
           return rapi === "" ? null : rapi.slice(0, batas);
       };
 
-      // Kedua kolom bukti hanya menerima URL http/https. Tanpa pemeriksaan ini,
-      // teks apa pun bisa masuk ke atribut `src` gambar di dashboard pelanggan
-      // — termasuk skema `javascript:` dan `data:`.
-      const urlBukti = (nilai: unknown): string | null => {
-          const teks = teksOpsional(nilai, 2000);
-          if (!teks) return null;
-          try {
-              const url = new URL(teks);
-              return url.protocol === 'http:' || url.protocol === 'https:' ? teks : null;
-          } catch {
-              return null;
-          }
-      };
-
       const alasan = teksOpsional(reason, 1000);
-      const buktiRefund = urlBukti(refundProof);
-      const buktiPasang = urlBukti(installationProof);
+
+      // Kedua kolom bukti hanya menerima URL yang layak dirender. Pemeriksaannya
+      // dulu tinggal di sini sebagai `new URL(teks)` tanpa base — dan itu
+      // MELEMPAR untuk jalur root-relatif, lalu mengembalikan `null`. Mode
+      // unggah lokal di `components/ImageUpload.tsx` justru mengembalikan
+      // `/uploads/designs/{uuid}.{ext}`, jadi setiap bukti refund dan bukti
+      // pemasangan yang diunggah lewat jalur itu dibuang diam-diam: admin
+      // melihat "Update Sukses", kolomnya tetap kosong, dan pesanan REFUNDED
+      // ditolak 422 karena "bukti belum dilampirkan" padahal baru saja diunggah.
+      // `urlBuktiSah` menerima kedua bentuk dan tetap menolak `javascript:`,
+      // `data:`, serta `//host`.
+      const buktiRefund = urlBuktiSah(refundProof);
+      const buktiPasang = urlBuktiSah(installationProof);
 
       // Pembacaan pesanan, pemeriksaan transisi, gerbang refund, dan penulisan
       // hidup dalam satu transaksi. Sebelumnya `payments` dan `status` dibaca di
@@ -137,7 +135,7 @@ export async function POST(req: Request) {
                       keadaan: 'REFUND_TAK_LENGKAP',
                       pesan:
                           "Bukti transfer wajib dilampirkan sebelum pesanan ditandai REFUNDED. " +
-                          "Unggah bukti berupa URL http/https lewat tombol Transfer.",
+                          "Unggah buktinya lewat tombol Transfer, atau tempelkan tautan http/https.",
                   } as const;
               }
 

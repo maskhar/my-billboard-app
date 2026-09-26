@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
@@ -28,6 +29,16 @@ const ALLOWED_TYPES: Record<string, string> = {
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10MB
 
+// Batas unggahan per pengguna.
+//
+// Tanpa batas ini, satu akun yang sudah login bisa menulis 10 MB per permintaan
+// ke `public/uploads/designs` tanpa henti: berkasnya tidak pernah dihapus siapa
+// pun, tidak terikat pesanan mana pun bila `orderId` tidak dikirim, dan
+// penuhnya disk menjatuhkan seluruh aplikasi, bukan hanya unggahan. Kuncinya id
+// sesi, bukan IP — IP mudah dipalsukan lewat header proxy.
+const BATAS_UNGGAH = 20;
+const JENDELA_UNGGAH_MS = 10 * 60 * 1000;
+
 // Magic number tiap format. MIME dari client (`file.type`) mudah dipalsukan,
 // jadi isi berkas ikut diperiksa agar tipe yang diklaim benar-benar cocok.
 function cocokkanTandaTangan(buffer: Buffer, mime: string): boolean {
@@ -52,6 +63,21 @@ function cocokkanTandaTangan(buffer: Buffer, mime: string): boolean {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+
+  // Diperiksa SEBELUM `req.formData()`: membaca body berarti menerima 10 MB ke
+  // memori proses, jadi menolak setelahnya tidak menghemat apa pun.
+  const batas = rateLimit({
+    key: `unggah:${session.user.id}`,
+    limit: BATAS_UNGGAH,
+    windowMs: JENDELA_UNGGAH_MS,
+  });
+
+  if (!batas.success) {
+    return NextResponse.json(
+      { message: `Terlalu banyak unggahan. Coba lagi dalam ${batas.retryAfterSeconds} detik.` },
+      { status: 429, headers: rateLimitHeaders(BATAS_UNGGAH, batas) }
+    );
+  }
 
   try {
       const formData = await req.formData();
@@ -114,9 +140,16 @@ export async function POST(req: Request) {
 
       await writeFile(filePath, buffer);
 
-      return NextResponse.json({ url: `/uploads/designs/${filename}` });
+      return NextResponse.json(
+          { url: `/uploads/designs/${filename}` },
+          { headers: rateLimitHeaders(BATAS_UNGGAH, batas) }
+      );
 
   } catch (error) {
+      // Kategori galat saja: jalur berkas absolut dan galat Prisma membawa
+      // informasi yang tidak perlu ada di log produksi.
+      const kategori = error instanceof Error ? error.name.slice(0, 80) : 'galat-tidak-dikenal';
+      console.error(`[upload] gagal menyimpan berkas: ${kategori}`);
       return NextResponse.json({ message: "Gagal Upload" }, { status: 500 });
   }
 }

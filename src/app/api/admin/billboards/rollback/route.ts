@@ -7,7 +7,12 @@ import { safeJsonParse } from "@/lib/safe-json";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== 'ADMIN') return NextResponse.json({ message: "401" }, { status: 401 });
+    // Syaratnya dulu `role !== 'ADMIN'`, yang MENOLAK `SUPER_ADMIN` — sama
+    // dengan kesalahan yang sudah diperbaiki di `admin/users/delete` dan
+    // `admin/billboards/create`.
+    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+        return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
+    }
 
     const { historyId } = await req.json();
 

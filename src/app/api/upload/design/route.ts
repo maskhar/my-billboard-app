@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
@@ -28,6 +29,12 @@ const ALLOWED_TYPES: Record<string, string> = {
 
 const MAX_BYTES = 10 * 1024 * 1024; // 10MB
 
+// Batas unggahan per pengguna — alasan lengkapnya di `api/upload/route.ts`,
+// yang menulis ke direktori yang sama. Kuncinya dibedakan supaya kedua route
+// tidak saling menghabiskan kuota.
+const BATAS_UNGGAH = 20;
+const JENDELA_UNGGAH_MS = 10 * 60 * 1000;
+
 // Magic number tiap format. MIME dari client (`file.type`) mudah dipalsukan,
 // jadi isi berkas ikut diperiksa agar tipe yang diklaim benar-benar cocok.
 function cocokkanTandaTangan(buffer: Buffer, mime: string): boolean {
@@ -51,11 +58,24 @@ function cocokkanTandaTangan(buffer: Buffer, mime: string): boolean {
 
 export async function POST(req: Request) {
   try {
-    console.log("📂 Memulai proses upload desain...");
-
     const session = await getServerSession(authOptions);
     if (!session) {
         return NextResponse.json({ message: "Login required" }, { status: 401 });
+    }
+
+    // Diperiksa SEBELUM `req.formData()`: membaca body berarti menerima 10 MB ke
+    // memori proses, jadi menolak setelahnya tidak menghemat apa pun.
+    const batas = rateLimit({
+      key: `unggah-desain:${session.user.id}`,
+      limit: BATAS_UNGGAH,
+      windowMs: JENDELA_UNGGAH_MS,
+    });
+
+    if (!batas.success) {
+      return NextResponse.json(
+        { message: `Terlalu banyak unggahan. Coba lagi dalam ${batas.retryAfterSeconds} detik.` },
+        { status: 429, headers: rateLimitHeaders(BATAS_UNGGAH, batas) }
+      );
     }
 
     // Ambil Data dengan aman
@@ -135,15 +155,23 @@ export async function POST(req: Request) {
     const filePath = path.join(uploadDir, filename);
 
     // 3. Tulis File
+    //
+    // Jalur absolut tidak lagi dicatat: `${filePath}` memuat struktur direktori
+    // server apa adanya, dan log produksi bukan tempatnya.
     await writeFile(filePath, buffer);
-    console.log(`✅ Desain tersimpan di: ${filePath}`);
 
     // Kembalikan URL publik
     const publicUrl = `/uploads/designs/${filename}`;
-    return NextResponse.json({ url: publicUrl, message: "Sukses Upload!" });
+    return NextResponse.json(
+      { url: publicUrl, message: "Sukses Upload!" },
+      { headers: rateLimitHeaders(BATAS_UNGGAH, batas) }
+    );
 
-  } catch (error: any) {
-      console.error("🔥 Server Upload Error:", error);
+  } catch (error) {
+      // Objek galat tidak dicatat mentah: galat filesystem membawa jalur
+      // absolut, galat Prisma membawa query beserta nilai kolomnya.
+      const kategori = error instanceof Error ? error.name.slice(0, 80) : 'galat-tidak-dikenal';
+      console.error(`[upload-design] gagal memproses unggahan: ${kategori}`);
       // Pesan error internal tidak dibocorkan ke client.
       return NextResponse.json({ message: "Gagal memproses upload." }, { status: 500 });
   }

