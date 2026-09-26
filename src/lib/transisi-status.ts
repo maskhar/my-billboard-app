@@ -19,6 +19,7 @@
 import { addHours, isAfter } from 'date-fns';
 import { BookingStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { tutupTagihanMenganggur } from '@/lib/tutup-tagihan';
 
 /**
  * Untuk setiap status: daftar status berikutnya yang boleh dituju.
@@ -189,6 +190,12 @@ export function hitungTenggatPembayaran(sejak: Date = new Date()): Date {
  * kalau nanti dibutuhkan pengekspirasian tepat waktu, jadwalkan fungsi yang
  * sama ini, jangan tulis logika kedua.
  *
+ * Tagihan `Payment` miliknya ikut ditutup, di transaksi yang sama. Tanpa itu
+ * pesanan hangus meninggalkan baris `PENDING` yang menempati pasangan
+ * `(bookingId, tujuan)` pada indeks unik bersyarat
+ * `payment_satu_tagihan_menganggur` dan terus terbaca sebagai tagihan yang
+ * menunggu dibayar — alasan lengkapnya di `src/lib/tutup-tagihan.ts`.
+ *
  * @param billboardId Bila diisi, hanya menyapu pesanan billboard itu.
  * @returns jumlah pesanan yang dihanguskan.
  */
@@ -196,7 +203,12 @@ export async function sapuPesananKedaluwarsa(billboardId?: string): Promise<numb
   const sekarang = new Date();
 
   try {
-    const { count } = await prisma.booking.updateMany({
+    // Id dibaca lebih dulu karena `updateMany` tidak memberi tahu baris mana
+    // yang berubah, sementara penutupan tagihan perlu tahu pesanan mana yang
+    // benar-benar hangus. Tidak dibatasi `take`: batas apa pun menyisakan
+    // tanggal terkunci sampai sapuan berikutnya, dan itu justru hal yang
+    // fungsi ini ada untuk mencegah.
+    const kandidat = await prisma.booking.findMany({
       where: {
         status: BookingStatus.PENDING_PAYMENT,
         // `expiresAt: null` sengaja TIDAK ikut disapu. Baris yang dibuat
@@ -206,10 +218,46 @@ export async function sapuPesananKedaluwarsa(billboardId?: string): Promise<numb
         expiresAt: { not: null, lt: sekarang },
         ...(billboardId ? { billboardId } : {}),
       },
-      data: {
-        status: BookingStatus.CANCELLED,
-        cancelReason: 'Dibatalkan otomatis: batas waktu pembayaran 24 jam terlewat.',
-      },
+      select: { id: true },
+    });
+
+    if (kandidat.length === 0) return 0;
+
+    const ids = kandidat.map((b) => b.id);
+
+    const count = await prisma.$transaction(async (tx) => {
+      // `status` dan `expiresAt` tetap disyaratkan di sini: antara pembacaan di
+      // atas dan penulisan ini, salah satu pesanan bisa saja baru dibayar.
+      // Pesanan seperti itu tidak ikut dihanguskan.
+      const { count } = await tx.booking.updateMany({
+        where: {
+          id: { in: ids },
+          status: BookingStatus.PENDING_PAYMENT,
+          expiresAt: { not: null, lt: sekarang },
+        },
+        data: {
+          status: BookingStatus.CANCELLED,
+          cancelReason: 'Dibatalkan otomatis: batas waktu pembayaran 24 jam terlewat.',
+        },
+      });
+
+      if (count === 0) return 0;
+
+      // Dibaca ulang, bukan memakai `ids` apa adanya: pesanan yang lolos dari
+      // penghangusan karena baru dibayar punya tagihan PELUNASAN `PENDING` yang
+      // sah, dan menutupnya berarti menghapus jalur bayar pembeli yang uangnya
+      // baru saja masuk.
+      const dibatalkan = await tx.booking.findMany({
+        where: { id: { in: ids }, status: BookingStatus.CANCELLED },
+        select: { id: true },
+      });
+
+      await tutupTagihanMenganggur(
+        tx,
+        dibatalkan.map((b) => b.id)
+      );
+
+      return count;
     });
 
     if (count > 0) {

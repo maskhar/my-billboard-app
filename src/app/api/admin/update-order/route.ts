@@ -8,6 +8,7 @@ import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, lebihBesar, rupiah } from "@/lib/money";
 import { masihAdaSisa, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
+import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { Prisma } from "@prisma/client";
 
 /**
@@ -191,6 +192,21 @@ export async function POST(req: Request) {
           });
 
           if (count === 0) return { keadaan: 'BERUBAH' } as const;
+
+          // `REFUNDED` adalah status akhir: uang sudah keluar dari rekening
+          // perusahaan dan `TRANSISI_SAH` tidak punya jalan keluar darinya.
+          // Tagihan yang masih menganggur di pesanan seperti itu adalah tagihan
+          // yang tidak akan pernah dibayar siapa pun — dan selama masih
+          // `PENDING`, ia terbaca sebagai kewajiban yang menunggu dan menempati
+          // pasangan `(bookingId, tujuan)` pada indeks unik bersyarat.
+          //
+          // Hanya `REFUNDED` yang ditutup di sini, bukan seluruh jalur refund:
+          // `REVIEW_REFUND` masih bisa kembali ke `ACTIVE` bila admin menolak
+          // pengajuannya, dan pesanan yang kembali aktif harus tetap punya
+          // tagihan pelunasannya.
+          if (newStatus === BookingStatus.REFUNDED) {
+              await tutupTagihanMenganggur(tx, [orderId]);
+          }
 
           const updatedOrder = await tx.booking.findUniqueOrThrow({
               where: { id: orderId },

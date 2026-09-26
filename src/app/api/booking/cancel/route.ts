@@ -6,6 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
 import { sendEmail } from "@/lib/mail";
 import { keAngka } from "@/lib/money";
+import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { BookingStatus } from "@prisma/client";
 
 export async function POST(req: Request) {
@@ -29,13 +30,26 @@ export async function POST(req: Request) {
     // perusahaan, tapi statusnya CANCELLED, yang bukan status sah untuk
     // mengajukan refund. Pembatalan setelah pembayaran lewat
     // `booking/request-refund`.
-    const { count } = await prisma.booking.updateMany({
-        where: {
-            id: orderId,
-            userId: session.user.id,
-            status: BookingStatus.PENDING_PAYMENT,
-        },
-        data: { status: "CANCELLED" },
+    // Penghangusan pesanan dan penutupan tagihannya satu transaksi. Di antara
+    // keduanya pesanan sudah CANCELLED sementara tagihannya masih PENDING, dan
+    // pembuat sesi pembayaran yang membaca persis di celah itu akan membukakan
+    // checkout untuk pesanan yang baru saja dibatalkan pemiliknya sendiri.
+    const count = await prisma.$transaction(async (tx) => {
+        const { count } = await tx.booking.updateMany({
+            where: {
+                id: orderId,
+                userId: session.user.id,
+                status: BookingStatus.PENDING_PAYMENT,
+            },
+            data: { status: "CANCELLED" },
+        });
+
+        // Tagihan hanya ditutup bila pesanannya benar-benar berubah. `count: 0`
+        // berarti pesanan itu bukan miliknya, tidak ada, atau sudah dibayar —
+        // dan tagihan pesanan yang sudah dibayar masih harus bisa dilunasi.
+        if (count > 0) await tutupTagihanMenganggur(tx, [orderId]);
+
+        return count;
     });
 
     if (count === 0) {
