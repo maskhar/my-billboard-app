@@ -9130,3 +9130,199 @@ describe('POST /api/user/change-password', () => {
     assert.equal(fake.dibanding().length, 0);
   });
 });
+
+// ===========================================================================
+// SATU ATURAN IDENTITAS UNTUK DUA PENULISNYA
+// ===========================================================================
+//
+// `api/user/update-profile` adalah penulis identitas kedua, dan aturannya dulu
+// berbeda dari checkout: `whatsapp` ditulis apa adanya tanpa satu pun
+// pemeriksaan. Nomor berisi tanda hubung tersimpan bersama tanda hubungnya,
+// lalu gerbang pembayaran (`keE164` di `sesi-pembayaran.ts`) menolaknya
+// `PROFIL_BELUM_LENGKAP` — padahal halaman pengaturan baru saja menjawab
+// "Profil berhasil diperbarui!".
+describe('POST /api/user/update-profile', () => {
+  function buatRouteProfil() {
+    const diperbarui = [];
+
+    const route = muatDenganModulPalsu(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'user', 'update-profile', 'route.ts'),
+      {
+        'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+        'next-auth': { getServerSession: async () => ({ user: { id: 'user-1', role: 'USER' } }) },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': {
+          prisma: {
+            user: {
+              async update(args) {
+                diperbarui.push(args);
+                return { id: 'user-1' };
+              },
+            },
+          },
+        },
+      }
+    );
+
+    return { route, diperbarui: () => diperbarui };
+  }
+
+  function simpan(fake, body) {
+    return fake.route.POST(
+      new Request('https://contoh.test/api/user/update-profile', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+    );
+  }
+
+  it('nomor WhatsApp disimpan ternormalisasi, bukan apa adanya', async () => {
+    const fake = buatRouteProfil();
+
+    const response = await simpan(fake, { name: '  Budi Santoso  ', whatsapp: '0812-3456-789' });
+
+    assert.equal(response.status, 200);
+    const data = fake.diperbarui()[0].data;
+    // Bentuk yang sama dengan `api/register` dan checkout. Tanda hubung yang
+    // tersimpan membuat `keE164` di gerbang pembayaran menolaknya.
+    assert.equal(data.whatsapp, '628123456789');
+    assert.equal(data.name, 'Budi Santoso');
+  });
+
+  it('nomor yang tidak sah ditolak 400, tidak ditulis', async () => {
+    for (const whatsapp of ['', '   ', '0812ABC4567', '123', { not: '' }, ['08123456789'], null, true]) {
+      const fake = buatRouteProfil();
+      const response = await simpan(fake, { name: 'Budi', whatsapp });
+      const isi = await response.json();
+
+      assert.equal(response.status, 400, `${JSON.stringify(whatsapp)} harus 400`);
+      assert.match(isi.message, /Nomor WhatsApp tidak valid/);
+      // Nomor kosong pun harus ditolak: menuliskannya MENGHAPUS nomor yang
+      // sudah benar, dan pemiliknya baru tahu saat pembayaran ditolak.
+      assert.equal(fake.diperbarui().length, 0);
+    }
+  });
+
+  it('nama yang bukan teks dijawab 400, bukan 500', async () => {
+    // `if (!name)` meloloskan objek karena objek selalu truthy, dan nilai itu
+    // sampai ke `prisma.user.update` sebagai galat internal.
+    for (const name of [{ not: '' }, ['Budi'], 12345, null, '', '   ']) {
+      const fake = buatRouteProfil();
+      const response = await simpan(fake, { name, whatsapp: '08123456789' });
+      const isi = await response.json();
+
+      assert.equal(response.status, 400, `${JSON.stringify(name)} harus 400`);
+      assert.match(isi.message, /Nama lengkap penyewa wajib diisi/);
+      assert.equal(fake.diperbarui().length, 0);
+    }
+  });
+
+  it('nama dipotong pada batas panjang kolom', async () => {
+    const fake = buatRouteProfil();
+    await simpan(fake, { name: 'a'.repeat(400), whatsapp: '08123456789' });
+
+    assert.equal(fake.diperbarui()[0].data.name.length, 120);
+  });
+
+  it('perusahaan dan NPWP yang kosong berarti tidak diubah, bukan dihapus', async () => {
+    // Formulir pengaturan tidak menampilkan kedua kolom ini. Menulis `null`
+    // akan menghanguskan NPWP yang pembeli isi di checkout setiap kali ia
+    // mengganti namanya.
+    const fake = buatRouteProfil();
+    await simpan(fake, { name: 'Budi', whatsapp: '08123456789' });
+
+    const data = fake.diperbarui()[0].data;
+    assert.equal('companyName' in data, false);
+    assert.equal('npwp' in data, false);
+  });
+
+  it('NPWP yang terisi disimpan sebagai angka saja', async () => {
+    const fake = buatRouteProfil();
+    await simpan(fake, {
+      name: 'Budi',
+      whatsapp: '08123456789',
+      companyName: '  PT Contoh  ',
+      npwp: '09.254.294.3-407.000',
+    });
+
+    const data = fake.diperbarui()[0].data;
+    assert.equal(data.npwp, '092542943407000');
+    assert.equal(data.companyName, 'PT Contoh');
+  });
+
+  it('kolom sensitif tidak pernah ikut tertulis maupun terbaca', async () => {
+    const fake = buatRouteProfil();
+    await simpan(fake, {
+      name: 'Budi',
+      whatsapp: '08123456789',
+      // Allowlist eksplisit di `bacaIdentitasPenyewa`: nilai ini tidak boleh
+      // sampai ke Prisma walau dikirim penyerang.
+      role: 'SUPER_ADMIN',
+      password: 'hash-palsu',
+      isVerified: true,
+      email: 'penyerang@contoh.test',
+    });
+
+    const args = fake.diperbarui()[0];
+    assert.equal('role' in args.data, false);
+    assert.equal('password' in args.data, false);
+    assert.equal('isVerified' in args.data, false);
+    assert.equal('email' in args.data, false);
+    // `update` tanpa `select` memulangkan seluruh baris, termasuk hash password.
+    assert.deepEqual(args.select, { id: true });
+  });
+
+  it('aturannya diimpor dari modul bersama, bukan ditulis ulang', () => {
+    const kode = fs
+      .readFileSync(
+        path.join(__dirname, '..', 'src', 'app', 'api', 'user', 'update-profile', 'route.ts'),
+        'utf8'
+      )
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    assert.match(kode, /from ['"]@\/lib\/identitas-penyewa['"]/);
+    assert.match(kode, /bacaIdentitasPenyewa\(/);
+    // Dua penulis identitas dengan aturan yang ditulis terpisah akan menyimpang
+    // lagi. `whatsapp` tidak boleh diambil langsung dari badan permintaan.
+    assert.doesNotMatch(kode, /const\s*\{[^}]*whatsapp[^}]*\}\s*=\s*await\s+req\.json\(\)/);
+  });
+
+  it('halaman pengaturan memakai select, dan nomor WhatsApp wajib diisi', () => {
+    const kodeHalaman = fs
+      .readFileSync(path.join(__dirname, '..', 'src', 'app', 'dashboard', 'settings', 'page.tsx'), 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    const select = kodeHalaman.match(/select:\s*\{[^}]*\}/);
+    assert.ok(select, 'findUnique tanpa select memulangkan seluruh baris');
+    assert.match(select[0], /whatsapp:\s*true/);
+    // Hash password dan kolom OTP tidak boleh ikut dibawa ke memori hanya untuk
+    // merender empat isian. Diperiksa di dalam `select`, bukan di seluruh
+    // berkas: teks UI halaman ini memang menyebut kata "password".
+    assert.doesNotMatch(select[0], /password|otp/i);
+
+    const kodeForm = fs
+      .readFileSync(
+        path.join(__dirname, '..', 'src', 'app', 'dashboard', 'settings', 'AccountSettingsForm.tsx'),
+        'utf8'
+      )
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    // Isian nomor dulu opsional, padahal gerbang pembayaran menuntutnya.
+    const isianNomor = kodeForm.match(/<InputField[^>]*id="whatsapp"[\s\S]*?\/>/);
+    assert.ok(isianNomor, 'isian whatsapp tidak ditemukan');
+    assert.match(isianNomor[0], /required/);
+    // `type="number"` membuang tanda `+`.
+    assert.doesNotMatch(isianNomor[0], /type="number"/);
+  });
+});

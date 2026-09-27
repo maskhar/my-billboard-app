@@ -15,8 +15,12 @@ export default async function AccountSettingsPage() {
         redirect('/login');
     }
 
+    // Kolomnya dipilih satu per satu. Tanpa `select`, `findUnique` memulangkan
+    // seluruh baris — termasuk hash password dan kolom OTP — ke memori proses
+    // hanya untuk merender empat isian.
     const user = await prisma.user.findUnique({
-        where: { id: session.user.id }
+        where: { id: session.user.id },
+        select: { id: true, name: true, whatsapp: true, email: true },
     });
 
     if (!user) {

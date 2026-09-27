@@ -106,7 +106,29 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 <h2 className="text-lg font-semibold mb-4">Informasi Personal</h2>
                 <form onSubmit={handleProfileSubmit} className="space-y-4">
                     <InputField label="Nama Lengkap" id="name" value={profileData.name} onChange={handleProfileChange} required />
-                    <InputField label="Nomor WhatsApp" id="whatsapp" value={profileData.whatsapp} onChange={handleProfileChange} />
+                    {/*
+                      `type="tel"`, bukan `type="number"`: kolom number membuang
+                      tanda `+` sehingga nomor bentuk internasional tidak bisa
+                      diketik sama sekali.
+
+                      Wajib diisi karena gerbang pembayaran di
+                      `sesi-pembayaran.ts` menolak pesanan tanpa nomor WhatsApp
+                      yang sah. Dibiarkan opsional di sini, pengguna menyimpan
+                      profil "berhasil" lalu ditolak saat membayar.
+                    */}
+                    <InputField
+                        label="Nomor WhatsApp"
+                        id="whatsapp"
+                        type="tel"
+                        inputMode="tel"
+                        value={profileData.whatsapp}
+                        onChange={handleProfileChange}
+                        placeholder="08123456789"
+                        required
+                    />
+                    <p className="text-xs text-gray-500 -mt-2">
+                        Dipakai untuk konfirmasi pesanan dan pembayaran. Contoh: 08123456789.
+                    </p>
                     <div>
                         <label className="block text-sm font-medium text-gray-700">Email</label>
                         <p className="text-sm text-gray-500 mt-1">{user.email} (tidak dapat diubah)</p>
