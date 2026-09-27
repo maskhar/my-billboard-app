@@ -1,13 +1,42 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { Save, Loader2, Bot, Key, Globe, CheckCircle2, Map } from 'lucide-react'; // Tambah icon Map
+// Halaman Pengaturan Sistem (SUPER_ADMIN).
+//
+// Empat cacat ditambal di sini, semuanya satu keluarga: jawaban server tidak
+// pernah diperiksa, jadi halaman melaporkan keadaan yang tidak pernah
+// dikonfirmasi siapa pun.
+//
+//   1. `useEffect` dulu berbunyi `fetch(...).then(res => res.json()).then(...)`
+//      tanpa `res.ok` dan tanpa `.catch`. Route GET menjawab 401 kepada siapa
+//      pun yang bukan SUPER_ADMIN, dan badan 401-nya `{ message: 'Unauthorized' }`
+//      — objek yang lolos dari `if(!data) return`, lalu `data.siteName || ""`
+//      mengisi form dengan teks kosong. Seorang ADMIN biasa karena itu melihat
+//      FORM PENGATURAN KOSONG, bukan penolakan: ia mengira setelan situs
+//      memang belum diisi, mengetik ulang nama situs, menekan Simpan, dan baru
+//      di sana ditolak. Kegagalan jaringan lebih buruk lagi — Promise-nya
+//      ditolak tanpa penangkap, jadi tidak ada satu pun tanda di layar.
+//   2. POST di `handleSave` tidak mengirim header `Content-Type: application/json`.
+//   3. `await res.json()` dipanggil tanpa `.catch` di jalur galat. Balasan 500
+//      dari proxy atau dev-server berbadan HTML, bukan JSON, jadi `json()`
+//      melempar — dan karena `setLoading(false)` ada di baris terakhir fungsi,
+//      bukan di `finally`, tombol Simpan berputar selamanya. Admin menunggu
+//      sesuatu yang tidak akan pernah datang.
+//   4. `handleTestAI` sama persis, dengan `setAiLoading(false)` yang juga tidak
+//      di `finally`.
+import { useCallback, useEffect, useState } from 'react';
+import { AlertCircle, Save, Loader2, Bot, Key, Globe, CheckCircle2, Map } from 'lucide-react'; // Tambah icon Map
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
-  
+
+  // Dua keadaan pemuatan yang dulu tidak ada sama sekali: sedang memuat, dan
+  // gagal memuat. Tanpa keduanya form kosong tidak bisa dibedakan dari form
+  // yang memang belum diisi.
+  const [memuat, setMemuat] = useState(true);
+  const [galat, setGalat] = useState<string | null>(null);
+
   // Nilai API key TIDAK pernah disimpan di state.
   //
   // `type="password"` pada input hanya menyembunyikan karakter secara visual —
@@ -36,22 +65,55 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-      fetch('/api/admin/settings').then(res => res.json()).then(data => {
-          if(!data) return;
-          setForm({
-              siteName: data.siteName || "",
-              siteDesc: data.siteDesc || "",
-          });
-          setKeyStatus({
-              geminiApiKeySet: !!data.geminiApiKeySet,
-              geminiApiKeyMasked: data.geminiApiKeyMasked ?? null,
-              googleMapsApiKeySet: !!data.googleMapsApiKeySet,
-              googleMapsApiKeyMasked: data.googleMapsApiKeyMasked ?? null,
-          });
-      });
+      let dibatalkan = false;
+
+      const muat = async () => {
+          try {
+              const res = await fetch('/api/admin/settings');
+              // `res.ok` diperiksa LEBIH DULU. Badan 401 adalah JSON yang sah,
+              // jadi tanpa gerbang ini ia terbaca sebagai setelan kosong.
+              if (!res.ok) {
+                  const isi = await res.json().catch(() => null);
+                  throw new Error(
+                      isi?.message ||
+                          (res.status === 401
+                              ? 'Hanya SUPER_ADMIN yang boleh membuka pengaturan sistem.'
+                              : `Gagal memuat pengaturan (${res.status}).`)
+                  );
+              }
+              const data = await res.json().catch(() => null);
+              if (!data) throw new Error('Jawaban server tidak bisa dibaca.');
+              if (dibatalkan) return;
+              setForm({
+                  siteName: data.siteName || "",
+                  siteDesc: data.siteDesc || "",
+              });
+              setKeyStatus({
+                  geminiApiKeySet: !!data.geminiApiKeySet,
+                  geminiApiKeyMasked: data.geminiApiKeyMasked ?? null,
+                  googleMapsApiKeySet: !!data.googleMapsApiKeySet,
+                  googleMapsApiKeyMasked: data.googleMapsApiKeyMasked ?? null,
+              });
+          } catch (e: any) {
+              if (!dibatalkan) setGalat(e?.message || 'Gagal memuat pengaturan.');
+          } finally {
+              if (!dibatalkan) setMemuat(false);
+          }
+      };
+
+      muat();
+      return () => {
+          dibatalkan = true;
+      };
   }, []);
 
-  const handleSave = async () => {
+  const handleSave = useCallback(async () => {
+      // Kunci in-flight: klik kedua sebelum yang pertama selesai mengirim
+      // payload yang sama dua kali. Pada jalur API key itu berarti dua
+      // penulisan enkripsi berurutan atas nilai yang sama — tidak merusak,
+      // tapi tidak ada gunanya, dan tombolnya sudah `disabled` jadi ini
+      // pengaman untuk pemanggil lain.
+      if (loading) return;
       setLoading(true);
 
       // Key hanya dikirim bila admin benar-benar mengetik nilai baru.
@@ -65,51 +127,103 @@ export default function SettingsPage() {
           payload.googleMapsApiKey = newKeys.googleMapsApiKey.trim();
       }
 
-      const res = await fetch('/api/admin/settings', {
-          method: 'POST',
-          body: JSON.stringify(payload)
-      });
-      if (res.ok) {
-        alert("Pengaturan Berhasil Disimpan!");
+      try {
+          const res = await fetch('/api/admin/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+          });
+          const json = await res.json().catch(() => null);
+          if (!res.ok) {
+              throw new Error(json?.message || `Gagal menyimpan (${res.status}).`);
+          }
 
-        // Muat ulang status key agar pratinjau ter-mask ikut diperbarui,
-        // lalu kosongkan field input supaya nilai baru tidak tertinggal di DOM.
-        const segar = await fetch('/api/admin/settings').then(r => r.json()).catch(() => null);
-        if (segar) {
-            setKeyStatus({
-                geminiApiKeySet: !!segar.geminiApiKeySet,
-                geminiApiKeyMasked: segar.geminiApiKeyMasked ?? null,
-                googleMapsApiKeySet: !!segar.googleMapsApiKeySet,
-                googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked ?? null,
-            });
-        }
-        setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
-      } else {
-        const json = await res.json();
-        alert("Gagal menyimpan: " + (json.message || "Unknown error"));
+          alert(json?.message || "Pengaturan Berhasil Disimpan!");
+
+          // Muat ulang status key agar pratinjau ter-mask ikut diperbarui,
+          // lalu kosongkan field input supaya nilai baru tidak tertinggal di DOM.
+          const resSegar = await fetch('/api/admin/settings');
+          const segar = resSegar.ok ? await resSegar.json().catch(() => null) : null;
+          if (segar) {
+              setKeyStatus({
+                  geminiApiKeySet: !!segar.geminiApiKeySet,
+                  geminiApiKeyMasked: segar.geminiApiKeyMasked ?? null,
+                  googleMapsApiKeySet: !!segar.googleMapsApiKeySet,
+                  googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked ?? null,
+              });
+          }
+          setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
+      } catch (e: any) {
+          alert("Gagal menyimpan: " + (e?.message || "galat tidak diketahui"));
+      } finally {
+          // Di `finally`, bukan di baris terakhir fungsi: `await res.json()`
+          // yang melempar dulu meninggalkan tombol berputar tanpa akhir.
+          setLoading(false);
       }
-      setLoading(false);
-  };
+  }, [form, newKeys, loading]);
 
   // Key boleh diuji bila sudah tersimpan di server ATAU admin sedang mengetik
   // kandidat key baru. Bila field kosong, API memakai key tersimpan di database
   // — client tidak perlu (dan tidak boleh) memegang nilainya.
   const bisaTestAI = keyStatus.geminiApiKeySet || newKeys.geminiApiKey.trim() !== "";
 
-  const handleTestAI = async () => {
+  const handleTestAI = useCallback(async () => {
       if(!bisaTestAI) return alert("Masukkan API Key dulu!");
+      if (aiLoading) return;
       setAiLoading(true); setAiResult("");
       const body: Record<string, string> = { action: 'TEST_AI' };
       if (newKeys.geminiApiKey.trim() !== "") {
           body.apiKey = newKeys.geminiApiKey.trim();
       }
-      const res = await fetch('/api/admin/settings', {
-          method: 'POST', body: JSON.stringify(body)
-      });
-      const json = await res.json();
-      if(res.ok) setAiResult(json.aiResult); else alert("Gagal: " + json.message);
-      setAiLoading(false);
-  };
+      try {
+          const res = await fetch('/api/admin/settings', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(body)
+          });
+          const json = await res.json().catch(() => null);
+          if (!res.ok) {
+              throw new Error(json?.message || `Gagal menguji AI (${res.status}).`);
+          }
+          // `aiResult` bisa tidak ada walaupun statusnya 200 (mis. proxy yang
+          // memotong badan). Menyetel `undefined` membuat panel hasil hilang
+          // tanpa keterangan, jadi turunkan ke pesan yang jujur.
+          setAiResult(
+              typeof json?.aiResult === 'string' && json.aiResult !== ''
+                  ? json.aiResult
+                  : 'Server menjawab berhasil tanpa teks hasil.'
+          );
+      } catch (e: any) {
+          alert("Gagal: " + (e?.message || "galat tidak diketahui"));
+      } finally {
+          setAiLoading(false);
+      }
+  }, [bisaTestAI, aiLoading, newKeys]);
+
+  // Gagal memuat ditampilkan sebagai penolakan, BUKAN sebagai form kosong.
+  // Form kosong adalah klaim ("belum ada setelan") yang halaman ini tidak
+  // pernah punya dasar untuk membuatnya.
+  if (galat) {
+      return (
+          <div className="max-w-4xl">
+              <div className="bg-white border border-red-200 rounded-2xl p-8 flex items-start gap-4">
+                  <AlertCircle className="text-red-600 shrink-0 mt-0.5" size={22} />
+                  <div>
+                      <h2 className="font-bold text-gray-800">Pengaturan tidak bisa dibuka</h2>
+                      <p className="text-sm text-gray-600 mt-1">{galat}</p>
+                  </div>
+              </div>
+          </div>
+      );
+  }
+
+  if (memuat) {
+      return (
+          <div className="max-w-4xl flex items-center gap-3 text-gray-500 text-sm p-8">
+              <Loader2 className="animate-spin" size={18} /> Memuat pengaturan…
+          </div>
+      );
+  }
 
   return (
     <div className="max-w-4xl space-y-8 pb-20">

@@ -9803,3 +9803,108 @@ describe('src/lib/mail.ts — transport SMTP', () => {
     assert.match(kode, /getFullYear\(\)/);
   });
 });
+
+describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercaya', () => {
+  const JALUR_HALAMAN = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'admin',
+    '(dashboard)',
+    'settings',
+    'page.tsx'
+  );
+
+  // Komentar dibuang lebih dulu. Berkas ini memuat komentar panjang yang
+  // MENYEBUT persis pola yang dilarang di bawah — termasuk potongan kode versi
+  // lamanya — jadi audit atas teks mentah akan lulus/gagal karena komentarnya,
+  // bukan karena kodenya.
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const kode = kodeSaja(JALUR_HALAMAN);
+
+  it('pemuatan awal memeriksa res.ok, bukan hanya kebenaran badan', () => {
+    // Route GET menjawab 401 kepada siapa pun yang bukan SUPER_ADMIN, dengan
+    // badan `{ message: 'Unauthorized' }` — objek yang lolos `if(!data) return`.
+    // Tanpa `res.ok`, seorang ADMIN biasa melihat FORM KOSONG, bukan penolakan.
+    assert.match(kode, /if\s*\(!res\.ok\)/);
+    assert.doesNotMatch(kode, /\.then\(res\s*=>\s*res\.json\(\)\)/);
+    assert.doesNotMatch(kode, /if\s*\(\s*!data\s*\)\s*return\s*;/);
+  });
+
+  it('kegagalan pemuatan tampil sebagai penolakan, bukan form kosong', () => {
+    assert.match(kode, /setGalat\(/);
+    // Ada cabang render yang berhenti sebelum form ketika galat terisi.
+    assert.match(kode, /if\s*\(galat\)\s*\{[\s\S]{0,400}?return\s*\(/);
+  });
+
+  it('keadaan memuat dibedakan dari keadaan kosong', () => {
+    assert.match(kode, /const\s*\[memuat,\s*setMemuat\]\s*=\s*useState\(true\)/);
+    assert.match(kode, /if\s*\(memuat\)/);
+  });
+
+  it('useEffect punya catch dan finally, bukan Promise menganggur', () => {
+    const efek = kode.match(/useEffect\(\(\)\s*=>\s*\{[\s\S]*?\n  \}, \[\]\);/);
+    assert.ok(efek, 'blok useEffect tidak ditemukan');
+    assert.match(efek[0], /catch\s*\(/);
+    assert.match(efek[0], /finally\s*\{/);
+    assert.match(efek[0], /setMemuat\(false\)/);
+  });
+
+  it('POST simpan mengirim header Content-Type: application/json', () => {
+    // Tanpa header ini badan dikirim sebagai teks biasa; route membacanya
+    // dengan `req.json()` dan bergantung pada kelonggaran runtime.
+    const jumlahHeader = (kode.match(/'Content-Type':\s*'application\/json'/g) || []).length;
+    // Dua tempat: handleSave dan handleTestAI.
+    assert.strictEqual(jumlahHeader, 2);
+  });
+
+  it('handleSave memeriksa res.ok sebelum mengaku berhasil', () => {
+    const simpan = kode.match(/const handleSave = useCallback\(async \(\) => \{[\s\S]*?\}, \[[^\]]*\]\);/);
+    assert.ok(simpan, 'handleSave tidak ditemukan');
+    assert.match(simpan[0], /if\s*\(!res\.ok\)/);
+    assert.match(simpan[0], /const res = await fetch\(/);
+    // Badan galat bisa bukan JSON (mis. halaman 500 dari proxy). Tanpa
+    // `.catch`, `json()` melempar dan alert-nya tidak pernah muncul.
+    assert.match(simpan[0], /await res\.json\(\)\.catch\(\(\) => null\)/);
+  });
+
+  it('handleSave membersihkan loading di finally', () => {
+    const simpan = kode.match(/const handleSave = useCallback\(async \(\) => \{[\s\S]*?\}, \[[^\]]*\]\);/);
+    assert.ok(simpan);
+    assert.match(simpan[0], /finally\s*\{[\s\S]*?setLoading\(false\)/);
+    assert.match(simpan[0], /if\s*\(loading\)\s*return/);
+  });
+
+  it('handleTestAI membersihkan aiLoading di finally dan menangkap galat', () => {
+    const uji = kode.match(/const handleTestAI = useCallback\(async \(\) => \{[\s\S]*?\}, \[[^\]]*\]\);/);
+    assert.ok(uji, 'handleTestAI tidak ditemukan');
+    assert.match(uji[0], /if\s*\(!res\.ok\)/);
+    assert.match(uji[0], /await res\.json\(\)\.catch\(\(\) => null\)/);
+    assert.match(uji[0], /finally\s*\{[\s\S]*?setAiLoading\(false\)/);
+  });
+
+  it('muat ulang status key setelah simpan juga memeriksa res.ok', () => {
+    // Bentuk lama `fetch(...).then(r => r.json()).catch(() => null)` menelan
+    // badan 401 sebagai data sah, jadi pratinjau ter-mask bisa ditimpa nilai
+    // kosong padahal key-nya masih tersimpan.
+    assert.match(kode, /resSegar\.ok\s*\?/);
+    assert.doesNotMatch(kode, /\.then\(r\s*=>\s*r\.json\(\)\)/);
+  });
+
+  it('nilai API key tetap tidak pernah masuk ke state form', () => {
+    // Invariant yang sudah ada sebelumnya dan tidak boleh ikut hilang saat
+    // penanganan galat ditambahkan.
+    assert.doesNotMatch(kode, /setForm\([\s\S]{0,200}?geminiApiKey:/);
+    assert.match(kode, /geminiApiKeyMasked/);
+  });
+});
