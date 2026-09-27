@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { angkaRupiah, jumlah, lebihBesar, nol } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
+import { ALAMAT_PENJUAL, EMAIL_PENJUAL, NAMA_PENJUAL } from '@/lib/penjual';
 import {
   sisaTagihan as sisaPokokLedger,
   sisaTambahan as sisaTambahanLedger,
@@ -147,10 +148,17 @@ export default async function InvoicePage(props: Props) {
                     <h1 className="text-3xl font-bold text-gray-900 mb-2 tracking-tight">INVOICE</h1>
                     <p className="text-gray-500 text-sm font-mono">{labelPesanan(order.id)}</p>
                 </div>
+                {/*
+                  Identitas penjual datang dari `@/lib/penjual`, satu tempat
+                  bersama dengan halaman transaksi admin. Sebelumnya ditulis
+                  ulang di sini, dan halaman admin menampilkan nama perusahaan
+                  serta kota yang BERBEDA — pada dokumen yang dipakai untuk
+                  penagihan.
+                */}
                 <div className="text-right">
                     <h2 className="text-2xl font-extrabold text-utero tracking-tight">Utero<span className='text-gray-800'>Cloud</span></h2>
-                    <p className="text-xs text-gray-500 mt-1">Jl. Soekarno Hatta No. 1, Malang</p>
-                    <p className="text-xs text-gray-500">support@utero.cloud</p>
+                    <p className="text-xs text-gray-500 mt-1">{ALAMAT_PENJUAL}</p>
+                    <p className="text-xs text-gray-500">{EMAIL_PENJUAL}</p>
                 </div>
             </div>
 
@@ -354,7 +362,7 @@ export default async function InvoicePage(props: Props) {
 
             {/* Footer */}
             <div className="text-center text-[10px] text-gray-400 border-t border-gray-200 pt-8">
-                <p className="font-bold mb-1">Terima kasih atas kepercayaan Anda kepada Utero Cloud.</p>
+                <p className="font-bold mb-1">Terima kasih atas kepercayaan Anda kepada {NAMA_PENJUAL}.</p>
                 <p>Dokumen ini diterbitkan secara otomatis oleh sistem komputer dan sah tanpa tanda tangan basah.</p>
                 <div className='print:hidden mt-8'>
                      <p className='text-xs text-blue-500'>*Tekan Ctrl + P untuk mencetak atau simpan sebagai PDF.</p>

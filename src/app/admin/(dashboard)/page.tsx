@@ -12,6 +12,7 @@ import { authOptions } from '@/lib/auth';
 import CS_Dashboard from '../_components/cs/CS_Dashboard';
 import { angkaRupiah, kurang, rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
+import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
 import { BookingStatus, PaymentStatus } from '@prisma/client';
 
 // Supaya data selalu fresh
@@ -192,11 +193,17 @@ export default async function AdminDashboard() {
                                 <td className="px-8 py-4 font-mono text-xs font-bold text-gray-500">{labelPesanan(order.id)}</td>
                                 <td className="px-6 py-4 font-bold text-gray-800">{order.user.name}</td>
                                 <td className="px-6 py-4">
-                                    <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${
-                                        order.status === 'PENDING_PAYMENT' ? 'bg-yellow-100 text-yellow-700' : 
-                                        order.status === 'ACTIVE' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-                                    }`}>
-                                        {order.status}
+                                    {/*
+                                      Rantai tiga cabang di sini dulu
+                                      mewarnai SEMBILAN status sisanya MERAH:
+                                      `PAID_CONFIRMED` — pesanan sehat yang
+                                      uangnya sudah masuk — tampil merah persis
+                                      seperti `CANCELLED`. Admin membuka
+                                      dashboard dan melihat deretan merah pada
+                                      pekerjaan yang berjalan normal.
+                                    */}
+                                    <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase ${warnaStatusPesanan(order.status)}`}>
+                                        {labelStatusPesanan(order.status)}
                                     </span>
                                 </td>
                                 {/* `toLocaleString()` tanpa argumen memakai

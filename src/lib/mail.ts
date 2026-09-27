@@ -16,17 +16,38 @@ import { amankanHtml } from '@/lib/html';
 import { samarkanEmail } from '@/lib/log-aman';
 import { rupiah, type NilaiUang } from '@/lib/money';
 import { nomorPesanan } from '@/lib/nomor-pesanan';
+import { BADAN_USAHA_PENJUAL, TAGLINE_PENJUAL } from '@/lib/penjual';
+
+// `secure` DITURUNKAN DARI PORT, tidak lagi dipaku `true`.
+//
+// `.env.example:52` menyarankan `SMTP_PORT="587"`, dan port itu memakai
+// STARTTLS — koneksinya dibuka polos lalu dinaikkan. `secure: true` berarti TLS
+// implisit, yang hanya benar di port 465. Mengikuti berkas contoh milik repo ini
+// sendiri membuat handshake gagal di setiap surat, dan karena `sendEmail`
+// sengaja tidak pernah melempar (lihat catatannya di bawah), kegagalannya hanya
+// muncul sebagai satu baris log: pesanan tetap tercatat, pembeli tidak pernah
+// menerima satu pun konfirmasi, dan tidak ada yang tahu sampai ada yang
+// bertanya. Komentar "Ubah false jika pakai port 587" menyerahkan keputusan itu
+// ke orang yang memasang — padahal portnya sudah ada di env dan bisa dibaca.
+const PORT_SMTP = Number(process.env.SMTP_PORT) || 587;
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST,
-  port: Number(process.env.SMTP_PORT),
-  secure: true, // Ubah false jika pakai port 587
+  port: PORT_SMTP,
+  secure: PORT_SMTP === 465,
   auth: {
     user: process.env.SMTP_USER,
     pass: process.env.SMTP_PASS,
   },
-  logger: true, // Biarkan true biar kelihatan log-nya di terminal
-  debug: true
+  // `logger`/`debug` mencetak seluruh percakapan SMTP. Nodemailer memang
+  // menyamarkan kata sandi pada jalur `AUTH PLAIN` dan `AUTH LOGIN`, tapi
+  // percakapannya tetap memuat alamat SETIAP penerima, judul surat, dan seluruh
+  // badan HTML — termasuk nama, nomor WhatsApp, dan nominal transaksi yang
+  // disusun `generateTemplate`. Itu menjadikan log SMTP salinan lengkap
+  // korespondensi pelanggan di tempat yang tidak pernah dimaksudkan
+  // menyimpannya. Dinyalakan hanya saat pengembangan.
+  logger: process.env.NODE_ENV !== 'production',
+  debug: process.env.NODE_ENV !== 'production',
 });
 
 /**
@@ -116,7 +137,7 @@ const generateTemplate = (title: string, message: string, orderDetail?: Ringkasa
     <div style="font-family: Arial, sans-serif; color: #333; max-width: 680px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 12px; overflow: hidden; background-color: #fcfcfc;">
         <div style="background-color: #ffffff; padding: 30px; text-align: center; border-bottom: 1px solid #eaeaea;">
             <h2 style="color: #1a1a1a; margin: 0; letter-spacing: -1px; font-size: 24px;">UTERO <span style="color: #CE181E;">CLOUD</span></h2>
-            <p style="color: #666; margin: 5px 0 0 0; font-size: 12px; letter-spacing: 1px;">PREMIUM OUTDOOR MEDIA</p>
+            <p style="color: #666; margin: 5px 0 0 0; font-size: 12px; letter-spacing: 1px;">${amankanHtml(TAGLINE_PENJUAL)}</p>
         </div>
 
         <div style="padding: 40px 30px;">
@@ -157,7 +178,7 @@ const generateTemplate = (title: string, message: string, orderDetail?: Ringkasa
             ` : ''}
 
             <p style="font-size: 12px; color: #aaa; margin-top: 40px; text-align: center; border-top: 1px solid #eee; padding-top: 20px;">
-                &copy; 2025 Utero Indonesia
+                &copy; ${new Date().getFullYear()} ${amankanHtml(BADAN_USAHA_PENJUAL)}
             </p>
         </div>
     </div>

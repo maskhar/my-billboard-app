@@ -10,6 +10,8 @@ import OrderActions from '@/components/admin/OrderActions';
 import { arrayDariJson } from '@/lib/safe-json';
 import { rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
+import { ALAMAT_PENJUAL, NAMA_PENJUAL } from '@/lib/penjual';
+import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
 
 /**
  * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
@@ -226,9 +228,13 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
     }
   };
 
+  // Warnanya dulu `bg-green-100 text-green-700` TETAP, tanpa melihat statusnya
+  // sama sekali: `CANCELLED` hijau, `REFUNDED` hijau, `PENDING_PAYMENT` hijau.
+  // Warna dibaca mata lebih dulu daripada tulisannya, jadi badge itu aktif
+  // menyatakan "aman" pada pesanan yang dibatalkan dan yang belum dibayar.
   const StatusBadge = ({ status }: { status: string }) => (
-    <span className="px-2 py-1 text-[10px] font-bold rounded bg-green-100 text-green-700 uppercase">
-      {status.replace(/_/g, ' ')}
+    <span className={`px-2 py-1 text-[10px] font-bold rounded uppercase ${warnaStatusPesanan(status)}`}>
+      {labelStatusPesanan(status)}
     </span>
   );
 
@@ -318,8 +324,16 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                         <InfoPair label="Phone" value={selected.user.whatsapp} />
                     </DetailSection>
                     <DetailSection title="Seller">
-                        <InfoPair label="Company Name" value="Iklan Jaya Group" />
-                        <InfoPair label="Office Address" value="Jl. Melati No. 10, Jakarta" />
+                        {/*
+                          Dulu "Iklan Jaya Group" / "Jl. Melati No. 10,
+                          Jakarta" — nama dan kota yang tidak pernah muncul di
+                          satu pun dokumen yang dilihat pelanggan. Admin
+                          membacakannya ke pelanggan yang memegang invoice
+                          bertuliskan perusahaan lain di kota lain, tanpa satu
+                          pun tanda bahwa keduanya berbeda.
+                        */}
+                        <InfoPair label="Company Name" value={NAMA_PENJUAL} />
+                        <InfoPair label="Office Address" value={ALAMAT_PENJUAL} />
                     </DetailSection>
                     <DetailSection title="Actions">
                         <OrderActions

@@ -9577,3 +9577,229 @@ describe('halaman detail order admin — params Promise dan jawaban yang diperik
     assert.match(kode, /newStatus:\s*order\.status/);
   });
 });
+
+describe('src/lib/label-status.ts — warna status pesanan', () => {
+  // Modul murni: tidak mengimpor prisma dan tidak mengimpor nilai dari
+  // `@prisma/client`, jadi bisa di-`require` langsung.
+  const { warnaStatusPesanan, labelStatusPesanan } = require('../src/lib/label-status.ts');
+
+  const SEMUA_STATUS = [
+    'PENDING_PAYMENT',
+    'PAID_CONFIRMED',
+    'DESIGN_RECEIVED',
+    'IN_PRODUCTION',
+    'INSTALLATION',
+    'ACTIVE',
+    'REVIEW_REFUND',
+    'WAITING_BANK',
+    'PROCESS_REFUND',
+    'REFUNDED',
+    'CANCELLED',
+  ];
+
+  it('setiap status BookingStatus punya warnanya sendiri', () => {
+    for (const status of SEMUA_STATUS) {
+      assert.match(
+        warnaStatusPesanan(status),
+        /^bg-[a-z]+-\d+ text-[a-z]+-\d+$/,
+        `${status} tidak punya warna`
+      );
+    }
+  });
+
+  it('pesanan yang dibatalkan dan direfund TIDAK hijau', () => {
+    // Inilah cacatnya di `TransactionClient`: warnanya dipaku hijau tanpa
+    // melihat status, sehingga `CANCELLED` dan `REFUNDED` tampil "aman".
+    // Warna dibaca mata sebelum tulisannya.
+    for (const status of ['CANCELLED', 'REFUNDED', 'PENDING_PAYMENT']) {
+      assert.doesNotMatch(warnaStatusPesanan(status), /green/, `${status} tidak boleh hijau`);
+    }
+  });
+
+  it('pesanan sehat yang uangnya sudah masuk TIDAK merah', () => {
+    // Cacat di `admin/(dashboard)/page.tsx`: rantai tiga cabang mewarnai
+    // sembilan status sisanya merah, jadi `PAID_CONFIRMED` tampil sama seperti
+    // `CANCELLED`.
+    for (const status of ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION']) {
+      assert.doesNotMatch(warnaStatusPesanan(status), /red/, `${status} tidak boleh merah`);
+    }
+  });
+
+  it('hanya CANCELLED yang merah, dan hanya ACTIVE yang hijau', () => {
+    const merah = SEMUA_STATUS.filter((s) => /red/.test(warnaStatusPesanan(s)));
+    const hijau = SEMUA_STATUS.filter((s) => /green/.test(warnaStatusPesanan(s)));
+    assert.deepEqual(merah, ['CANCELLED']);
+    assert.deepEqual(hijau, ['ACTIVE']);
+  });
+
+  it('status tak dikenal abu-abu, bukan hijau dan bukan merah', () => {
+    // Status baru yang belum terdaftar tidak boleh muncul sebagai "aman"
+    // maupun "gagal" — keduanya klaim yang tidak dimiliki tabel ini.
+    for (const nilai of ['STATUS_BARU', '', 'aktif']) {
+      const warna = warnaStatusPesanan(nilai);
+      assert.doesNotMatch(warna, /green|red/, `${nilai} mendapat warna berklaim`);
+      assert.match(warna, /gray/);
+    }
+  });
+
+  it('label mengganti garis bawah dengan spasi', () => {
+    assert.equal(labelStatusPesanan('IN_PRODUCTION'), 'IN PRODUCTION');
+    assert.equal(labelStatusPesanan('ACTIVE'), 'ACTIVE');
+  });
+
+  it('label pada nilai bukan teks memulangkan "-", bukan melempar', () => {
+    for (const nilai of [null, undefined, 12345, {}]) {
+      assert.equal(labelStatusPesanan(nilai), '-');
+    }
+  });
+});
+
+describe('identitas penjual satu sumber, bukan tiga isi berbeda', () => {
+  const penjual = require('../src/lib/penjual.ts');
+
+  function kodeSaja(jalur, tsx = false) {
+    let isi = fs.readFileSync(jalur, 'utf8');
+    if (tsx) isi = isi.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
+    return isi
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('konstanta penjual terisi dan bukan nilai placeholder', () => {
+    assert.equal(penjual.NAMA_PENJUAL, 'Utero Cloud');
+    assert.equal(penjual.ALAMAT_PENJUAL, 'Jl. Soekarno Hatta No. 1, Malang');
+    assert.match(penjual.EMAIL_PENJUAL, /^[^\s@]+@[^\s@]+\.[^\s@]+$/);
+    assert.ok(penjual.BADAN_USAHA_PENJUAL.length > 0);
+    assert.ok(penjual.TAGLINE_PENJUAL.length > 0);
+  });
+
+  it('nama dan alamat yang salah tidak ada lagi di mana pun di src/', () => {
+    // "Iklan Jaya Group" / "Jl. Melati No. 10, Jakarta" tidak pernah muncul di
+    // satu pun dokumen yang dilihat pelanggan. Admin membacakannya ke pelanggan
+    // yang memegang invoice bertuliskan perusahaan lain di kota lain — pada
+    // dokumen yang dipakai untuk pembukuan dan penagihan.
+    const akar = path.join(__dirname, '..', 'src');
+    const temuan = [];
+
+    const jelajah = (dir) => {
+      for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) {
+          jelajah(penuh);
+          continue;
+        }
+        if (!/\.(ts|tsx)$/.test(entri.name)) continue;
+        const isi = fs.readFileSync(penuh, 'utf8');
+        for (const salah of ['Iklan Jaya', 'Jl. Melati']) {
+          // Komentar dikecualikan: catatan perbaikan memang menyebut nilai
+          // lamanya supaya alasannya tidak hilang.
+          const kode = kodeSaja(penuh, /\.tsx$/.test(entri.name));
+          if (kode.includes(salah)) temuan.push(`${penuh}: ${salah}`);
+        }
+      }
+    };
+
+    jelajah(akar);
+    assert.deepEqual(temuan, []);
+  });
+
+  it('halaman transaksi admin memakai konstanta bersama', () => {
+    const kode = kodeSaja(
+      path.join(
+        __dirname,
+        '..',
+        'src',
+        'app',
+        'admin',
+        '(dashboard)',
+        'orders',
+        'TransactionClient.tsx'
+      ),
+      true
+    );
+    assert.match(kode, /from ['"]@\/lib\/penjual['"]/);
+    assert.match(kode, /value=\{NAMA_PENJUAL\}/);
+    assert.match(kode, /value=\{ALAMAT_PENJUAL\}/);
+  });
+
+  it('invoice pelanggan memakai konstanta bersama', () => {
+    const kode = kodeSaja(
+      path.join(__dirname, '..', 'src', 'app', 'invoice', '[id]', 'page.tsx'),
+      true
+    );
+    assert.match(kode, /from ['"]@\/lib\/penjual['"]/);
+    assert.match(kode, /\{ALAMAT_PENJUAL\}/);
+    assert.match(kode, /\{EMAIL_PENJUAL\}/);
+    // Alamat tidak boleh ditulis ulang sebagai teks.
+    assert.doesNotMatch(kode, /Jl\. Soekarno Hatta/);
+  });
+
+  it('kedua badge status memakai tabel warna bersama, bukan rantai sendiri', () => {
+    const BERKAS = [
+      ['TransactionClient', ['app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx']],
+      ['dashboard admin', ['app', 'admin', '(dashboard)', 'page.tsx']],
+    ];
+
+    for (const [nama, bagian] of BERKAS) {
+      const kode = kodeSaja(path.join(__dirname, '..', 'src', ...bagian), true);
+      assert.match(kode, /from ['"]@\/lib\/label-status['"]/, `${nama} tidak mengimpor label-status`);
+      assert.match(kode, /warnaStatusPesanan\(/, `${nama} tidak memanggil warnaStatusPesanan`);
+      // Bentuk lama: warna ditulis langsung di kelas badge.
+      assert.doesNotMatch(
+        kode,
+        /order\.status === '[A-Z_]+' \?/,
+        `${nama} masih punya rantai warna sendiri`
+      );
+    }
+  });
+});
+
+describe('src/lib/mail.ts — transport SMTP', () => {
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const kode = kodeSaja(path.join(__dirname, '..', 'src', 'lib', 'mail.ts'));
+
+  it('secure diturunkan dari port, tidak dipaku true', () => {
+    // `.env.example:52` menyarankan port 587, yang memakai STARTTLS.
+    // `secure: true` hanya benar di 465. Mengikuti berkas contoh repo ini
+    // sendiri membuat handshake gagal di setiap surat — dan karena `sendEmail`
+    // sengaja tidak melempar, kegagalannya hanya muncul sebagai satu baris log.
+    assert.match(kode, /secure:\s*PORT_SMTP === 465/);
+    assert.doesNotMatch(kode, /secure:\s*true/);
+  });
+
+  it('port punya nilai bawaan agar NaN tidak masuk ke transport', () => {
+    // `Number(undefined)` bernilai `NaN`, dan `port: NaN` membuat koneksi gagal
+    // dengan pesan yang tidak menyebut portnya sama sekali.
+    assert.match(kode, /Number\(process\.env\.SMTP_PORT\)\s*\|\|\s*\d+/);
+  });
+
+  it('log percakapan SMTP tidak menyala di produksi', () => {
+    // `logger`/`debug` mencetak seluruh percakapan: alamat setiap penerima,
+    // judul surat, dan badan HTML lengkap dengan nama, nomor WhatsApp, dan
+    // nominal transaksi. Nodemailer menyamarkan kata sandinya, tapi bukan isi
+    // suratnya.
+    assert.match(kode, /logger:\s*process\.env\.NODE_ENV !== 'production'/);
+    assert.match(kode, /debug:\s*process\.env\.NODE_ENV !== 'production'/);
+    assert.doesNotMatch(kode, /logger:\s*true/);
+    assert.doesNotMatch(kode, /debug:\s*true/);
+  });
+
+  it('identitas penjual di surat datang dari modul bersama', () => {
+    assert.match(kode, /from ['"]@\/lib\/penjual['"]/);
+    assert.match(kode, /BADAN_USAHA_PENJUAL/);
+    // Tahun hak cipta dulu dipaku 2025; surat yang terkirim tahun depan
+    // menyatakan tahun yang salah pada dokumen bermerek.
+    assert.doesNotMatch(kode, /&copy; 2025/);
+    assert.match(kode, /getFullYear\(\)/);
+  });
+});
