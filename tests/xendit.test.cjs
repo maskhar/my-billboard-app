@@ -98,6 +98,12 @@ const JALUR_HTML = path.join(__dirname, '..', 'src', 'lib', 'html.ts');
 const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
 const JALUR_NOMOR_PESANAN = path.join(__dirname, '..', 'src', 'lib', 'nomor-pesanan.ts');
 const JALUR_LOG_AMAN = path.join(__dirname, '..', 'src', 'lib', 'log-aman.ts');
+const JALUR_OPSI_BILLBOARD = path.join(__dirname, '..', 'src', 'lib', 'opsi-billboard.ts');
+const jalurBillboardRoute = (nama) =>
+  path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', nama, 'route.ts');
+const JALUR_ROUTE_ROLLBACK = jalurBillboardRoute('rollback');
+const JALUR_ROUTE_BILLBOARD_CREATE = jalurBillboardRoute('create');
+const JALUR_ROUTE_BILLBOARD_UPDATE = jalurBillboardRoute('update');
 const JALUR_ROUTE_CANCEL = path.join(
   __dirname, '..', 'src', 'app', 'api', 'booking', 'cancel', 'route.ts'
 );
@@ -10919,5 +10925,380 @@ describe('temuan lint yang sudah dibereskan', () => {
     // Pemeriksaan karakter kendalinya sendiri HARUS tetap ada: ia yang menahan
     // `javascript\n:alert(1)` lolos sebagai URL sah.
     assert.match(kode, /\[\\u0000-\\u001F\\u007F\]/);
+  });
+});
+
+// ===========================================================================
+// `any` YANG MENUTUPI CACAT SUNGGUHAN
+// ===========================================================================
+//
+// Tiga tempat di bawah bukan soal kerapian tipe. Di masing-masing, `any`
+// membuat compiler diam tentang nilai yang datang dari `req.json()` atau dari
+// teks JSON di database — dan nilai itu berakhir di kolom database, di halaman
+// publik, atau di tab Network pengunjung.
+// Komentar dibuang sebelum dicocokkan: berkas-berkas di bawah MENYEBUT construct
+// yang sudah dibuang (`any`, `errorDetails`, `o.included === true`) di dalam
+// komentar yang menjelaskan kenapa ia dibuang. Tanpa ini setiap assertion
+// `doesNotMatch` akan gagal karena penjelasannya sendiri.
+//
+// Hanya baris `//`, BUKAN blok `/* */`: pola glob dan regex di dalam kode
+// membuat penghapus blok komentar menelan separuh berkas.
+function kodeSajaAny(jalur) {
+  return fs
+    .readFileSync(jalur, 'utf8')
+    .split('\n')
+    .filter((baris) => !/^\s*(\/\/|\*|\/\*)/.test(baris))
+    .join('\n');
+}
+
+describe('pisahkanOpsi()', () => {
+  const { pisahkanOpsi } = require(JALUR_OPSI_BILLBOARD);
+
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    try {
+      return { hasil: fn(), log: tercatat.join('\n') };
+    } finally {
+      console.error = asli;
+    }
+  }
+
+  it('memisahkan included true dan false', () => {
+    const { hasil } = tanpaGalat(() =>
+      pisahkanOpsi([
+        { name: 'Pemasangan', included: true },
+        { name: 'Desain', included: false },
+        { name: 'Perawatan', included: true },
+      ])
+    );
+    assert.deepEqual(hasil.includes, ['Pemasangan', 'Perawatan']);
+    assert.deepEqual(hasil.excludes, ['Desain']);
+  });
+
+  it('opsi tanpa field included tidak masuk daftar mana pun', () => {
+    // Bukan truthy: `included` yang hilang dulu dihitung EXCLUDE di
+    // `update/route.ts` tapi tidak masuk daftar apa pun di `create/route.ts`.
+    // Selisih itu membuat satu billboard berubah daftar fasilitasnya hanya
+    // karena disimpan lewat jalur yang berbeda.
+    const { hasil } = tanpaGalat(() => pisahkanOpsi([{ name: 'Pemasangan' }]));
+    assert.deepEqual(hasil.includes, []);
+    assert.deepEqual(hasil.excludes, []);
+  });
+
+  it('included bernilai truthy tapi bukan boolean juga diabaikan', () => {
+    const { hasil } = tanpaGalat(() =>
+      pisahkanOpsi([
+        { name: 'A', included: 1 },
+        { name: 'B', included: 'true' },
+      ])
+    );
+    assert.deepEqual(hasil.includes, []);
+    assert.deepEqual(hasil.excludes, []);
+  });
+
+  it('nama yang bukan teks DITOLAK, bukan diteruskan ke jsonb', () => {
+    // Ini cacat yang ditutupi `any`. Nilai di bawah masuk ke kolom jsonb
+    // `Billboard.includes` apa adanya — jsonb menerima objek dan angka, jadi
+    // tidak ada galat database dan tidak ada log. Lalu ia dibaca halaman produk
+    // PUBLIK dan dirender `<span>{item}</span>`: React melempar "Objects are not
+    // valid as a React child", tidak ada komponen yang menangkapnya di halaman
+    // itu, dan SELURUH halaman billboard mati untuk setiap pengunjung.
+    const { hasil, log } = tanpaGalat(() =>
+      pisahkanOpsi(
+        [
+          { name: { jahat: true }, included: true },
+          { name: 42, included: true },
+          { name: null, included: true },
+          { name: ['a'], included: false },
+          { name: 'Sah', included: true },
+        ],
+        'uji'
+      )
+    );
+    assert.deepEqual(hasil.includes, ['Sah']);
+    assert.deepEqual(hasil.excludes, []);
+    // Ditolak, tapi TIDAK diam-diam: admin yang fasilitasnya hilang dari halaman
+    // perlu bisa menelusuri sebabnya.
+    assert.match(log, /4 opsi fasilitas ditolak/);
+    assert.match(log, /uji/);
+  });
+
+  it('nama kosong atau hanya spasi ditolak, sisanya dipangkas', () => {
+    const { hasil } = tanpaGalat(() =>
+      pisahkanOpsi([
+        { name: '   ', included: true },
+        { name: '', included: true },
+        { name: '  Pemasangan  ', included: true },
+      ])
+    );
+    assert.deepEqual(hasil.includes, ['Pemasangan']);
+  });
+
+  it('nama yang kepanjangan ditolak', () => {
+    // Nama fasilitas tampil di halaman publik; ia bukan tempat menampung teks
+    // sepanjang megabyte.
+    const { hasil } = tanpaGalat(() =>
+      pisahkanOpsi([{ name: 'x'.repeat(201), included: true }])
+    );
+    assert.deepEqual(hasil.includes, []);
+  });
+
+  it('elemen yang bukan objek dilewati tanpa melempar', () => {
+    const { hasil } = tanpaGalat(() =>
+      pisahkanOpsi(['teks', 5, null, undefined, { name: 'Sah', included: true }])
+    );
+    assert.deepEqual(hasil.includes, ['Sah']);
+  });
+
+  it('nilai yang bukan array menghasilkan dua daftar kosong, bukan lemparan', () => {
+    // Bentuk permintaan yang salah dijawab pemanggilnya; billboard tanpa daftar
+    // fasilitas adalah keadaan yang sah.
+    for (const nilai of [undefined, null, 'teks', 5, {}, { adminOptions: [] }]) {
+      const { hasil } = tanpaGalat(() => pisahkanOpsi(nilai));
+      assert.deepEqual(hasil, { includes: [], excludes: [] });
+    }
+  });
+
+  it('kedua route billboard memakai fungsi ini, bukan rumus kembarnya', () => {
+    for (const jalur of [JALUR_ROUTE_BILLBOARD_CREATE, JALUR_ROUTE_BILLBOARD_UPDATE]) {
+      const kode = kodeSajaAny(jalur);
+      assert.match(kode, /pisahkanOpsi\(/, `${jalur} tidak memakai pisahkanOpsi`);
+      // Rumus lamanya benar-benar hilang, bukan hanya ditambahi yang baru.
+      assert.doesNotMatch(kode, /opt\.included === true/, `${jalur} masih menyaring sendiri`);
+      assert.doesNotMatch(kode, /o\.included === true/, `${jalur} masih menyaring sendiri`);
+      assert.doesNotMatch(kode, /:\s*any\b/, `${jalur} masih memakai any`);
+    }
+  });
+});
+
+describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
+  function pasang(snapshot, { peran = 'ADMIN' } = {}) {
+    const tertulis = [];
+    const prisma = {
+      billboardHistory: {
+        findUnique: async () => ({
+          id: 'hist-1',
+          billboardId: 'bb-1',
+          title: 'Billboard Lama',
+          price: '10000000',
+          status: 'Available',
+          snapshot,
+        }),
+      },
+      billboard: {
+        update: async (args) => {
+          tertulis.push(args);
+          return {};
+        },
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ROLLBACK, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: peran } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+    });
+
+    return { route, tertulis: () => tertulis };
+  }
+
+  function permintaan(isi) {
+    return { json: async () => isi };
+  }
+
+  const LENGKAP = {
+    address: 'Jl. Merdeka 1',
+    sku: 'BB-001',
+    type: 'Billboard',
+    mainImage: 'https://contoh.test/a.jpg',
+    lat: -6.2,
+    lng: 106.8,
+    slug: 'billboard-lama',
+  };
+
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    try {
+      return fn().then(
+        (hasil) => {
+          console.error = asli;
+          return { hasil, log: tercatat.join('\n') };
+        },
+        (galat) => {
+          console.error = asli;
+          throw galat;
+        }
+      );
+    } catch (galat) {
+      console.error = asli;
+      throw galat;
+    }
+  }
+
+  it('snapshot lengkap dipulihkan seluruhnya', async () => {
+    const { route, tertulis } = pasang(JSON.stringify(LENGKAP));
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+    assert.equal(tertulis().length, 1);
+
+    const data = tertulis()[0].data;
+    assert.equal(data.address, 'Jl. Merdeka 1');
+    assert.equal(data.type, 'Billboard');
+    assert.equal(data.slug, 'billboard-lama');
+    assert.equal(data.lat, -6.2);
+    assert.equal(data.lng, 106.8);
+    assert.equal(data.sku, 'BB-001');
+    // Ketiga kolom di luar snapshot diambil dari baris history, bukan dari JSON.
+    assert.equal(data.title, 'Billboard Lama');
+    assert.equal(data.updatedById, 'admin-1');
+  });
+
+  it('satu field hilang membatalkan rollback, bukan dilaporkan berhasil', async () => {
+    // INI CACAT YANG DITUTUPI `Record<string, any>`. `details.lat` yang tidak ada
+    // lolos compiler, dan Prisma memperlakukan `undefined` di dalam `data`
+    // sebagai "JANGAN UBAH kolom ini" — `update` berhasil, koordinat TIDAK
+    // dipulihkan, admin dibalas "Rollback Berhasil". Rollback yang sebagian
+    // adalah data yang tercampur antara dua versi, tanpa apa pun yang
+    // menandainya.
+    const tanpaLat = { ...LENGKAP };
+    delete tanpaLat.lat;
+
+    const { route, tertulis } = pasang(JSON.stringify(tanpaLat));
+    const { hasil: res, log } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+
+    assert.equal(res.status, 422);
+    assert.equal(tertulis().length, 0, 'tidak boleh ada penulisan sebagian');
+    const isi = await res.json();
+    assert.match(isi.message, /lat/);
+    assert.match(log, /tidak lengkap/);
+  });
+
+  it('setiap field wajib diperiksa sendiri-sendiri', async () => {
+    for (const kunci of ['address', 'type', 'mainImage', 'slug', 'lat', 'lng']) {
+      const rusak = { ...LENGKAP };
+      delete rusak[kunci];
+
+      const { route, tertulis } = pasang(JSON.stringify(rusak));
+      const { hasil: res } = await tanpaGalat(() =>
+        route.POST(permintaan({ historyId: 'hist-1' }))
+      );
+
+      assert.equal(res.status, 422, `${kunci} hilang tapi rollback diteruskan`);
+      assert.equal(tertulis().length, 0, `${kunci} hilang tapi database ditulis`);
+      const isi = await res.json();
+      assert.match(isi.message, new RegExp(kunci), `pesan tidak menyebut ${kunci}`);
+    }
+  });
+
+  it('koordinat yang tersimpan sebagai teks ditolak, bukan diteruskan ke Float', async () => {
+    // Snapshot lama bisa menyimpan "-6.2" sebagai teks. Lewat `any` nilai itu
+    // lolos compiler lalu ditolak kolom Float sebagai galat validasi — 500
+    // "Gagal Rollback" tanpa menyebut field mana yang salah.
+    const { route, tertulis } = pasang(JSON.stringify({ ...LENGKAP, lat: '-6.2' }));
+    const { hasil: res } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+    assert.equal(res.status, 422);
+    assert.equal(tertulis().length, 0);
+  });
+
+  it('Infinity pada koordinat ditolak', async () => {
+    // `1e999` adalah JSON yang SAH dan `JSON.parse` mengubahnya menjadi
+    // `Infinity` — bertipe `number`, jadi `typeof nilai === 'number'` saja
+    // meloloskannya, dan kolom Float menolaknya di lapisan database. Itu sebabnya
+    // pemeriksaannya `Number.isFinite`, bukan `typeof`.
+    assert.equal(JSON.parse('{"lat":1e999}').lat, Number.POSITIVE_INFINITY);
+
+    const snapshot = JSON.stringify({ ...LENGKAP, lat: 0 }).replace('"lat":0', '"lat":1e999');
+    const { route, tertulis } = pasang(snapshot);
+    const { hasil: res } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+    assert.equal(res.status, 422);
+    assert.equal(tertulis().length, 0);
+  });
+
+  it('sku opsional dipulihkan sebagai null, bukan undefined', async () => {
+    // `sku` bertipe `String?`, jadi ketidakhadirannya sah. Tapi `undefined`
+    // berarti "jangan ubah" bagi Prisma — sku versi sekarang akan tertinggal
+    // setelah rollback, padahal versi yang dipulihkan tidak punya sku.
+    const tanpaSku = { ...LENGKAP };
+    delete tanpaSku.sku;
+
+    const { route, tertulis } = pasang(JSON.stringify(tanpaSku));
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+    assert.strictEqual(tertulis()[0].data.sku, null);
+  });
+
+  it('snapshot berupa array ditolak', async () => {
+    // `typeof [] === 'object'`, jadi pemeriksaan objek saja meloloskan array —
+    // dan setiap field jadi `undefined`.
+    const { route, tertulis } = pasang(JSON.stringify([LENGKAP]));
+    const { hasil: res } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+    assert.equal(res.status, 422);
+    assert.equal(tertulis().length, 0);
+  });
+});
+
+describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
+  it('route pengaturan tidak lagi mengirim pesan galat mentah ke browser', () => {
+    // Pesan galat `fetch` ke Google memuat URL yang diminta, dan URL itu membawa
+    // `?key=<API key Gemini>`. Dikembalikan sebagai `errorDetails`, key itu
+    // tampil di tab Network siapa pun yang membuka halaman pengaturan.
+    const kode = kodeSajaAny(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'settings', 'route.ts')
+    );
+    assert.doesNotMatch(kode, /errorDetails/);
+    assert.doesNotMatch(kode, /catch\s*\(\s*error\s*:\s*any\s*\)/);
+    // Keterangannya tetap ada — hanya di log server.
+    assert.match(kode, /console\.error\(/);
+  });
+
+  it('pembaca badan galat Xendit tidak memakai any', () => {
+    const kode = kodeSajaAny(JALUR_MODUL);
+    assert.doesNotMatch(kode, /let data: any/);
+    assert.match(kode, /let data: unknown/);
+    // Bentuknya dipersempit dulu: `data` bisa berupa array, angka, atau null.
+    assert.match(kode, /Array\.isArray\(data\)/);
+  });
+
+  it('route pesanan tidak lagi menganotasi catch dengan any', () => {
+    for (const jalur of [JALUR_ROUTE_BOOKING]) {
+      const kode = kodeSajaAny(jalur);
+      assert.doesNotMatch(kode, /catch\s*\(\s*\w+\s*:\s*any\s*\)/, `${jalur} masih catch any`);
+    }
+  });
+
+  it('update-design-status memakai tipe Prisma, bukan any', () => {
+    const kode = kodeSajaAny(
+      path.join(
+        __dirname,
+        '..',
+        'src',
+        'app',
+        'api',
+        'admin',
+        'orders',
+        'update-design-status',
+        'route.ts'
+      )
+    );
+    assert.doesNotMatch(kode, /dataToUpdate: any/);
+    assert.match(kode, /Prisma\.BookingUpdateInput/);
+    // `import type`, supaya baris itu hilang saat kompilasi dan tidak menarik
+    // runtime Prisma ke bundle.
+    assert.match(kode, /import type \{ Prisma \}/);
   });
 });

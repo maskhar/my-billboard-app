@@ -462,7 +462,10 @@ export async function POST(req: Request) {
         tagihanSekarang: keAngka(tagihanAwal.jumlah),
     });
 
-  } catch (error: any) {
+  } catch (error) {
+    // `error: any` di sini tidak pernah dipakai sebagai `any` — hanya dicetak.
+    // Anotasinya justru berbahaya: ia mengundang `error.message` ditambahkan
+    // suatu saat tanpa penjagaan, dan `throw` boleh melempar nilai apa pun.
     console.error("🔥 Server Error:", error);
     return NextResponse.json({ message: "Error Server" }, { status: 500 });
   }

@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { keDecimal, lebihBesar } from "@/lib/money";
+import { pisahkanOpsi } from "@/lib/opsi-billboard";
 import {
   BillboardStatus,
   PublishStatus,
@@ -45,18 +46,18 @@ export async function POST(req: Request) {
         { label: "Material", value: body.material || "-" },
     ];
 
-    // 3. [LOGIC BARU] MEMISAHKAN INCLUDE & EXCLUDE
-    // Dari checklist form, kita pisahkan mana yang True (Include) dan False (Exclude)
-    // Pastikan body.adminOptions berbentuk Array, jika tidak fallback ke []
-    const options = Array.isArray(body.adminOptions) ? body.adminOptions : [];
-    
-    const includesList = options
-        .filter((opt: any) => opt.included === true)
-        .map((opt: any) => opt.name);
-        
-    const excludesList = options
-        .filter((opt: any) => opt.included === false)
-        .map((opt: any) => opt.name);
+    // 3. MEMISAHKAN INCLUDE & EXCLUDE
+    //
+    // Nama fasilitasnya dipastikan berupa teks di `pisahkanOpsi`, bukan diambil
+    // apa adanya dari body. Alasannya sama dengan galeri di bawah — isinya masuk
+    // ke jsonb tanpa ditolak database, lalu dirender di halaman produk publik —
+    // dan akibatnya lebih parah: objek sebagai anak elemen React melempar, dan
+    // di halaman itu tidak ada komponen yang menangkapnya, jadi seluruh halaman
+    // billboard mati untuk setiap pengunjung.
+    const { includes: includesList, excludes: excludesList } = pisahkanOpsi(
+        body.adminOptions,
+        'billboards/create'
+    );
 
     // 4. SUSUN GALERI
     //

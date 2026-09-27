@@ -39,22 +39,99 @@ export async function POST(req: Request) {
         if (!history) return NextResponse.json({ message: "History not found" }, { status: 404 });
 
         // Snapshot yang rusak dulu melempar ke `catch` di bawah dan muncul
-        // sebagai "Gagal Rollback" generik. Lebih buruk lagi kalau hasilnya
-        // objek kosong: setiap field jadi `undefined`, dan Prisma memperlakukan
-        // `undefined` sebagai "jangan ubah kolom ini" — rollback akan dilaporkan
-        // BERHASIL padahal tidak ada satu pun field yang dipulihkan.
-        const details = safeJsonParse<Record<string, any> | null>(
+        // sebagai "Gagal Rollback" generik.
+        const details = safeJsonParse<unknown>(
             history.snapshot,
             null,
             `BillboardHistory.snapshot id=${historyId}`
         );
 
-        if (!details || typeof details !== 'object') {
+        if (!details || typeof details !== 'object' || Array.isArray(details)) {
             return NextResponse.json(
                 { message: "Data snapshot rusak, rollback dibatalkan agar data tidak tercampur." },
                 { status: 422 }
             );
         }
+
+        // SETIAP FIELD DIPERIKSA, BUKAN HANYA OBJEKNYA
+        //
+        // Ini bukan soal kerapian tipe. Snapshot ini teks JSON yang ditulis
+        // versi kode mana pun sejak tabel ini ada, jadi field yang hilang adalah
+        // keadaan yang nyata — bukan kemungkinan teoretis.
+        //
+        // Prisma memperlakukan `undefined` di dalam `data` sebagai "JANGAN UBAH
+        // kolom ini". Dengan `Record<string, any>`, `details.lat` yang tidak ada
+        // lolos compiler, lolos Prisma, dan `update` berhasil — koordinat
+        // billboard TIDAK dipulihkan, tapi admin tetap dibalas "Rollback
+        // Berhasil". Rollback yang sebagian adalah data yang tercampur antara dua
+        // versi, dan tidak ada apa pun yang menandainya.
+        //
+        // Yang lebih halus: `lat`/`lng` bertipe Float dan `slug` unik. Snapshot
+        // lama yang menyimpan koordinat sebagai teks ("-6.2") diterima compiler
+        // lewat `any`, lalu ditolak database sebagai galat validasi — 500 "Gagal
+        // Rollback" tanpa menyebut field mana yang salah.
+        const isi = details as Record<string, unknown>;
+
+        const teks = (kunci: string): string | null => {
+            const nilai = isi[kunci];
+            if (typeof nilai !== 'string') return null;
+            const rapi = nilai.trim();
+            return rapi === '' ? null : rapi;
+        };
+
+        const angka = (kunci: string): number | null => {
+            const nilai = isi[kunci];
+            // `Number.isFinite`, bukan `typeof === 'number'`: `NaN` dan
+            // `Infinity` bertipe number dan ditolak kolom Float.
+            return typeof nilai === 'number' && Number.isFinite(nilai) ? nilai : null;
+        };
+
+        const address = teks('address');
+        const type = teks('type');
+        const mainImage = teks('mainImage');
+        const slug = teks('slug');
+        const lat = angka('lat');
+        const lng = angka('lng');
+
+        const hilang: string[] = [];
+        // Daftar ini hanya untuk PESANnya. Penyempitan tipenya dilakukan
+        // terpisah di bawah lewat satu `if` eksplisit: TypeScript tidak bisa
+        // menyimpulkan bahwa `address` bukan `null` dari `hilang.length === 0`,
+        // dan memaksanya dengan `!` akan mengembalikan tepat lubang yang
+        // pemeriksaan ini dibuat untuk menutup.
+        if (address === null) hilang.push('address');
+        if (type === null) hilang.push('type');
+        if (mainImage === null) hilang.push('mainImage');
+        if (slug === null) hilang.push('slug');
+        if (lat === null) hilang.push('lat');
+        if (lng === null) hilang.push('lng');
+
+        if (
+            address === null ||
+            type === null ||
+            mainImage === null ||
+            slug === null ||
+            lat === null ||
+            lng === null
+        ) {
+            console.error(
+                `[billboards/rollback] Snapshot id=${historyId} tidak lengkap: ` +
+                `${hilang.join(', ')}. Rollback dibatalkan.`
+            );
+            return NextResponse.json(
+                {
+                    message:
+                        `Snapshot ini tidak memuat ${hilang.join(', ')}, jadi rollback ` +
+                        `dibatalkan — memulihkan sebagian akan mencampur data dua versi.`,
+                },
+                { status: 422 }
+            );
+        }
+
+        // `sku` opsional di schema (`String?`), jadi ketidakhadirannya sah dan
+        // dipulihkan sebagai `null` — BUKAN `undefined`, yang akan membiarkan sku
+        // versi sekarang tertinggal setelah rollback.
+        const sku = teks('sku');
 
         // 2. Kembalikan data ke Billboard Utama
         await prisma.billboard.update({
@@ -64,13 +141,13 @@ export async function POST(req: Request) {
                 price: history.price,
                 status: history.status,
                 // Balikin data dari snapshot JSON
-                address: details.address,
-                sku: details.sku,
-                type: details.type,
-                mainImage: details.mainImage,
-                lat: details.lat,
-                lng: details.lng,
-                slug: details.slug,
+                address,
+                sku,
+                type,
+                mainImage,
+                lat,
+                lng,
+                slug,
                 updatedById: session.user.id // Ditandai rollback oleh admin yg klik
             }
         });

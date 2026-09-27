@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { idDariBody } from "@/lib/id-dari-body";
 import { keDecimal, lebihBesar } from "@/lib/money";
+import { pisahkanOpsi } from "@/lib/opsi-billboard";
 import {
   BillboardStatus,
   PublishStatus,
@@ -69,15 +70,16 @@ export async function POST(req: Request) {
         { label: "Material", value: body.material || "-" },
       ];
 
-      // `=== true` / `=== false`, bukan truthy. Ini menyamakan perilakunya dengan
-      // `create/route.ts`: opsi yang datang tanpa field `included` (mis. dari
-      // form versi lain) dulu di sini dihitung sebagai EXCLUDE, sementara di
-      // create ia tidak masuk daftar mana pun. Perbedaan itu membuat satu
+      // Satu fungsi bersama dengan `create/route.ts`, bukan rumus kembar: opsi
+      // yang datang tanpa field `included` dulu di sini dihitung sebagai
+      // EXCLUDE, sementara di create ia tidak masuk daftar mana pun — satu
       // billboard bisa berubah daftar fasilitasnya hanya karena disimpan lewat
-      // jalur yang berbeda.
-      const options = Array.isArray(body.adminOptions) ? body.adminOptions : [];
-      const includesList = options.filter((o:any) => o.included === true).map((o:any) => o.name);
-      const excludesList = options.filter((o:any) => o.included === false).map((o:any) => o.name);
+      // jalur yang berbeda. Nama fasilitasnya juga dipastikan berupa teks di
+      // sana; lihat catatan di `src/lib/opsi-billboard.ts`.
+      const { includes: includesList, excludes: excludesList } = pisahkanOpsi(
+        body.adminOptions,
+        'billboards/update'
+      );
 
       // Bentuk galeri dipastikan sebelum masuk database — setiap elemen nantinya
       // dirender sebagai `src` gambar di halaman publik. Lihat catatan yang sama

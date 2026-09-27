@@ -114,8 +114,27 @@ export async function POST(req: Request) {
 
           return NextResponse.json({ message: "Sukses", aiResult: resultText });
 
-      } catch (error: any) {
-          return NextResponse.json({ message: "Koneksi Gagal.", errorDetails: error.message }, { status: 500 });
+      } catch (error) {
+          // `catch (error: any)` lalu `error.message` dulu di sini adalah cacat,
+          // bukan kelonggaran tipe: `throw` boleh melempar apa saja, dan
+          // `fetch` yang gagal pada AbortError melempar objek tanpa `message`.
+          // Membacanya lewat `any` berarti route ini bisa melempar
+          // TypeError DI DALAM catch — galat 500 tanpa badan JSON, di jalur yang
+          // justru dibuat untuk melaporkan galat.
+          //
+          // Isinya juga tidak lagi dikirim ke browser. Pesan galat `fetch` ke
+          // Google memuat URL yang diminta, dan URL itu membawa `?key=<API key
+          // Gemini>` di query string — dikembalikan sebagai `errorDetails`, key
+          // itu tampil di tab Network siapa pun yang membuka halaman pengaturan.
+          // Keterangannya tetap ada, hanya di log server.
+          console.error(
+              '[admin/settings] Gagal menghubungi Gemini:',
+              error instanceof Error ? error.message : error
+          );
+          return NextResponse.json(
+              { message: "Koneksi ke layanan AI gagal. Periksa log server untuk keterangannya." },
+              { status: 500 }
+          );
       }
   }
 

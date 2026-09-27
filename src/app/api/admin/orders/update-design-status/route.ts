@@ -3,6 +3,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+// `import type`, bukan import nilai: yang dipakai hanya tipenya, jadi baris ini
+// hilang sepenuhnya saat kompilasi dan tidak menarik runtime Prisma ke bundle.
+import type { Prisma } from "@prisma/client";
 import { DesignStatus, daftarNilai, sahDesignStatus } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
 
@@ -45,7 +48,12 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: "Alasan penolakan harus diisi" }, { status: 400 });
     }
 
-    const dataToUpdate: any = {
+    // `Prisma.BookingUpdateInput`, bukan `any`: dengan `any` setiap nama kolom
+    // di bawah lolos tanpa diperiksa, dan kolom yang salah tulis diteruskan ke
+    // `booking.update` sebagai galat validasi runtime — 500 "Gagal mengupdate
+    // status desain" yang baru ketahuan saat admin menekan tombolnya, bukan saat
+    // build.
+    const dataToUpdate: Prisma.BookingUpdateInput = {
       designStatus: status,
       designRejectionReason: status === 'REJECTED' ? reason : null,
     };

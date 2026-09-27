@@ -239,7 +239,12 @@ async function panggilXendit<T>(
     );
   }
 
-  let data: any = null;
+  // `unknown`, bukan `any`: jawaban Xendit belum diperiksa pada titik ini, dan
+  // `any` membuat setiap pembacaan di bawahnya lolos tanpa penjagaan. Ketiga
+  // pemakaiannya memang sudah defensif (`typeof ... === 'string'`, `?.`), tapi
+  // dengan `any` tidak ada yang MENUNTUT itu — pembaca berikutnya bisa menulis
+  // `data.payment_session_id` dan compiler diam.
+  let data: unknown = null;
   try {
     data = teks ? JSON.parse(teks) : null;
   } catch {
@@ -253,15 +258,23 @@ async function panggilXendit<T>(
   }
 
   if (!res.ok) {
+    // Dibaca lewat bentuk yang dipersempit dulu, bukan `data?.error_code`
+    // langsung: badan galat Xendit belum diperiksa bentuknya, dan `data` bisa
+    // berupa array, angka, atau `null`.
+    const badan: Record<string, unknown> =
+      data !== null && typeof data === 'object' && !Array.isArray(data)
+        ? (data as Record<string, unknown>)
+        : {};
+
     const kode =
-      typeof data?.error_code === 'string' ? data.error_code : 'GALAT_TIDAK_DIKENAL';
+      typeof badan.error_code === 'string' ? badan.error_code : 'GALAT_TIDAK_DIKENAL';
 
     // Pesan dari Xendit sengaja TIDAK dibawa ke dalam galat yang dilempar.
     // Jawaban galat validasi memuat kembali isi permintaan kita, dan galat yang
     // dilempar bisa berakhir di layar pembeli, di pelacak galat, atau di
     // tangkapan layar. Isinya tetap tercatat — hanya di log server, sudah
     // disamarkan.
-    catatGalat(path, res.status, kode, data?.message);
+    catatGalat(path, res.status, kode, badan.message);
     throw new GalatXendit(res.status, kode, `Xendit menolak permintaan (${kode}).`);
   }
 
