@@ -13,7 +13,7 @@
     "dev": "next dev -p 4000",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint",
+    "lint": "eslint",
     "menu": "node manager.js",
     "test:xendit": "node --conditions=react-server --test tests/xendit.test.cjs"
   },

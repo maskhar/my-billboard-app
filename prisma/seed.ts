@@ -1,7 +1,16 @@
 // prisma/seed.ts
-const { PrismaClient } = require("@prisma/client");
-const { hash } = require("bcryptjs");
-const { randomBytes } = require("crypto");
+//
+// `import`, bukan `require`: dengan `require` saja berkas ini bukan modul bagi
+// TypeScript, jadi `PrismaClient`, `prisma`, dan `main` hidup di lingkup global
+// yang SAMA dengan `prisma/set-admin.ts` — dan keduanya mendeklarasikan ketiga
+// nama itu. Hasilnya enam galat `tsc` yang menyamarkan galat asli.
+//
+// `ts-node --compiler-options {"module":"CommonJS"}` di `package.json` tetap
+// menerjemahkan `import` ini menjadi `require` saat dijalankan, jadi cara
+// menjalankannya tidak berubah.
+import { Prisma, PrismaClient } from "@prisma/client";
+import { hash } from "bcryptjs";
+import { randomBytes } from "crypto";
 
 const prisma = new PrismaClient();
 
@@ -103,7 +112,14 @@ async function main() {
   console.log("");
 
   // 3. BUAT DATA BILLBOARD DUMMY
-  const billboards = [
+  //
+  // Tipe ditulis di sini, bukan dibiarkan disimpulkan: tanpa anotasi ini
+  // `status: "Available"` disimpulkan sebagai `string`, dan `string` tidak
+  // masuk ke `BillboardStatus`. Galatnya dulu tidak pernah terlihat karena
+  // `tsc` sudah merah oleh enam galat deklarasi ganda dan `next build`
+  // mengabaikan galat TypeScript. Dengan anotasi, salah ketik nama enum di data
+  // seed gagal saat diperiksa, bukan saat seed dijalankan.
+  const billboards: Prisma.BillboardUncheckedCreateInput[] = [
     {
       title: "BILLBOARD - Jl. Kawi Atas, Gading Kasri, Malang",
       slug: "billboard-kawi-atas-malang",

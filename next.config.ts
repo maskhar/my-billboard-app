@@ -23,14 +23,25 @@ const nextConfig: NextConfig = {
     ],
   },
   
-  // 3. Agar proses build lancar tanpa terhenti warning kecil
-  typescript: {
-    ignoreBuildErrors: true,
-  },
-  // Perbaikan struktur eslint agar warning kuning hilang
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  // `typescript.ignoreBuildErrors: true` DIBUANG.
+  //
+  // Selama flag itu menyala, `next build` berhasil walaupun kodenya tidak
+  // ter-typecheck. Yang tersembunyi di baliknya bukan "warning kecil": satu
+  // galat nyata di `prisma/seed.ts` — `status: "Available"` bertipe `string`,
+  // bukan `BillboardStatus` — hidup di sana tanpa terlihat, bersama enam galat
+  // deklarasi ganda di `prisma/seed.ts`/`prisma/set-admin.ts` yang membuat
+  // `npx tsc --noEmit` selalu merah. Gerbang yang selalu merah adalah gerbang
+  // yang berhenti dibaca orang, dan build yang lolos apa pun isinya adalah
+  // build yang tidak menjaga apa-apa.
+  //
+  // Ketujuhnya sudah dibereskan, `tsc` bersih, jadi gerbangnya dinyalakan.
+  // Bila nanti ada galat tipe baru, build gagal — itu memang gunanya.
+  //
+  // Blok `eslint: { ignoreDuringBuilds: true }` juga dibuang, tapi karena
+  // alasan berbeda: Next 16 tidak lagi menjalankan ESLint saat build dan tidak
+  // lagi mengenal kunci itu. Ia bukan sekadar tidak berguna — ia GALAT TIPE
+  // (TS2353) di berkas konfigurasi ini sendiri. Linting sekarang dijalankan
+  // lewat `npm run lint`.
 };
 
 export default nextConfig;

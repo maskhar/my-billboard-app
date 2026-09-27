@@ -10566,3 +10566,82 @@ function kodeSajaCron(jalur) {
     .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
     .join('\n');
 }
+
+// ===========================================================================
+// GERBANG TIPE: BUILD TIDAK LAGI LOLOS APA PUN
+// ===========================================================================
+describe('gerbang tipe dan lint', () => {
+  const AKAR = path.join(__dirname, '..');
+
+  /** Kode tanpa komentar: komentar berkas-berkas ini menyebut konstruk yang diuji. */
+  function kodeSajaGerbang(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('next.config.ts tidak lagi mengabaikan galat TypeScript saat build', () => {
+    const sumber = kodeSajaGerbang(path.join(AKAR, 'next.config.ts'));
+    // `ignoreBuildErrors: true` membuat `next build` berhasil walaupun kodenya
+    // tidak ter-typecheck. Selama menyala, tujuh galat nyata hidup tanpa
+    // terlihat — termasuk `status: "Available"` bertipe `string` di seed.
+    assert.doesNotMatch(sumber, /ignoreBuildErrors/);
+  });
+
+  it('next.config.ts tidak memakai kunci eslint yang tidak dikenal Next 16', () => {
+    const sumber = kodeSajaGerbang(path.join(AKAR, 'next.config.ts'));
+    // Next 16 tidak lagi menjalankan ESLint saat build dan tidak mengenal
+    // kunci ini. Ia bukan sekadar tidak berguna — ia galat tipe TS2353 di
+    // berkas konfigurasi itu sendiri.
+    assert.doesNotMatch(sumber, /ignoreDuringBuilds/);
+    assert.doesNotMatch(sumber, /^\s*eslint:\s*\{/m);
+  });
+
+  it('skrip lint memanggil eslint, bukan `next lint` yang sudah dibuang', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(AKAR, 'package.json'), 'utf8'));
+    // `next lint` dihapus di Next 16: perintahnya menafsirkan "lint" sebagai
+    // nama direktori proyek dan gagal dengan "Invalid project directory
+    // provided, no such directory: .../lint".
+    assert.doesNotMatch(pkg.scripts.lint, /next lint/);
+    assert.match(pkg.scripts.lint, /eslint/);
+  });
+
+  it('eslint mengabaikan salinan repo di .claude/worktrees', () => {
+    const sumber = fs.readFileSync(path.join(AKAR, 'eslint.config.mjs'), 'utf8');
+    // Tanpa pola ini `eslint` tanpa argumen melintasi salinan lengkap repo dan
+    // melaporkan setiap temuan dua kali. Laporan separuh gaung tidak bisa
+    // dipakai sebagai gerbang.
+    assert.match(sumber, /"\.claude\/\*\*"/);
+  });
+
+  it('skrip prisma memakai import, bukan require yang membocorkan lingkup global', () => {
+    for (const nama of ['seed.ts', 'set-admin.ts']) {
+      const sumber = kodeSajaGerbang(path.join(AKAR, 'prisma', nama));
+      // Dengan `require` saja berkasnya BUKAN modul bagi TypeScript, jadi
+      // `PrismaClient`, `prisma`, dan `main` hidup di lingkup global yang sama
+      // di kedua berkas — enam galat deklarasi ganda yang menyamarkan galat asli.
+      assert.match(sumber, /^import .* from ["']@prisma\/client["'];?$/m, nama);
+      assert.doesNotMatch(sumber, /require\(["']@prisma\/client["']\)/, nama);
+    }
+  });
+
+  it('data seed billboard dianotasi tipe Prisma, bukan disimpulkan sebagai string', () => {
+    const sumber = kodeSajaGerbang(path.join(AKAR, 'prisma', 'seed.ts'));
+    // Tanpa anotasi, `status: "Available"` disimpulkan `string` dan tidak masuk
+    // ke `BillboardStatus`. Dengan anotasi, salah ketik nama enum gagal saat
+    // diperiksa, bukan saat seed dijalankan pada database sungguhan.
+    assert.match(sumber, /const billboards: Prisma\.BillboardUncheckedCreateInput\[\] = \[/);
+  });
+
+  it('set-admin tidak lagi menulis email target tetap di kode', () => {
+    const sumber = kodeSajaGerbang(path.join(AKAR, 'prisma', 'set-admin.ts'));
+    // Skrip yang MENAIKKAN HAK AKSES tidak boleh bergantung pada pembacanya
+    // ingat mengedit kode dulu. Yang lupa menaikkan akun orang lain jadi ADMIN.
+    assert.doesNotMatch(sumber, /admin@gmail\.com/);
+    assert.match(sumber, /process\.argv\[2\]/);
+    assert.match(sumber, /process\.exit\(1\)/);
+  });
+});
