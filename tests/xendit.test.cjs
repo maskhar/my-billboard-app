@@ -10021,3 +10021,142 @@ describe('batas galat: kegagalan database tidak lagi tampil sebagai "tidak ada"'
     assert.match(pilih[0], /finally\s*\{[\s\S]*?setIsLoadingMessages\(false\)/);
   });
 });
+
+describe('StatusChanger: menu pengubah status memakai tombol, bukan tautan palsu', () => {
+  const JALUR = path.join(
+    __dirname,
+    '..',
+    'src',
+    'components',
+    'admin',
+    'StatusChanger.tsx'
+  );
+
+  // Komentar WAJIB dibuang lebih dulu. Header berkas ini MENYEBUT
+  // `<a href="#">` dan `e.preventDefault()` verbatim untuk menjelaskan kenapa
+  // keduanya dibuang; membaca berkas mentah membuat setiap assertion "tidak ada
+  // lagi" gagal atas kalimat penjelasnya sendiri.
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const kode = kodeSaja(JALUR);
+
+  it('tidak ada lagi <a href="#"> sebagai kontrol pengubah data', () => {
+    // Bagi pembaca layar `<a href="#">` adalah TAUTAN ke halaman ini sendiri,
+    // bukan tombol yang mengubah data. Klik tengah/Ctrl+klik juga membuka tab
+    // baru dan tidak menjalankan apa pun.
+    assert.doesNotMatch(kode, /<a\s+href="#"/);
+    assert.doesNotMatch(kode, /e\.preventDefault\(\)/);
+  });
+
+  it('kelima pilihan dirender lewat satu komponen Pilihan bertombol', () => {
+    assert.match(kode, /const Pilihan = \(\{/);
+    assert.match(kode, /<button\s*\n?\s*type="button"\s*\n?\s*role="menuitem"/);
+
+    const pilihan = kode.match(/<Pilihan\s/g) || [];
+    assert.strictEqual(
+      pilihan.length,
+      5,
+      'lima nilai enum sah: Available, Booked, PUBLISHED, DRAFT, ARCHIVED'
+    );
+  });
+
+  it('kelima nilai yang dikirim tetap nilai enum Prisma yang sah', () => {
+    // `Available`/`Booked` memang bukan huruf besar semua — itu bentuk asli
+    // enum `BillboardStatus` di schema, bukan salah tulis.
+    for (const nilai of ['"Available"', '"Booked"', '"PUBLISHED"', '"DRAFT"', '"ARCHIVED"']) {
+      assert.match(kode, new RegExp(`value=${nilai}`));
+    }
+  });
+
+  it('pilihan yang sedang berlaku ditandai dan tidak bisa diklik ulang', () => {
+    // Lima baris identik memaksa operator menebak posisi billboard sekarang.
+    assert.match(kode, /const aktif =/);
+    assert.match(kode, /disabled=\{aktif\}/);
+    assert.match(kode, /aria-current=\{aktif \? 'true' : undefined\}/);
+    // Ikon centang saja tidak terbaca pembaca layar.
+    assert.match(kode, /<span className="sr-only">\(sedang berlaku\)<\/span>/);
+  });
+
+  it('menyetel nilai yang sudah berlaku tidak mengirim permintaan', () => {
+    const fungsi = kode.slice(
+      kode.indexOf('const handleStatusChange'),
+      kode.indexOf('const Pilihan')
+    );
+    assert.match(fungsi, /const berlaku =/);
+    assert.match(fungsi, /if \(berlaku === value\)/);
+    // Keluarnya lewat `return`, sebelum `fetch` mana pun.
+    const sebelumFetch = fungsi.slice(0, fungsi.indexOf('await fetch'));
+    assert.match(sebelumFetch, /return;/);
+  });
+
+  it('ada kunci in-flight sebelum permintaan dikirim', () => {
+    const fungsi = kode.slice(
+      kode.indexOf('const handleStatusChange'),
+      kode.indexOf('const Pilihan')
+    );
+    assert.match(fungsi, /if \(loading\) return;/);
+  });
+
+  it('res.json() tidak lagi bisa melempar dan menghapus pesan server', () => {
+    const fungsi = kode.slice(
+      kode.indexOf('const handleStatusChange'),
+      kode.indexOf('const Pilihan')
+    );
+    // Balasan 500 berbadan HTML membuat `await res.json()` melempar; lemparannya
+    // mendarat di `catch` dan mencetak pesan generik, menutupi keterangan asli.
+    assert.match(fungsi, /await res\.json\(\)\.catch\(\(\) => null\)/);
+    assert.doesNotMatch(fungsi, /await res\.json\(\);/);
+    assert.match(fungsi, /if \(!res\.ok\)/);
+    assert.match(fungsi, /data\?\.message/);
+  });
+
+  it('loading dibereskan langsung di finally, tanpa setTimeout kosmetik', () => {
+    const fungsi = kode.slice(
+      kode.indexOf('const handleStatusChange'),
+      kode.indexOf('const Pilihan')
+    );
+    assert.match(fungsi, /finally \{\s*setLoading\(false\);/);
+    // `setTimeout(..., 500)` menahan hamparan setengah detik setelah pekerjaan
+    // selesai, dan menyetel state pada komponen yang mungkin sudah dilepas.
+    assert.doesNotMatch(fungsi, /setTimeout/);
+  });
+
+  it('Content-Type tetap dikirim dan route tetap yang berautentikasi', () => {
+    // `/api/proxy` tidak punya autentikasi sama sekali; jangan kembali ke sana.
+    assert.match(kode, /'\/api\/admin\/billboards\/quick-update'/);
+    assert.doesNotMatch(kode, /\/api\/proxy/);
+    assert.match(kode, /'Content-Type': 'application\/json'/);
+  });
+
+  it('tombol pemicu mengumumkan dirinya sebagai menu, bukan dua kata enum', () => {
+    assert.match(kode, /aria-haspopup="menu"/);
+    assert.match(kode, /aria-expanded=\{isOpen\}/);
+    assert.match(kode, /Ubah status billboard\./);
+    // Badge enum mentah disembunyikan dari pembaca layar karena keterangan
+    // sr-only di atasnya sudah menyebut keduanya dalam kalimat utuh.
+    const badge = kode.match(/aria-hidden="true" className={`text-\[10px\]/g) || [];
+    assert.strictEqual(badge.length, 2);
+  });
+
+  it('Escape menutup menu, bukan hanya klik di luar', () => {
+    assert.match(kode, /function handleEscape\(event: KeyboardEvent\)/);
+    assert.match(kode, /event\.key === 'Escape'/);
+    assert.match(kode, /addEventListener\("keydown", handleEscape\)/);
+    // Pendengar wajib dilepas: satu baris tabel dilepas setiap refresh.
+    assert.match(kode, /removeEventListener\("keydown", handleEscape\)/);
+  });
+
+  it('tidak ada lagi blok kode mati yang dikomentari di badan fungsi', () => {
+    const mentah = fs.readFileSync(JALUR, 'utf8');
+    assert.doesNotMatch(mentah, /\/\/\s*alert\("Untuk saat ini hanya bisa/);
+    assert.doesNotMatch(mentah, /\/\/\s*if \(type !== 'publishStatus'\)/);
+  });
+});

@@ -1,9 +1,27 @@
 // src/components/admin/StatusChanger.tsx
 'use client';
 
+// Pengubah cepat status billboard dari tabel admin.
+//
+// Lima pilihan di menu ini dulu ditulis sebagai `<a href="#">` dengan
+// `e.preventDefault()`. Tiga akibatnya nyata:
+//
+//   1. Bagi teknologi bantu itu TAUTAN, bukan tombol. Pembaca layar
+//      mengumumkannya sebagai "link" dan menyebutkan tujuannya — `#`, alias
+//      halaman ini sendiri. Operator yang memakai pembaca layar tidak diberi
+//      tahu bahwa mengkliknya MENGUBAH DATA.
+//   2. `href="#"` tetap tujuan navigasi. Klik tengah atau Ctrl+klik membuka tab
+//      baru dan tidak menjalankan apa pun; dan bila `preventDefault` sempat
+//      gagal, halaman melompat ke atas di tengah penyimpanan.
+//   3. Tanpa `type="button"` dan tanpa peran yang benar, Enter/Space tidak
+//      berperilaku seragam antar-peramban.
+//
+// Semuanya kini `<button type="button">`. Perubahan lain di berkas ini yang
+// datang dari pembacaan yang sama dicatat di tempatnya masing-masing.
+
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2 } from 'lucide-react';
+import { Check, Loader2 } from 'lucide-react';
 
 interface Props {
   billboardId: string;
@@ -24,21 +42,37 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         setIsOpen(false);
       }
     }
+    // Escape menutup menu. Tanpa ini menu yang dibuka lewat papan ketik hanya
+    // bisa ditutup dengan mengklik di luarnya — jalan keluar yang tidak ada
+    // bagi orang yang tidak memakai tetikus.
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') setIsOpen(false);
+    }
     document.addEventListener("mousedown", handleClickOutside);
+    document.addEventListener("keydown", handleEscape);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+      document.removeEventListener("keydown", handleEscape);
     };
   }, [wrapperRef]);
 
   const handleStatusChange = async (type: 'status' | 'publishStatus', value: string) => {
-    // if (type !== 'publishStatus') {
-    //   alert("Untuk saat ini hanya bisa mengubah status publikasi.");
-    //   return;
-    // }
+    // Menyetel ulang nilai yang sudah berlaku tidak dikirim ke server. Ia
+    // menulis baris yang sama, memicu `router.refresh()`, dan menyalakan
+    // hamparan loading atas perubahan yang tidak terjadi.
+    const berlaku = type === 'status' ? currentStatus : currentPublishStatus || 'DRAFT';
+    if (berlaku === value) {
+      setIsOpen(false);
+      return;
+    }
+
+    // Kunci in-flight. Menu memang tertutup saat klik pertama, tapi tanpa ini
+    // pemanggil lain masih bisa menumpuk dua permintaan atas baris yang sama.
+    if (loading) return;
 
     setLoading(true);
     setIsOpen(false);
-    
+
     try {
       // Dialihkan dari /api/proxy (yang tidak punya autentikasi sama sekali)
       // ke route admin yang memverifikasi sesi dan role.
@@ -49,17 +83,65 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         body: JSON.stringify(body),
       });
 
-      if (res.ok) {
-        router.refresh(); 
-      } else {
-        const data = await res.json();
-        alert(`Gagal mengupdate status: ${data.message || 'Error tidak diketahui'}`);
+      // `await res.json()` dulu dipanggil tanpa penangkap di jalur galat.
+      // Balasan 500 berbadan HTML membuatnya melempar, dan lemparannya
+      // mendarat di `catch` di bawah yang mencetak "Terjadi kesalahan pada
+      // server." — pesan yang menghapus keterangan asli dari server.
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        throw new Error(data?.message || `Gagal mengubah status (${res.status}).`);
       }
-    } catch (error) {
-      alert('Terjadi kesalahan pada server.');
+
+      router.refresh();
+    } catch (error: any) {
+      alert(`Gagal mengubah status: ${error?.message || 'galat tidak diketahui'}`);
     } finally {
-        setTimeout(() => setLoading(false), 500);
+      // `setTimeout(..., 500)` dulu menahan hamparan loading setengah detik
+      // SETELAH pekerjaan selesai — jeda kosmetik yang, bila komponen sudah
+      // dilepas (baris tabelnya hilang setelah refresh), menyetel state pada
+      // komponen yang tidak ada lagi.
+      setLoading(false);
     }
+  };
+
+  // Satu baris menu. Sebelumnya kelima pilihan ditulis lima kali dengan kelas
+  // yang sama disalin ulang, dan tidak satu pun menandai nilai yang sedang
+  // berlaku: operator melihat lima baris identik dan harus menebak posisi
+  // billboard ini sekarang dari badge di belakang menu yang sedang tertutupi.
+  const Pilihan = ({
+    type,
+    value,
+    label,
+  }: {
+    type: 'status' | 'publishStatus';
+    value: string;
+    label: string;
+  }) => {
+    const aktif = (type === 'status' ? currentStatus : currentPublishStatus || 'DRAFT') === value;
+    return (
+      <button
+        type="button"
+        role="menuitem"
+        onClick={() => handleStatusChange(type, value)}
+        aria-current={aktif ? 'true' : undefined}
+        disabled={aktif}
+        className={`flex w-full items-center justify-between px-4 py-2 text-left text-sm hover:bg-gray-100 disabled:cursor-default disabled:hover:bg-transparent ${
+          aktif ? 'font-semibold text-gray-900' : 'text-gray-700'
+        }`}
+      >
+        <span>{label}</span>
+        {/* Penanda visual PLUS teks tersembunyi: ikon centang saja tidak
+            terbaca pembaca layar, dan `aria-current` tidak diumumkan seragam
+            oleh semua kombinasi pembaca layar/peramban. */}
+        {aktif && (
+          <>
+            <Check size={14} className="text-utero" aria-hidden="true" />
+            <span className="sr-only">(sedang berlaku)</span>
+          </>
+        )}
+      </button>
+    );
   };
 
   const getPublishStatusColor = (status: string) => {
@@ -77,11 +159,17 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         onClick={() => setIsOpen(!isOpen)}
         className='flex flex-col items-start gap-1 cursor-pointer w-full p-1 rounded-md hover:bg-gray-50 transition-colors'
         disabled={loading}
+        aria-haspopup="menu"
+        aria-expanded={isOpen}
       >
-        <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase inline-block ${currentStatus === 'Available' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+        {/* Dua badge di bawah hanya berisi nilai enum mentah. Tanpa keterangan
+            ini pembaca layar mengumumkan tombolnya sebagai "Available DRAFT" —
+            dua kata tanpa petunjuk bahwa ini kontrol yang mengubah keduanya. */}
+        <span className="sr-only">Ubah status billboard. Ketersediaan sekarang {currentStatus}, publikasi {currentPublishStatus || 'DRAFT'}.</span>
+        <span aria-hidden="true" className={`text-[10px] px-2 py-1 rounded font-bold uppercase inline-block ${currentStatus === 'Available' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
           {currentStatus}
         </span>
-        <span className={`text-[10px] px-2 py-1 rounded font-bold uppercase inline-block ${getPublishStatusColor(currentPublishStatus)}`}>
+        <span aria-hidden="true" className={`text-[10px] px-2 py-1 rounded font-bold uppercase inline-block ${getPublishStatusColor(currentPublishStatus)}`}>
           {currentPublishStatus || 'DRAFT'}
         </span>
       </button>
@@ -93,15 +181,15 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         >
           <div className="py-1" role="none">
             <p className="px-3 py-1 text-[10px] font-bold text-gray-400 uppercase">Ketersediaan</p>
-            <a href="#" onClick={(e) => { e.preventDefault(); handleStatusChange('status', 'Available'); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Available</a>
-            <a href="#" onClick={(e) => { e.preventDefault(); handleStatusChange('status', 'Booked'); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Booked</a>
-            
+            <Pilihan type="status" value="Available" label="Available" />
+            <Pilihan type="status" value="Booked" label="Booked" />
+
             <div className='border-t my-1'></div>
 
             <p className="px-3 py-1 text-[10px] font-bold text-gray-400 uppercase">Publikasi</p>
-            <a href="#" onClick={(e) => { e.preventDefault(); handleStatusChange('publishStatus', 'PUBLISHED'); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Published</a>
-            <a href="#" onClick={(e) => { e.preventDefault(); handleStatusChange('publishStatus', 'DRAFT'); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Draft</a>
-            <a href="#" onClick={(e) => { e.preventDefault(); handleStatusChange('publishStatus', 'ARCHIVED'); }} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-100">Archived</a>
+            <Pilihan type="publishStatus" value="PUBLISHED" label="Published" />
+            <Pilihan type="publishStatus" value="DRAFT" label="Draft" />
+            <Pilihan type="publishStatus" value="ARCHIVED" label="Archived" />
           </div>
         </div>
       )}
