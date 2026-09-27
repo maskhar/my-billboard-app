@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import { io, Socket } from "socket.io-client";
 import { MessageCircle, X, Send, Loader2, User, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
+import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
@@ -30,7 +31,17 @@ export default function ChatWidget() {
     //    siapa pun bisa menebak id sesi orang lain dan ikut membaca
     //    percakapannya. Sekarang sessionId diturunkan dari token, bukan dari
     //    apa yang dikirim client.
-    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
+    //
+    // 3. ALAMAT. Alamatnya kini satu sumber lewat `alamatChat()`. Bila ia
+    //    mengembalikan `null` (build produksi tanpa NEXT_PUBLIC_CHAT_URL),
+    //    koneksi TIDAK dibuka: menyambung ke cadangan localhost berarti setiap
+    //    browser pengunjung menghubungi mesinnya sendiri.
+    const chatUrl = alamatChat();
+    if (!chatUrl) {
+      setError(PESAN_CHAT_BELUM_DIKONFIGURASI);
+      return;
+    }
+
     const storedToken = localStorage.getItem('utero_chat_token');
 
     socketRef.current = io(chatUrl, {
@@ -84,9 +95,16 @@ export default function ChatWidget() {
 
   const handleRegister = async (e: React.FormEvent) => {
       e.preventDefault();
+      setError('');
+
+      const chatUrl = alamatChat();
+      if (!chatUrl) {
+          setError(PESAN_CHAT_BELUM_DIKONFIGURASI);
+          return;
+      }
+
       setLoading(true);
       try {
-          const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
           const res = await fetch(`${chatUrl}/api/chat/start`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

@@ -5,6 +5,7 @@ import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { Search, Loader2, MessageSquare, Send, ArrowRight } from 'lucide-react';
 import { getMessagesForSession } from '@/app/admin/(dashboard)/live-chat/actions';
+import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
 
 // Label status percakapan. `ChatSessionStatus` punya tiga nilai dan ketiganya
 // benar-benar ditulis: OPEN (tamu menunggu), AGENT (sudah dipegang admin),
@@ -274,6 +275,7 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
   const [selectedSession, setSelectedSession] = useState<any>(null);
   const [messages, setMessages] = useState<any[]>([]);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [galatChat, setGalatChat] = useState('');
   const socketRef = useRef<any>(null);
 
   // Efek untuk koneksi Socket.IO
@@ -282,7 +284,17 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     // NextAuth pada handshake. Tanpa flag ini browser tidak mengirim cookie ke
     // origin berbeda (app :4000 → chat :3001), admin diperlakukan sebagai tamu,
     // dan setiap `joinRoom` ditolak — inbox tampil kosong tanpa penjelasan.
-    const chatUrl = process.env.NEXT_PUBLIC_CHAT_URL || 'http://localhost:3001';
+    //
+    // Alamatnya satu sumber lewat `alamatChat()`. `null` berarti build produksi
+    // dibuat tanpa NEXT_PUBLIC_CHAT_URL: koneksi tidak dibuka, dan operator
+    // diberi tahu — bukan dibiarkan menatap inbox yang tidak pernah hidup.
+    const chatUrl = alamatChat();
+    if (!chatUrl) {
+      setGalatChat(PESAN_CHAT_BELUM_DIKONFIGURASI);
+      return;
+    }
+    setGalatChat('');
+
     const socket = io(chatUrl, { withCredentials: true });
     socketRef.current = socket;
 
@@ -306,8 +318,12 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
   }, [selectedSession]);
 
   const handleSelectSession = async (session: any) => {
+    // `socketRef.current` bisa `null`: efek koneksi keluar lebih awal saat
+    // alamat chat tidak ada. Tanpa `?.` baris ini melempar TypeError dan
+    // seluruh panel berhenti merender — galat konfigurasi berubah menjadi
+    // halaman putih.
     if (selectedSession?.id) {
-      socketRef.current.emit('leaveRoom', selectedSession.id);
+      socketRef.current?.emit('leaveRoom', selectedSession.id);
     }
     setSelectedSession(session);
     setIsLoadingMessages(true);
@@ -320,7 +336,7 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     try {
       const fullSession = await getMessagesForSession(session.id);
       setMessages(fullSession?.messages || []);
-      socketRef.current.emit('joinRoom', session.id);
+      socketRef.current?.emit('joinRoom', session.id);
     } catch (e: any) {
       setMessages([]);
       alert(
@@ -333,7 +349,18 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
   };
 
   const handleSendMessage = (message: string) => {
-    if (socketRef.current && selectedSession) {
+    // Tanpa socket, blok di bawah dulu dilewati DIAM-DIAM — tapi pesan
+    // optimistiknya sudah terlanjur akan ditulis kalau syaratnya dikendurkan,
+    // dan operator membaca balasannya sebagai terkirim padahal tidak pernah
+    // keluar dari browser. Kegagalannya dinyatakan, bukan disembunyikan.
+    if (!socketRef.current) {
+      setGalatChat(
+        'Balasan tidak terkirim: chat tidak tersambung. ' + PESAN_CHAT_BELUM_DIKONFIGURASI
+      );
+      return;
+    }
+
+    if (selectedSession) {
       // 'AGENT' bukan salah satu nilai sah kolom ChatSender — yang ada hanya
       // USER, ADMIN, BOT, SYSTEM. Server memang sudah mengabaikan `sender`
       // kiriman client dan menuliskan 'ADMIN' sendiri (chat-server/index.js),
@@ -354,7 +381,7 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
 
       // `sender` sengaja tidak dikirim: server yang menentukannya dari
       // identitas socket, bukan dari isi payload.
-      socketRef.current.emit('sendMessage', {
+      socketRef.current?.emit('sendMessage', {
         sessionId: selectedSession.id,
         message: message,
       });
@@ -363,6 +390,12 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
 
   return (
     <div className="grid grid-cols-12 h-screen w-full overflow-hidden">
+        {galatChat && (
+            <div role="alert" className="col-span-12 bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800">
+                <strong className="font-bold">Chat tidak tersambung.</strong> {galatChat}{' '}
+                Pesan baru tidak akan masuk sampai ini dibereskan.
+            </div>
+        )}
         <div className="col-span-12 md:col-span-3 h-screen overflow-y-auto">
             <ChatList 
                 sessions={sessions} 

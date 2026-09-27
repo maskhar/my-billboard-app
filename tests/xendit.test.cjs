@@ -10645,3 +10645,180 @@ describe('gerbang tipe dan lint', () => {
     assert.match(sumber, /process\.exit\(1\)/);
   });
 });
+
+// ===========================================================================
+// ALAMAT CHAT SERVER — CADANGAN LOCALHOST TIDAK BOLEH IKUT KE PRODUCTION
+// ===========================================================================
+describe('alamatChat()', () => {
+  const JALUR_ALAMAT_CHAT = path.join(__dirname, '..', 'src', 'lib', 'alamat-chat.ts');
+  const JALUR_WIDGET = path.join(__dirname, '..', 'src', 'components', 'ChatWidget.tsx');
+  const JALUR_INBOX = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'admin',
+    '_components',
+    'cs',
+    'CS_InboxLayout.tsx'
+  );
+
+  // Komentar di ketiga berkas menyebut `localhost:3001`, `NEXT_PUBLIC_CHAT_URL`,
+  // dan `process.env` secara verbatim untuk MENJELASKAN bug yang ditutup. Tanpa
+  // pembuangan komentar, setiap assertion "literal itu tidak ada lagi" akan
+  // gagal atas penjelasannya sendiri.
+  function kodeSajaChat(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  function muatAlamat() {
+    delete require.cache[require.resolve(JALUR_ALAMAT_CHAT)];
+    return require(JALUR_ALAMAT_CHAT);
+  }
+
+  function tanpaLog(fn) {
+    const warnAsli = console.warn;
+    const errorAsli = console.error;
+    const tercatat = [];
+    console.warn = (...a) => tercatat.push(a.join(' '));
+    console.error = (...a) => tercatat.push(a.join(' '));
+    try {
+      return { hasil: fn(), tercatat };
+    } finally {
+      console.warn = warnAsli;
+      console.error = errorAsli;
+    }
+  }
+
+  // `NEXT_PUBLIC_CHAT_URL` tidak masuk `ENV_DIPAKAI`, jadi beforeEach global
+  // tidak menyimpannya. Suite ini menjaga miliknya sendiri.
+  let chatUrlAsli;
+  beforeEach(() => {
+    chatUrlAsli = process.env.NEXT_PUBLIC_CHAT_URL;
+  });
+  afterEach(() => {
+    if (chatUrlAsli === undefined) delete process.env.NEXT_PUBLIC_CHAT_URL;
+    else process.env.NEXT_PUBLIC_CHAT_URL = chatUrlAsli;
+  });
+
+  it('nilai dari env dipakai apa adanya', () => {
+    process.env.NEXT_PUBLIC_CHAT_URL = 'https://chat.contoh.test';
+    const { alamatChat } = muatAlamat();
+    assert.equal(alamatChat(), 'https://chat.contoh.test');
+  });
+
+  it('garis miring di akhir dibuang supaya path tidak menjadi ganda', () => {
+    // Pemanggil menulis `${chatUrl}/api/chat/start`. Tanpa pembuangan ini
+    // hasilnya `https://chat.test//api/chat/start` — 404 di sebagian proxy.
+    process.env.NEXT_PUBLIC_CHAT_URL = 'https://chat.contoh.test/';
+    const { alamatChat } = muatAlamat();
+    assert.equal(alamatChat(), 'https://chat.contoh.test');
+  });
+
+  it('spasi di sekeliling nilai tidak menjadi bagian alamat', () => {
+    process.env.NEXT_PUBLIC_CHAT_URL = '  https://chat.contoh.test  ';
+    const { alamatChat } = muatAlamat();
+    assert.equal(alamatChat(), 'https://chat.contoh.test');
+  });
+
+  it('PRODUCTION tanpa variabel mengembalikan null, BUKAN localhost', () => {
+    // Ini regresi paling penting di berkas ini. Nilai NEXT_PUBLIC_* ditanam saat
+    // build; cadangan localhost yang ikut tertanam membuat browser setiap
+    // pengunjung menghubungi mesinnya sendiri, dan live chat mati untuk semua
+    // orang tanpa satu pun galat di server.
+    delete process.env.NEXT_PUBLIC_CHAT_URL;
+    process.env.NODE_ENV = 'production';
+    const { alamatChat, CADANGAN_CHAT_LOKAL } = muatAlamat();
+    const { hasil, tercatat } = tanpaLog(() => alamatChat());
+    assert.equal(hasil, null);
+    assert.notEqual(hasil, CADANGAN_CHAT_LOKAL);
+    // Gagal harus meninggalkan jejak yang bisa dibaca operator, termasuk
+    // instruksi build ulang — mengisi env di server yang sudah jalan tidak
+    // berpengaruh.
+    assert.match(tercatat.join('\n'), /NEXT_PUBLIC_CHAT_URL/);
+    assert.match(tercatat.join('\n'), /BUILD ULANG/i);
+  });
+
+  it('PRODUCTION dengan variabel kosong juga null', () => {
+    // String kosong dan spasi adalah bentuk paling umum dari "lupa mengisi" di
+    // panel environment penyedia hosting.
+    process.env.NEXT_PUBLIC_CHAT_URL = '   ';
+    process.env.NODE_ENV = 'production';
+    const { alamatChat } = muatAlamat();
+    assert.equal(tanpaLog(() => alamatChat()).hasil, null);
+  });
+
+  it('di luar production cadangan lokal dipakai, dengan peringatan', () => {
+    delete process.env.NEXT_PUBLIC_CHAT_URL;
+    process.env.NODE_ENV = 'development';
+    const { alamatChat, CADANGAN_CHAT_LOKAL } = muatAlamat();
+    const { hasil, tercatat } = tanpaLog(() => alamatChat());
+    assert.equal(hasil, CADANGAN_CHAT_LOKAL);
+    assert.match(tercatat.join('\n'), /NEXT_PUBLIC_CHAT_URL/);
+  });
+
+  it('literal localhost hanya hidup di satu berkas', () => {
+    // Tiga tempat dulu menulis `process.env.NEXT_PUBLIC_CHAT_URL || '...'`.
+    // Nilai yang diduplikasi adalah nilai yang akan menyimpang.
+    for (const jalur of [JALUR_WIDGET, JALUR_INBOX]) {
+      const kode = kodeSajaChat(jalur);
+      assert.doesNotMatch(kode, /localhost:3001/, `${path.basename(jalur)} masih memaku localhost`);
+      assert.doesNotMatch(
+        kode,
+        /process\.env\.NEXT_PUBLIC_CHAT_URL/,
+        `${path.basename(jalur)} masih membaca env langsung`
+      );
+      assert.match(kode, /alamatChat\(\)/, `${path.basename(jalur)} tidak memakai alamatChat()`);
+    }
+  });
+
+  it('pemanggil menolak menyambung saat alamat null', () => {
+    // `io(null)` menyambung ke origin halaman itu sendiri — yang bukan
+    // chat-server — jadi widget akan tampak mencoba tanpa pernah berhasil.
+    // Keduanya harus berhenti lebih dulu.
+    for (const jalur of [JALUR_WIDGET, JALUR_INBOX]) {
+      const kode = kodeSajaChat(jalur);
+      assert.match(
+        kode,
+        /if \(!chatUrl\) \{[\s\S]{0,200}?return;/,
+        `${path.basename(jalur)} tidak berhenti saat alamat tidak ada`
+      );
+      assert.match(
+        kode,
+        /PESAN_CHAT_BELUM_DIKONFIGURASI/,
+        `${path.basename(jalur)} tidak memberi tahu penggunanya`
+      );
+    }
+  });
+
+  it('inbox admin tidak melempar saat socket tidak pernah dibuat', () => {
+    // Efek koneksi keluar lebih awal, jadi `socketRef.current` tetap `null`.
+    // `socketRef.current.emit(...)` tanpa `?.` melempar TypeError dan seluruh
+    // panel berhenti merender: salah konfigurasi berubah menjadi halaman putih.
+    const kode = kodeSajaChat(JALUR_INBOX);
+    assert.doesNotMatch(kode, /socketRef\.current\.emit\(/);
+    assert.match(kode, /socketRef\.current\?\.emit\(/);
+  });
+
+  it('alamat dibaca lewat bentuk yang benar-benar ditanam Next', () => {
+    // Penanaman hanya terjadi pada ekspresi penuh `process.env.NEXT_PUBLIC_...`.
+    // Destructuring atau akses dinamis tidak ditanam, dan di browser hasilnya
+    // selalu `undefined` — production akan selalu terbaca "belum dikonfigurasi".
+    const kode = kodeSajaChat(JALUR_ALAMAT_CHAT);
+    assert.match(kode, /process\.env\.NEXT_PUBLIC_CHAT_URL/);
+    assert.doesNotMatch(kode, /process\.env\[/);
+    assert.doesNotMatch(kode, /\{\s*NEXT_PUBLIC_CHAT_URL\s*\}\s*=\s*process\.env/);
+  });
+
+  it('.env.example memperingatkan bahwa nilainya ditanam saat build', () => {
+    const contoh = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+    assert.match(contoh, /^NEXT_PUBLIC_CHAT_URL=/m);
+    assert.match(contoh, /ditanam/i);
+    assert.match(contoh, /build ulang/i);
+  });
+});
