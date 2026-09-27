@@ -11,6 +11,7 @@ import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import { Role, daftarNilai, sahRole } from '@/lib/enum-guard';
 import { adalahDuplikatUnik } from '@/lib/db-error';
+import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -51,18 +52,12 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: 'Format email tidak valid.' }, { status: 400 });
     }
 
-    if (password.length < 8) {
-      return NextResponse.json({ message: 'Password minimal 8 karakter.' }, { status: 400 });
-    }
-
-    // bcrypt memotong input di 72 byte. Menolak lebih awal lebih jujur daripada
-    // menyimpan hash atas potongan pertama saja — pemiliknya akan bisa login
-    // dengan password yang lebih pendek dari yang ia kira.
-    if (Buffer.byteLength(password, 'utf8') > 72) {
-      return NextResponse.json(
-        { message: 'Password terlalu panjang (maksimal 72 karakter).' },
-        { status: 400 }
-      );
+    // Panjang minimum dan batas 72 byte bcrypt datang dari `@/lib/sandi`, satu
+    // tempat yang sama dengan `api/register` dan `api/user/change-password`.
+    // Ketiganya dulu menuliskan aturannya sendiri, dan yang ketiga menyimpang.
+    const sandi = periksaSandiBaru(password);
+    if (!sandi.sah) {
+      return NextResponse.json({ message: sandi.pesan }, { status: 400 });
     }
 
     // 2. Tentukan role. Hanya SUPER_ADMIN yang boleh mengangkat role apa pun;
@@ -94,7 +89,8 @@ export async function POST(req: Request) {
     // Biaya 12, sama dengan `api/register`. Sebelumnya 10 di sini dan 12 di
     // sana: akun buatan admin — yang justru paling sering berperan ADMIN atau
     // SUPER_ADMIN — dilindungi lebih lemah daripada akun pembeli biasa.
-    const hashedPassword = await bcrypt.hash(password, 12);
+    // Angkanya sekarang diimpor, bukan ditulis ulang di tiap penulis hash.
+    const hashedPassword = await bcrypt.hash(sandi.nilai, BIAYA_HASH_SANDI);
 
     // 5. Buat user baru. Field sensitif (isVerified, authProvider, otp*) diset
     //    di server, tidak pernah diambil dari body.

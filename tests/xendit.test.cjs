@@ -8504,8 +8504,10 @@ describe('penjagaan pengenal terpasang di sumbernya, bukan hanya lolos test', ()
     assert.match(kode, /toLowerCase\(\)/, 'email tidak dinormalkan');
     assert.match(kode, /typeof body\.email === ['"]string['"]/, 'tipe email tidak diperiksa');
     // Biaya 10 di sini lawan 12 di `api/register` berarti akun ADMIN dilindungi
-    // lebih lemah daripada akun pembeli.
-    assert.match(kode, /bcrypt\.hash\(password, 12\)/, 'biaya hash tidak 12');
+    // lebih lemah daripada akun pembeli. Angkanya kini diimpor, bukan ditulis
+    // ulang — jadi yang diuji adalah bahwa ia diimpor, bukan literalnya.
+    assert.match(kode, /bcrypt\.hash\([^)]*BIAYA_HASH_SANDI\)/, 'biaya hash tidak dari @/lib/sandi');
+    assert.match(kode, /from ['"]@\/lib\/sandi['"]/, 'aturan sandi tidak dari modul bersama');
     assert.match(kode, /adalahDuplikatUnik\(/, 'balapan email ganda tidak ditangani');
   });
 });
@@ -8841,5 +8843,290 @@ describe('pintu login: pembatas, pesan seragam, dan waktu jawaban', () => {
     // Sentinel seperti `"tanpa-ip"` membuat seluruh pengunjung berbagi satu
     // penghitung; pembatasnya lalu menjadi cara mematikan pintu login.
     assert.doesNotMatch(kode, /tanpa-ip|unknown-ip|['"]0\.0\.0\.0['"]/);
+  });
+});
+
+// ===========================================================================
+// ATURAN PASSWORD: SATU BIAYA HASH, SATU BATAS PANJANG
+// ===========================================================================
+//
+// Tiga tempat di repo ini menulis hash password, dan yang ketiga menyimpang:
+// `api/user/change-password` memakai cost 10 sementara `api/register` dan
+// `api/admin/users/create` memakai 12, dan ia tidak punya batas panjang minimum
+// maupun batas 72 byte bcrypt sama sekali. Akibatnya berjalan searah: setiap
+// pengguna yang MENGGANTI passwordnya diturunkan ke hash yang empat kali lebih
+// murah ditebak secara offline, dan sekaligus diizinkan memasang password satu
+// karakter yang ditolak saat ia mendaftar.
+describe('src/lib/sandi.ts — aturan password bersama', () => {
+  const { BIAYA_HASH_SANDI, PANJANG_SANDI_MIN, BYTE_SANDI_MAKS, periksaSandiBaru } = require(
+    path.join(__dirname, '..', 'src', 'lib', 'sandi.ts')
+  );
+
+  it('biaya hash 12, bukan 10', () => {
+    // Bukan sekadar "sama di tiga tempat": angkanya harus tetap 12. Diturunkan
+    // untuk mempercepat login, penebakan offline ikut dipercepat dengan faktor
+    // yang sama.
+    assert.equal(BIAYA_HASH_SANDI, 12);
+    assert.equal(PANJANG_SANDI_MIN, 8);
+    assert.equal(BYTE_SANDI_MAKS, 72);
+  });
+
+  it('menolak yang bukan teks, bukan hanya yang kosong', () => {
+    // `if (!password)` meloloskan objek karena objek selalu truthy, dan nilai
+    // itu sampai ke `bcrypt.hash` sebagai galat internal — pengguna membaca
+    // "Terjadi kesalahan pada server" untuk isian yang ia ketik sendiri.
+    for (const nilai of [{ not: '' }, {}, ['sandirahasia'], 12345678, null, undefined, true, '']) {
+      const hasil = periksaSandiBaru(nilai);
+      assert.equal(hasil.sah, false, `${JSON.stringify(nilai)} harus ditolak`);
+      assert.match(hasil.pesan, /Password baru wajib diisi/);
+    }
+  });
+
+  it('menolak yang lebih pendek dari batas', () => {
+    assert.equal(periksaSandiBaru('a'.repeat(7)).sah, false);
+    assert.match(periksaSandiBaru('a'.repeat(7)).pesan, /minimal 8 karakter/);
+    assert.equal(periksaSandiBaru('a'.repeat(8)).sah, true);
+  });
+
+  it('batas 72 dihitung dalam byte, bukan karakter', () => {
+    // bcrypt memotong input di 72 BYTE. Satu emoji memakan 4 byte, jadi batas
+    // berbasis `.length` meloloskan password yang tetap terpotong — dan
+    // pemiliknya bisa login memakai potongan itu saja.
+    const emoji = '\u{1F600}'.repeat(19); // 19 karakter tampak, 76 byte
+    assert.equal(Buffer.byteLength(emoji, 'utf8') > BYTE_SANDI_MAKS, true);
+
+    const hasil = periksaSandiBaru(emoji);
+    assert.equal(hasil.sah, false);
+    assert.match(hasil.pesan, /terlalu panjang/);
+
+    assert.equal(periksaSandiBaru('a'.repeat(72)).sah, true);
+    assert.equal(periksaSandiBaru('a'.repeat(73)).sah, false);
+  });
+
+  it('spasi di ujung TIDAK dibuang', () => {
+    // Spasi adalah bagian dari password yang pengguna ketik. Di-trim di sini,
+    // hash disimpan atas teks lain daripada yang ia kira, dan `compare` saat
+    // login (yang tidak men-trim) tidak akan pernah cocok.
+    const hasil = periksaSandiBaru('  sandirahasia  ');
+    assert.equal(hasil.sah, true);
+    assert.equal(hasil.nilai, '  sandirahasia  ');
+  });
+
+  it('ketiga penulis hash memakai modul ini, bukan angka sendiri', () => {
+    const DAFTAR = [
+      ['register', path.join(__dirname, '..', 'src', 'app', 'api', 'register', 'route.ts')],
+      ['admin/users/create', path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'users', 'create', 'route.ts')],
+      ['user/change-password', path.join(__dirname, '..', 'src', 'app', 'api', 'user', 'change-password', 'route.ts')],
+    ];
+
+    for (const [nama, jalur] of DAFTAR) {
+      const kode = fs
+        .readFileSync(jalur, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split('\n')
+        .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+        .join('\n');
+
+      assert.match(kode, /from ['"]@\/lib\/sandi['"]/, `${nama} tidak memakai @/lib/sandi`);
+      assert.match(kode, /periksaSandiBaru\(/, `${nama} tidak memeriksa password lewat modul bersama`);
+      assert.match(kode, /BIAYA_HASH_SANDI/, `${nama} tidak memakai biaya hash bersama`);
+      // Biaya yang ditulis sebagai angka akan menyimpang lagi.
+      assert.doesNotMatch(kode, /hash\([^)]*,\s*1[0-9]\s*\)/, `${nama} masih menulis biaya hash sebagai angka`);
+    }
+  });
+});
+
+describe('POST /api/user/change-password', () => {
+  // Pembatas laju DIPAKAI ASLI dan penghitungnya hidup di memori proses selama
+  // seluruh berkas test ini. Id akun karena itu dibuat unik per test, supaya
+  // test yang satu tidak menghabiskan kuota test berikutnya.
+  let nomorAkun = 0;
+  function idUnik() {
+    nomorAkun += 1;
+    return `user-sandi-${nomorAkun}`;
+  }
+
+  function buatRouteGantiSandi({ hashTersimpan = 'hash-lama', cocok = true, idAkun = idUnik() } = {}) {
+    const diperbarui = [];
+    const dibanding = [];
+    const dicari = [];
+    let jumlahHash = 0;
+    let biayaHash = null;
+
+    const route = muatDenganModulPalsu(
+      path.join(__dirname, '..', 'src', 'app', 'api', 'user', 'change-password', 'route.ts'),
+      {
+        'next/server': { NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) } },
+        'next-auth': { getServerSession: async () => ({ user: { id: idAkun, role: 'USER' } }) },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': {
+          prisma: {
+            user: {
+              async findUnique(args) {
+                dicari.push(args);
+                return { id: idAkun, password: hashTersimpan };
+              },
+              async update(args) {
+                diperbarui.push(args.data);
+                return { id: idAkun };
+              },
+            },
+          },
+        },
+        // Objek rata, bukan `{ default: ... }`: route memakai default import dan
+        // helper interop ts-node membungkus modul rata menjadi `{ default: mod }`.
+        bcryptjs: {
+          async compare(sandi, hash) {
+            dibanding.push({ sandi, hash });
+            // Password lama diuji lewat `cocok`; password baru yang identik
+            // dengan yang lama harus tetap terdeteksi, jadi palsu ini
+            // membandingkan teksnya untuk nilai selain password lama.
+            if (sandi === 'sandilama') return cocok;
+            return sandi === hash;
+          },
+          async hash(sandi, biaya) {
+            jumlahHash += 1;
+            biayaHash = biaya;
+            return `hash-baru:${sandi}`;
+          },
+        },
+      }
+    );
+
+    return {
+      route,
+      idAkun,
+      diperbarui: () => diperbarui,
+      dibanding: () => dibanding,
+      dicari: () => dicari,
+      jumlahHash: () => jumlahHash,
+      biayaHash: () => biayaHash,
+    };
+  }
+
+  function ganti(fake, body) {
+    return fake.route.POST(
+      new Request('https://contoh.test/api/user/change-password', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+    );
+  }
+
+  it('menyimpan hash dengan biaya 12, bukan 10', async () => {
+    const fake = buatRouteGantiSandi();
+
+    const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'sandibarurahasia' });
+
+    assert.equal(response.status, 200);
+    // Inti temuannya: pengguna yang mengganti passwordnya dulu diturunkan ke
+    // cost 10 — empat kali lebih murah ditebak bila database bocor.
+    assert.equal(fake.biayaHash(), 12);
+    assert.equal(fake.diperbarui()[0].password, 'hash-baru:sandibarurahasia');
+  });
+
+  it('password baru yang terlalu pendek ditolak sebelum hash dijalankan', async () => {
+    const fake = buatRouteGantiSandi();
+
+    const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'pendek' });
+    const isi = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(isi.message, /minimal 8 karakter/);
+    // Password satu karakter yang DITOLAK saat mendaftar tidak boleh diterima
+    // di sini, dan penolakannya jatuh sebelum `compare` maupun `hash`.
+    assert.equal(fake.jumlahHash(), 0);
+    assert.equal(fake.dibanding().length, 0);
+    assert.equal(fake.diperbarui().length, 0);
+  });
+
+  it('password baru yang melebihi 72 byte ditolak', async () => {
+    const fake = buatRouteGantiSandi();
+
+    const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'a'.repeat(80) });
+    const isi = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(isi.message, /terlalu panjang/);
+    assert.equal(fake.jumlahHash(), 0);
+  });
+
+  it('nilai yang bukan teks dijawab 400, bukan 500', async () => {
+    for (const body of [
+      { currentPassword: { not: '' }, newPassword: 'sandibarurahasia' },
+      { currentPassword: 'sandilama', newPassword: { not: '' } },
+      { currentPassword: 'sandilama', newPassword: 12345678 },
+      {},
+      null,
+    ]) {
+      const fake = buatRouteGantiSandi();
+      const response = await ganti(fake, body);
+
+      assert.equal(response.status, 400, `${JSON.stringify(body)} harus 400`);
+      assert.equal(fake.jumlahHash(), 0);
+      assert.equal(fake.diperbarui().length, 0);
+    }
+  });
+
+  it('password baru yang sama dengan yang lama ditolak', async () => {
+    const fake = buatRouteGantiSandi({ hashTersimpan: 'sandilamapanjang' });
+
+    const response = await ganti(fake, {
+      currentPassword: 'sandilama',
+      newPassword: 'sandilamapanjang',
+    });
+    const isi = await response.json();
+
+    assert.equal(response.status, 400);
+    assert.match(isi.message, /harus berbeda/);
+    // Menjawab "berhasil diubah" untuk password yang tidak berubah membuat
+    // pengguna percaya akunnya sudah diselamatkan padahal belum — berbahaya
+    // justru saat ia mengganti password karena menduga passwordnya bocor.
+    assert.equal(fake.diperbarui().length, 0);
+    assert.equal(fake.jumlahHash(), 0);
+  });
+
+  it('password lama yang salah dijawab 403 tanpa menulis apa pun', async () => {
+    const fake = buatRouteGantiSandi({ cocok: false });
+
+    const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'sandibarurahasia' });
+
+    assert.equal(response.status, 403);
+    assert.equal(fake.diperbarui().length, 0);
+    assert.equal(fake.jumlahHash(), 0);
+  });
+
+  it('pencarian akun memakai select, bukan seluruh baris', async () => {
+    const fake = buatRouteGantiSandi();
+    await ganti(fake, { currentPassword: 'sandilama', newPassword: 'sandibarurahasia' });
+
+    // `findUnique` tanpa `select` membawa `ktp`, `npwp`, dan kolom OTP ke memori
+    // pada setiap percobaan, termasuk yang gagal.
+    const args = fake.dicari()[0];
+    assert.deepEqual(args.select, { id: true, password: true });
+  });
+
+  it('percobaan ke-11 pada satu akun ditolak 429', async () => {
+    // Penyerang yang memegang sesi curian bisa menebak password LAMA di sini
+    // untuk dipakai di layanan lain, dan tiap tebakan memakan ~230 ms CPU di
+    // `bcrypt.compare`. Kuncinya id akun karena sesi sudah membuktikan akun mana.
+    const idAkun = idUnik();
+
+    for (let i = 0; i < 10; i += 1) {
+      const fake = buatRouteGantiSandi({ cocok: false, idAkun });
+      const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'sandibarurahasia' });
+      assert.equal(response.status, 403, `percobaan ke-${i + 1} harus 403`);
+    }
+
+    const fake = buatRouteGantiSandi({ cocok: false, idAkun });
+    const response = await ganti(fake, { currentPassword: 'sandilama', newPassword: 'sandibarurahasia' });
+    const isi = await response.json();
+
+    assert.equal(response.status, 429);
+    assert.match(isi.message, /Terlalu banyak percobaan/);
+    // Ditolak sebelum database dihubungi: pembatas juga harus menahan biaya
+    // `compare`, bukan hanya jumlah jawaban salah.
+    assert.equal(fake.dicari().length, 0);
+    assert.equal(fake.dibanding().length, 0);
   });
 });

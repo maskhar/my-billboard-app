@@ -22,6 +22,7 @@ import { adalahDuplikatUnik } from '@/lib/db-error';
 import { keE164, normalisasiNomorLokal } from '@/lib/telepon';
 import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
 import { asalPermintaan } from '@/lib/asal-permintaan';
+import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
 
 // PENDAFTARAN DULU TIDAK DIBATASI SAMA SEKALI, dan route ini terbuka tanpa
 // sesi. Tiga akibatnya berbeda-beda, dan hanya satu yang tentang spam:
@@ -100,20 +101,11 @@ export async function POST(req: Request) {
       );
     }
 
-    if (password.length < 8) {
-      return NextResponse.json(
-        { message: 'Password minimal 8 karakter.' },
-        { status: 400 }
-      );
-    }
-
-    // bcrypt memotong input di 72 byte; menolak lebih awal lebih jujur
-    // daripada diam-diam mengabaikan sisa karakter yang diketik pengguna.
-    if (Buffer.byteLength(password, 'utf8') > 72) {
-      return NextResponse.json(
-        { message: 'Password terlalu panjang (maksimal 72 karakter).' },
-        { status: 400 }
-      );
+    // Panjang minimum dan batas 72 byte bcrypt datang dari `@/lib/sandi`, satu
+    // tempat bersama dengan `admin/users/create` dan `user/change-password`.
+    const sandi = periksaSandiBaru(password);
+    if (!sandi.sah) {
+      return NextResponse.json({ message: sandi.pesan }, { status: 400 });
     }
 
     const existing = await prisma.user.findUnique({
@@ -132,7 +124,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const hashedPassword = await hash(password, 12);
+    const hashedPassword = await hash(sandi.nilai, BIAYA_HASH_SANDI);
 
     // Pemeriksaan di atas menangkap kasus biasa, tapi tidak menutup celah
     // balapan: `hash(password, 12)` sengaja lambat (ratusan milidetik), dan
