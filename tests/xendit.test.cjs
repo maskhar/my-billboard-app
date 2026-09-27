@@ -9326,3 +9326,254 @@ describe('POST /api/user/update-profile', () => {
     assert.doesNotMatch(isianNomor[0], /type="number"/);
   });
 });
+
+describe('GET /api/admin/orders/detail', () => {
+  const JALUR_DETAIL = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'api',
+    'admin',
+    'orders',
+    'detail',
+    'route.ts'
+  );
+
+  function buatRouteDetail({ peran = 'ADMIN', baris = undefined } = {}) {
+    const dicari = [];
+    return {
+      dicari: () => dicari,
+      route: muatDenganModulPalsu(JALUR_DETAIL, {
+        'next/server': {
+          NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+        },
+        'next-auth': {
+          getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null),
+        },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': {
+          prisma: {
+            booking: {
+              async findUnique(args) {
+                dicari.push(args);
+                return baris ?? null;
+              },
+            },
+          },
+        },
+      }),
+    };
+  }
+
+  const BARIS = {
+    id: 'ckorder0000000000000001',
+    status: 'INSTALLATION',
+    installationProof: null,
+    user: { id: 'user-1', name: 'Budi Santoso' },
+    billboard: { id: 'bb-1', title: 'Jl. Sudirman' },
+  };
+
+  it('mengembalikan pesanan untuk admin', async () => {
+    const { route, dicari } = buatRouteDetail({ baris: BARIS });
+    const res = await route.GET(
+      new Request('https://contoh.test/api/admin/orders/detail?id=ckorder0000000000000001')
+    );
+
+    assert.equal(res.status, 200);
+    assert.deepEqual(await res.json(), BARIS);
+    assert.equal(dicari().length, 1);
+    assert.deepEqual(dicari()[0].where, { id: 'ckorder0000000000000001' });
+  });
+
+  it('OPERATOR boleh membacanya — mereka yang mengunggah bukti tayang di lapangan', async () => {
+    const { route } = buatRouteDetail({ peran: 'OPERATOR', baris: BARIS });
+    const res = await route.GET(
+      new Request('https://contoh.test/api/admin/orders/detail?id=ckorder0000000000000001')
+    );
+    assert.equal(res.status, 200);
+  });
+
+  for (const peran of [null, 'USER']) {
+    it(`peran ${peran ?? 'tanpa sesi'} dijawab 401 tanpa menyentuh database`, async () => {
+      const { route, dicari } = buatRouteDetail({ peran, baris: BARIS });
+      const res = await route.GET(
+        new Request('https://contoh.test/api/admin/orders/detail?id=ckorder0000000000000001')
+      );
+
+      assert.equal(res.status, 401);
+      // Data pesanan memuat nama pelanggan. Ditolak sebelum dibaca, bukan
+      // dibaca lalu dibuang.
+      assert.equal(dicari().length, 0);
+    });
+  }
+
+  // Inilah yang dikirim halaman detail sebelum `params` di-`use()`:
+  // `?id=undefined`. Nilainya teks, jadi ia LOLOS pemeriksaan tipe dan
+  // berakhir sebagai 404 — bukan 400. Karena itu halamannya wajib membaca
+  // `res.ok`, bukan langsung `setOrder`.
+  it('id "undefined" dijawab 404, bukan 200 dengan badan aneh', async () => {
+    const { route } = buatRouteDetail({ baris: null });
+    const res = await route.GET(
+      new Request('https://contoh.test/api/admin/orders/detail?id=undefined')
+    );
+
+    assert.equal(res.status, 404);
+    const isi = await res.json();
+    // Badan 404 tetap JSON yang sah. Halaman yang tidak memeriksa `res.ok`
+    // akan menyimpannya sebagai `order` lalu melempar di `order.user.name`.
+    assert.ok(isi.message);
+    assert.equal(isi.user, undefined);
+  });
+
+  for (const [judul, kueri] of [
+    ['tanpa id', ''],
+    ['id kosong', '?id='],
+    ['id hanya spasi', '?id=%20%20'],
+  ]) {
+    it(`${judul} dijawab 400 tanpa menyentuh database`, async () => {
+      const { route, dicari } = buatRouteDetail({ baris: BARIS });
+      const res = await route.GET(
+        new Request('https://contoh.test/api/admin/orders/detail' + kueri)
+      );
+
+      assert.equal(res.status, 400);
+      assert.equal(dicari().length, 0);
+    });
+  }
+
+  it('select tidak membawa data pribadi pelanggan atau nilai transaksi', async () => {
+    const { route, dicari } = buatRouteDetail({ baris: BARIS });
+    await route.GET(
+      new Request('https://contoh.test/api/admin/orders/detail?id=ckorder0000000000000001')
+    );
+
+    const select = dicari()[0].select;
+    assert.ok(select, 'findUnique tanpa select memulangkan seluruh baris');
+    assert.deepEqual(Object.keys(select).sort(), [
+      'billboard',
+      'id',
+      'installationProof',
+      'status',
+      'user',
+    ]);
+    // Halaman hanya merender nama. Email, whatsapp, KTP, dan NPWP tidak
+    // dikirim ke browser karena tidak ditampilkan.
+    assert.deepEqual(select.user.select, { id: true, name: true });
+    for (const kolom of ['totalPrice', 'user.email', 'user.whatsapp', 'user.ktp']) {
+      assert.equal(kolom in select, false, `${kolom} tidak boleh ada di select`);
+    }
+  });
+});
+
+describe('halaman detail order admin — params Promise dan jawaban yang diperiksa', () => {
+  const JALUR_HALAMAN = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'admin',
+    '(dashboard)',
+    'orders',
+    '[id]',
+    'page.tsx'
+  );
+
+  // Komentar dibuang lebih dulu: berkas ini memuat komentar panjang yang
+  // MENYEBUT persis pola-pola yang dilarang di bawah, termasuk potongan kode
+  // versi lamanya.
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const kode = kodeSaja(JALUR_HALAMAN);
+
+  it('params bertipe Promise dan dibuka dengan use()', () => {
+    // Di Next 16 `params` adalah Promise juga di Client Component. Tipe lama
+    // `{ params: { id: string } }` membuat `params.id` bernilai `undefined`,
+    // sehingga pembacaan menjadi `?id=undefined` dan penyimpanan mengirim
+    // `orderId: undefined` — dijawab 400 "ID pesanan tidak valid.".
+    assert.match(kode, /params:\s*Promise<\{\s*id:\s*string\s*\}>/);
+    assert.match(kode, /use\(params\)/);
+    assert.doesNotMatch(kode, /params:\s*\{\s*id:\s*string\s*\}\s*\}/);
+    // `params.id` langsung tidak boleh muncul lagi.
+    assert.doesNotMatch(kode, /params\.id/);
+  });
+
+  it('use diimpor dari react', () => {
+    const impor = kode.match(/import\s*\{[^}]*\}\s*from\s*'react'/);
+    assert.ok(impor, "import dari 'react' tidak ditemukan");
+    assert.match(impor[0], /\buse\b/);
+  });
+
+  it('pembacaan memeriksa res.ok dan menangkap kegagalan', () => {
+    // Tanpa `res.ok`, badan 401/404 (`{ message: 'Unauthorized' }`) masuk ke
+    // `order`, lalu `order.user.name` melempar. Tanpa penangkap, `fetch` yang
+    // gagal membuat halaman berhenti di "Loading..." selamanya.
+    assert.match(kode, /if\s*\(!res\.ok\)/);
+    assert.match(kode, /catch/);
+    // Bentuk lama: rantai `.then` tanpa pemeriksaan apa pun.
+    assert.doesNotMatch(kode, /\.then\(\s*setOrder\s*\)/);
+    assert.doesNotMatch(kode, /\.then\(\s*res\s*=>\s*res\.json\(\)\s*\)/);
+  });
+
+  it('kegagalan dimunculkan ke operator, bukan disembunyikan sebagai "Loading..."', () => {
+    assert.match(kode, /setGalat\(/);
+    assert.match(kode, /galat\s*\)/);
+  });
+
+  it('penyimpanan tidak mengumumkan berhasil sebelum server menyatakannya', () => {
+    const simpan = kode.match(/const handleSave[\s\S]*?\n\s{4}\}, \[/);
+    assert.ok(simpan, 'handleSave tidak ditemukan');
+
+    // Inilah cacat termahal di halaman ini: 400, 401, 409 transisi, 422, dan
+    // 500 semuanya dibacakan "Bukti Tayang Disimpan!". Operator menutup
+    // halaman dan klien tidak pernah menerima bukti tayangnya.
+    assert.match(simpan[0], /if\s*\(!res\.ok\)/);
+    const posisiPeriksa = simpan[0].indexOf('!res.ok');
+    const posisiAlertSukses = simpan[0].search(/alert\((?![`'"]Gagal)(?!\s*['"`]Pilih)/);
+    assert.ok(
+      posisiPeriksa < posisiAlertSukses,
+      'res.ok harus diperiksa sebelum keberhasilan diumumkan'
+    );
+    // Bentuk lama membuang hasil `fetch` seluruhnya: `await fetch(...)` tanpa
+    // penampung, jadi tidak ada apa pun yang bisa diperiksa.
+    assert.match(simpan[0], /const res = await fetch\(/);
+  });
+
+  it('POST membawa Content-Type application/json', () => {
+    assert.match(kode, /'Content-Type':\s*'application\/json'/);
+  });
+
+  it('dependensi useEffect memuat id', () => {
+    const efek = kode.match(/useEffect\([\s\S]*?\}, \[[^\]]*\]\)/);
+    assert.ok(efek, 'useEffect tidak ditemukan');
+    assert.match(efek[0], /\}, \[id\]\)/);
+    // Bentuk lama: array kosong padahal `params` dipakai di dalam efek.
+    assert.doesNotMatch(efek[0], /\}, \[\]\)/);
+  });
+
+  it('id disandikan sebelum masuk query string', () => {
+    assert.match(kode, /encodeURIComponent\(id\)/);
+  });
+
+  it('tombol simpan dikunci selama permintaan berjalan', () => {
+    // Klik ganda mengirim dua permintaan; yang kedua kalah pada CAS
+    // `updateMany` di `update-order` dan dijawab 409.
+    assert.match(kode, /disabled=\{menyimpan\}/);
+    assert.match(kode, /if\s*\(menyimpan\)\s*return/);
+  });
+
+  it('status pesanan dikirim apa adanya, bukan dipindahkan', () => {
+    // `transisiSah` memulangkan `true` bila `dari === ke`, jadi mengirim
+    // status yang sama adalah jalur sah untuk menulis bukti tanpa menggeser
+    // pesanan. Status hardcode akan menolak sebagian pesanan dengan 409.
+    assert.match(kode, /newStatus:\s*order\.status/);
+  });
+});
