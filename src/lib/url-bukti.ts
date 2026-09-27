@@ -78,7 +78,11 @@ export function urlBuktiSah(nilai: unknown): string | null {
   // antaranya secara diam-diam (tab dan baris baru dihapus sesuai spesifikasi
   // WHATWG), sehingga `javascript\n:alert(1)` bisa lolos sebagai URL sah
   // sementara teks yang kita simpan tetap yang asli.
-  // eslint-disable-next-line no-control-regex
+  //
+  // Tidak ada `eslint-disable no-control-regex` di sini: aturan itu tidak
+  // dinyalakan konfigurasi repo ini, dan ESLint 9 melaporkan directive yang
+  // tidak terpakai sebagai galat. Directive yang menunjuk ke aturan mati adalah
+  // kebisingan yang membuat gerbang lint ikut merah.
   if (/[\u0000-\u001F\u007F]/.test(teks)) return null;
 
   // Jalur unggahan lokal. Diperiksa sebelum `new URL()` karena `new URL()`

@@ -14,6 +14,13 @@ export default function ChatWidget() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  // Inisialisasi malas (`useState(alamatChat)`, bukan `useState(alamatChat())`):
+  // fungsinya dipanggil SEKALI seumur komponen, bukan setiap render. Nilai ini
+  // tidak pernah berubah saat komponen hidup — ia berasal dari nilai yang
+  // ditanam saat build — jadi menyimpannya lebih tepat daripada memanggil ulang
+  // di effect lalu mengabarkan hasilnya lewat `setState`, yang memicu render
+  // berantai.
+  const [chatUrl] = useState<string | null>(alamatChat);
   const socketRef = useRef<Socket | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const lastMsgCount = useRef(0);
@@ -35,12 +42,10 @@ export default function ChatWidget() {
     // 3. ALAMAT. Alamatnya kini satu sumber lewat `alamatChat()`. Bila ia
     //    mengembalikan `null` (build produksi tanpa NEXT_PUBLIC_CHAT_URL),
     //    koneksi TIDAK dibuka: menyambung ke cadangan localhost berarti setiap
-    //    browser pengunjung menghubungi mesinnya sendiri.
-    const chatUrl = alamatChat();
-    if (!chatUrl) {
-      setError(PESAN_CHAT_BELUM_DIKONFIGURASI);
-      return;
-    }
+    //    browser pengunjung menghubungi mesinnya sendiri. Pesannya dirender
+    //    langsung dari `chatUrl`, bukan lewat `setError` di sini: `setState`
+    //    sinkron di dalam effect memicu render berantai.
+    if (!chatUrl) return;
 
     const storedToken = localStorage.getItem('utero_chat_token');
 
@@ -97,7 +102,6 @@ export default function ChatWidget() {
       e.preventDefault();
       setError('');
 
-      const chatUrl = alamatChat();
       if (!chatUrl) {
           setError(PESAN_CHAT_BELUM_DIKONFIGURASI);
           return;
@@ -181,7 +185,14 @@ export default function ChatWidget() {
             <button onClick={() => setIsOpen(false)} className="hover:bg-white/20 p-1 rounded"><X size={20}/></button>
           </div>
 
-          {!sessionId ? (
+          {!chatUrl ? (
+            // Tanpa alamat chat tidak ada form sama sekali: mengisi tiga kolom
+            // lalu ditolak lebih buruk daripada diberi tahu lebih dulu.
+            <div role="alert" className="p-6 flex-1 flex flex-col justify-center bg-gray-50 text-center">
+              <h4 className="text-gray-800 font-bold text-base mb-2">Chat belum tersedia</h4>
+              <p className="text-xs text-gray-600 leading-relaxed">{PESAN_CHAT_BELUM_DIKONFIGURASI}</p>
+            </div>
+          ) : !sessionId ? (
             <div className="p-6 flex-1 flex flex-col justify-center bg-gray-50">
               <h4 className="text-gray-800 font-bold text-lg mb-6 text-center">Halo! Silakan isi data 👋</h4>
               {error && (

@@ -31,18 +31,32 @@ export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat:
   // --- SOLUSI BUG ICON HILANG/CRASH DI NEXT.JS ---
   // Kita set icon secara manual di dalam useEffect (Hanya jalan di Client)
   useEffect(() => {
-    // Trik memanggil Leaflet hanya di browser
-    const L = require("leaflet");
+    // `import()` dinamis, bukan `require()`: berkas ini adalah modul ES, dan
+    // `require` di dalamnya tidak dikenali bundler mana pun selain lewat
+    // interop — sekaligus satu-satunya galat `no-require-imports` di seluruh
+    // `src/`. Efeknya sama: Leaflet tetap hanya dimuat di browser, karena effect
+    // tidak berjalan saat render server.
+    let dibatalkan = false;
 
-    // Hapus default icon yang sering error url-nya
-    delete L.Icon.Default.prototype._getIconUrl;
+    import('leaflet').then((mod) => {
+      if (dibatalkan) return;
+      const L = mod.default;
 
-    // Pasang ulang icon default dengan link CDN yang stabil
-    L.Icon.Default.mergeOptions({
-      iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
-      iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
-      shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+      // Hapus default icon yang sering error url-nya. Propertinya tidak ada di
+      // tipe publik Leaflet, jadi aksesnya lewat satu penegasan sempit.
+      delete (L.Icon.Default.prototype as unknown as { _getIconUrl?: unknown })._getIconUrl;
+
+      // Pasang ulang icon default dengan link CDN yang stabil
+      L.Icon.Default.mergeOptions({
+        iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+        iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+        shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+      });
     });
+
+    return () => {
+      dibatalkan = true;
+    };
   }, []);
 
   return (

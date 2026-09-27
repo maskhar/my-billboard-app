@@ -196,6 +196,37 @@ const AddChargeForm = ({ orderId }: { orderId: string }) => {
     );
 };
 
+// Ketiganya dulu dideklarasikan DI DALAM `TransactionClient`. Komponen yang
+// dibuat ulang setiap render adalah tipe komponen yang BARU setiap render, jadi
+// React melepas dan memasang ulang seluruh subtree-nya alih-alih
+// memperbaruinya: state internal hilang, fokus keyboard lepas, dan animasi
+// mulai dari awal. Dipindahkan ke lingkup modul — ketiganya hanya memakai
+// props, jadi tidak ada apa pun yang perlu ditutup dari lingkup komponen.
+
+// Warnanya dulu `bg-green-100 text-green-700` TETAP, tanpa melihat statusnya
+// sama sekali: `CANCELLED` hijau, `REFUNDED` hijau, `PENDING_PAYMENT` hijau.
+// Warna dibaca mata lebih dulu daripada tulisannya, jadi badge itu aktif
+// menyatakan "aman" pada pesanan yang dibatalkan dan yang belum dibayar.
+const StatusBadge = ({ status }: { status: string }) => (
+  <span className={`px-2 py-1 text-[10px] font-bold rounded uppercase ${warnaStatusPesanan(status)}`}>
+    {labelStatusPesanan(status)}
+  </span>
+);
+
+const DetailSection = ({ title, children }: { title: string, children: React.ReactNode }) => (
+  <div className="mb-6">
+    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">{title}</h3>
+    {children}
+  </div>
+);
+
+const InfoPair = ({ label, value }: { label: string, value: string | undefined | null }) => (
+  <div className="flex justify-between items-center text-sm mb-1.5 text-gray-700">
+    <span>{label}</span>
+    <span className="font-bold text-right">{value || '-'}</span>
+  </div>
+);
+
 export default function TransactionClient({ transactions, currentUserRole }: Props) {
   const [selected, setSelected] = useState<TransaksiUntukClient | null>(transactions.length > 0 ? transactions[0] : null);
   const router = useRouter();
@@ -252,30 +283,6 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       alert('Terjadi kesalahan pada server.');
     }
   };
-
-  // Warnanya dulu `bg-green-100 text-green-700` TETAP, tanpa melihat statusnya
-  // sama sekali: `CANCELLED` hijau, `REFUNDED` hijau, `PENDING_PAYMENT` hijau.
-  // Warna dibaca mata lebih dulu daripada tulisannya, jadi badge itu aktif
-  // menyatakan "aman" pada pesanan yang dibatalkan dan yang belum dibayar.
-  const StatusBadge = ({ status }: { status: string }) => (
-    <span className={`px-2 py-1 text-[10px] font-bold rounded uppercase ${warnaStatusPesanan(status)}`}>
-      {labelStatusPesanan(status)}
-    </span>
-  );
-
-  const DetailSection = ({ title, children }: { title: string, children: React.ReactNode }) => (
-    <div className="mb-6">
-      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">{title}</h3>
-      {children}
-    </div>
-  );
-  
-  const InfoPair = ({ label, value }: { label: string, value: string | undefined | null }) => (
-    <div className="flex justify-between items-center text-sm mb-1.5 text-gray-700">
-      <span>{label}</span>
-      <span className="font-bold text-right">{value || '-'}</span>
-    </div>
-  );
 
   // Dulu dihitung di sini: `totalPrice + charges.reduce((s, c) => s + c.amount, 0)`.
   // Nominal dari database bertipe Decimal, jadi `+` menyambung teks alih-alih

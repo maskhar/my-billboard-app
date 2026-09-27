@@ -315,7 +315,7 @@ export default function SettingsPage() {
                             {aiLoading ? <Loader2 className="animate-spin" size={14}/> : 'Test Generate'}
                         </button>
                     </div>
-                    {aiResult && <p className="text-sm italic text-gray-700 bg-white p-3 rounded border border-purple-200">"{aiResult}"</p>}
+                    {aiResult && <p className="text-sm italic text-gray-700 bg-white p-3 rounded border border-purple-200">&ldquo;{aiResult}&rdquo;</p>}
                 </div>
             </div>
         </div>

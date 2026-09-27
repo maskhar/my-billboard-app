@@ -15,7 +15,13 @@ export default function BillboardFormPage() {
   const billboardId = searchParams.get('id');
 
   const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(false);
+  // Nilai awalnya diturunkan dari `billboardId`, bukan disetel lewat
+  // `setFetching(true)` di dalam effect. Dua alasan: `setState` sinkron di dalam
+  // effect memicu render berantai (react-hooks/set-state-in-effect), dan render
+  // PERTAMA form edit dulu sempat menampilkan form kosong satu frame sebelum
+  // "Loading..." — admin melihat kolom-kolom kosong dan sempat mengira datanya
+  // hilang.
+  const [fetching, setFetching] = useState(Boolean(billboardId));
   
   const [inputType, setInputType] = useState<'AUTO' | 'MANUAL'>('AUTO');
   const [historyList, setHistoryList] = useState<any[]>([]);
@@ -45,7 +51,6 @@ export default function BillboardFormPage() {
 
   useEffect(() => {
       if (billboardId) {
-          setFetching(true);
           fetch(`/api/admin/billboards/detail?id=${encodeURIComponent(billboardId)}`)
             .then(res => {
                 if (!res.ok) throw new Error('Gagal memuat data billboard.');

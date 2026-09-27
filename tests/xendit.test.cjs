@@ -10773,7 +10773,9 @@ describe('alamatChat()', () => {
         /process\.env\.NEXT_PUBLIC_CHAT_URL/,
         `${path.basename(jalur)} masih membaca env langsung`
       );
-      assert.match(kode, /alamatChat\(\)/, `${path.basename(jalur)} tidak memakai alamatChat()`);
+      // `alamatChat` tanpa tanda kurung juga sah: widget menyerahkannya sebagai
+      // inisialisasi malas ke `useState`, supaya dipanggil sekali saja.
+      assert.match(kode, /\balamatChat\b/, `${path.basename(jalur)} tidak memakai alamatChat`);
     }
   });
 
@@ -10785,7 +10787,7 @@ describe('alamatChat()', () => {
       const kode = kodeSajaChat(jalur);
       assert.match(
         kode,
-        /if \(!chatUrl\) \{[\s\S]{0,200}?return;/,
+        /if \(!chatUrl\)[\s\S]{0,200}?return;/,
         `${path.basename(jalur)} tidak berhenti saat alamat tidak ada`
       );
       assert.match(
@@ -10794,6 +10796,16 @@ describe('alamatChat()', () => {
         `${path.basename(jalur)} tidak memberi tahu penggunanya`
       );
     }
+  });
+
+  it('widget menyimpan alamatnya sekali, bukan lewat setState di effect', () => {
+    // `useState(alamatChat)` — referensi fungsinya, BUKAN `alamatChat()` —
+    // supaya ia dipanggil sekali seumur komponen. Bentuk sebelumnya memanggil
+    // ulang di dalam effect lalu mengabarkan hasilnya lewat `setError`, yang
+    // memicu render berantai (react-hooks/set-state-in-effect).
+    const kode = kodeSajaChat(JALUR_WIDGET);
+    assert.match(kode, /useState<string \| null>\(alamatChat\)/);
+    assert.doesNotMatch(kode, /useState<string \| null>\(alamatChat\(\)\)/);
   });
 
   it('inbox admin tidak melempar saat socket tidak pernah dibuat', () => {
@@ -10820,5 +10832,92 @@ describe('alamatChat()', () => {
     assert.match(contoh, /^NEXT_PUBLIC_CHAT_URL=/m);
     assert.match(contoh, /ditanam/i);
     assert.match(contoh, /build ulang/i);
+  });
+});
+
+// ===========================================================================
+// GERBANG LINT — TEMUAN YANG TIDAK BISA DITINDAKLANJUTI TIDAK BOLEH MENDOMINASI
+// ===========================================================================
+describe('temuan lint yang sudah dibereskan', () => {
+  // Hanya baris komentar `//` yang dibuang, BUKAN blok `/* */`: pola glob
+  // seperti `".next/**"` dan `"**/*.cjs"` membuat penghapus blok komentar
+  // menganggap semua yang di antaranya sebagai komentar dan melenyapkan
+  // separuh berkas konfigurasi.
+  function kodeSajaLint(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const akar = (...bagian) => path.join(__dirname, '..', ...bagian);
+
+  it('no-require-imports dimatikan hanya untuk skrip CommonJS asli', () => {
+    // 71 dari 165 galat lint dulu berasal dari aturan ini di berkas yang memang
+    // CommonJS dan dijalankan langsung Node. Pengecualiannya harus SEMPIT: kalau
+    // dimatikan global, `require` di berkas TypeScript yang di-bundle lolos.
+    const kode = kodeSajaLint(akar('eslint.config.mjs'));
+    assert.match(kode, /"@typescript-eslint\/no-require-imports":\s*"off"/);
+    assert.match(kode, /\*\*\/\*\.cjs/);
+    assert.match(kode, /chat-server\/\*\*\/\*\.js/);
+    // Tidak ada pola yang menyapu seluruh repo.
+    assert.doesNotMatch(kode, /files:\s*\[\s*"\*\*\/\*"\s*\]/);
+  });
+
+  it('TransactionClient tidak lagi mendeklarasikan komponen di dalam render', () => {
+    // Komponen yang dibuat ulang setiap render adalah TIPE komponen baru setiap
+    // render: React melepas dan memasang ulang seluruh subtree-nya alih-alih
+    // memperbaruinya — state internal hilang dan fokus keyboard lepas. 19 dari
+    // galat lint repo ini berasal dari tiga komponen di satu berkas.
+    const jalur = akar('src', 'app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx');
+    const kode = kodeSajaLint(jalur);
+
+    // Ketiganya harus di lingkup modul: tidak ada indentasi di depan `const`.
+    // Kelas karakternya `[ \t]`, BUKAN `\s`: `\s` cocok dengan newline, jadi
+    // `^\s+const` bisa melahap baris kosong lalu cocok dengan `const` di kolom
+    // nol — pemeriksaan indentasi yang selalu lulus.
+    for (const nama of ['StatusBadge', 'DetailSection', 'InfoPair']) {
+      assert.match(kode, new RegExp(`^const ${nama} = `, 'm'), `${nama} tidak di lingkup modul`);
+      assert.doesNotMatch(
+        kode,
+        new RegExp(`^[ \\t]+const ${nama} = `, 'm'),
+        `${nama} masih dideklarasikan di dalam komponen`
+      );
+    }
+  });
+
+  it('form billboard menurunkan status memuat dari URL, bukan setState di effect', () => {
+    // `setFetching(true)` sinkron di dalam effect memicu render berantai, DAN
+    // render pertama form edit sempat menampilkan kolom kosong satu frame
+    // sebelum "Loading..." — admin sempat mengira datanya hilang.
+    const jalur = akar('src', 'app', 'admin', '(dashboard)', 'billboards', 'form', 'page.tsx');
+    const kode = kodeSajaLint(jalur);
+    assert.match(kode, /useState\(Boolean\(billboardId\)\)/);
+    assert.doesNotMatch(kode, /setFetching\(true\)/);
+  });
+
+  it('LocationVisualizer memuat Leaflet lewat import dinamis', () => {
+    // `require("leaflet")` di modul ES adalah satu-satunya galat
+    // `no-require-imports` di seluruh `src/`. `import()` memberi efek yang sama
+    // — Leaflet tetap hanya dimuat di browser karena effect tidak jalan saat
+    // render server — tanpa interop CommonJS.
+    const kode = kodeSajaLint(akar('src', 'components', 'LocationVisualizer.tsx'));
+    assert.doesNotMatch(kode, /require\(["']leaflet["']\)/);
+    assert.match(kode, /import\(['"]leaflet['"]\)/);
+    // Effect async wajib punya pembatal: tanpa itu `mergeOptions` bisa berjalan
+    // setelah komponen dilepas.
+    assert.match(kode, /dibatalkan/);
+  });
+
+  it('tidak ada eslint-disable yang menunjuk aturan mati', () => {
+    // ESLint 9 melaporkan directive yang tidak terpakai sebagai galat, jadi
+    // `eslint-disable no-control-regex` — aturan yang tidak dinyalakan repo ini
+    // — ikut membuat gerbang lint merah.
+    const kode = fs.readFileSync(akar('src', 'lib', 'url-bukti.ts'), 'utf8');
+    assert.doesNotMatch(kode, /eslint-disable-next-line no-control-regex/);
+    // Pemeriksaan karakter kendalinya sendiri HARUS tetap ada: ia yang menahan
+    // `javascript\n:alert(1)` lolos sebagai URL sah.
+    assert.match(kode, /\[\\u0000-\\u001F\\u007F\]/);
   });
 });
