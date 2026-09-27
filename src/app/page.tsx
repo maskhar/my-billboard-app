@@ -21,44 +21,51 @@ export const dynamic = 'force-dynamic';
 //
 // Penyaringan sekarang dilakukan di query, jadi baris yang tidak layak tampil
 // tidak pernah meninggalkan database.
+// GALAT DATABASE TIDAK LAGI DITELAN MENJADI DAFTAR KOSONG.
+//
+// Blok `try/catch` di sini dulu mengembalikan `[]` saat query gagal. Dari kursi
+// pengunjung, itu tidak bisa dibedakan dari "perusahaan ini tidak punya satu pun
+// billboard": peta terbuka bersih, pencarian tidak menemukan apa-apa, dan tidak
+// ada satu pun tanda bahwa yang rusak adalah sambungan database. Inventaris yang
+// sebenarnya penuh tampil habis, dan pemilik usaha tidak tahu apa pun karena
+// halamannya balas 200 OK dengan senang hati.
+//
+// Sekarang galat dibiarkan melempar ke `src/app/error.tsx`, yang mengatakan
+// "gagal dimuat" — kalimat yang benar — alih-alih "tidak ada". Itulah sebabnya
+// batas galat harus ada lebih dulu sebelum `catch` ini boleh dilepas.
 async function getBillboards(query: string, type: string) {
-  try {
-    return await prisma.billboard.findMany({
-      where: {
-        status: 'Available',
-        publishStatus: 'PUBLISHED',
-        ...(type !== 'Semua' ? { type } : {}),
-        ...(query
-          ? {
-              OR: [
-                { title: { contains: query, mode: 'insensitive' as const } },
-                { address: { contains: query, mode: 'insensitive' as const } },
-              ],
-            }
-          : {}),
-      },
-      // Peta hanya merender delapan kolom ini. Sebelumnya seluruh baris
-      // dikirim ke browser — termasuk catatan internal dan jejak siapa yang
-      // terakhir mengubah. Dan karena `price` bertipe Decimal (objek), data
-      // itu juga gagal diubah menjadi JSON saat menyeberang ke komponen
-      // 'use client': peta tidak muncul sama sekali, tanpa keluhan dari
-      // pemeriksaan tipe.
-      select: {
-        id: true,
-        slug: true,
-        title: true,
-        type: true,
-        mainImage: true,
-        lat: true,
-        lng: true,
-        price: true,
-      },
-      orderBy: { updatedAt: 'desc' },
-    });
-  } catch (error) {
-    console.error('Gagal mengambil data billboard:', error);
-    return [];
-  }
+  return await prisma.billboard.findMany({
+    where: {
+      status: 'Available',
+      publishStatus: 'PUBLISHED',
+      ...(type !== 'Semua' ? { type } : {}),
+      ...(query
+        ? {
+            OR: [
+              { title: { contains: query, mode: 'insensitive' as const } },
+              { address: { contains: query, mode: 'insensitive' as const } },
+            ],
+          }
+        : {}),
+    },
+    // Peta hanya merender delapan kolom ini. Sebelumnya seluruh baris
+    // dikirim ke browser — termasuk catatan internal dan jejak siapa yang
+    // terakhir mengubah. Dan karena `price` bertipe Decimal (objek), data
+    // itu juga gagal diubah menjadi JSON saat menyeberang ke komponen
+    // 'use client': peta tidak muncul sama sekali, tanpa keluhan dari
+    // pemeriksaan tipe.
+    select: {
+      id: true,
+      slug: true,
+      title: true,
+      type: true,
+      mainImage: true,
+      lat: true,
+      lng: true,
+      price: true,
+    },
+    orderBy: { updatedAt: 'desc' },
+  });
 }
 
 // MENANGKAP URL SEARCH PARAM

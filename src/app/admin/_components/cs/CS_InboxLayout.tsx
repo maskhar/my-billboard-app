@@ -207,10 +207,25 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     }
     setSelectedSession(session);
     setIsLoadingMessages(true);
-    const fullSession = await getMessagesForSession(session.id);
-    setMessages(fullSession?.messages || []);
-    setIsLoadingMessages(false);
-    socketRef.current.emit('joinRoom', session.id);
+    // `getMessagesForSession` tidak lagi menelan galat databasenya sendiri
+    // (dulu ia mengembalikan `null`, yang di sini menjadi `|| []` — percakapan
+    // tampil kosong alih-alih gagal, dan CS menjawab pelanggan tanpa riwayat).
+    // Karena itu pemanggil yang wajib menangkapnya. Tanpa `try/catch` di sini,
+    // Promise yang ditolak meninggalkan `isLoadingMessages` bernilai `true`
+    // selamanya: panel percakapan berputar tanpa akhir.
+    try {
+      const fullSession = await getMessagesForSession(session.id);
+      setMessages(fullSession?.messages || []);
+      socketRef.current.emit('joinRoom', session.id);
+    } catch (e: any) {
+      setMessages([]);
+      alert(
+        `Riwayat percakapan gagal dimuat: ${e?.message || 'galat tidak diketahui'}. ` +
+          'Jangan menjawab sebelum riwayatnya tampil — pilih ulang percakapan ini.'
+      );
+    } finally {
+      setIsLoadingMessages(false);
+    }
   };
 
   const handleSendMessage = (message: string) => {

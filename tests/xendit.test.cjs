@@ -9908,3 +9908,116 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
     assert.match(kode, /geminiApiKeyMasked/);
   });
 });
+
+describe('batas galat: kegagalan database tidak lagi tampil sebagai "tidak ada"', () => {
+  const AKAR = path.join(__dirname, '..', 'src', 'app');
+
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('berkas batas galat dan 404 ada di akar app/', () => {
+    // Sebelumnya NOL berkas ini ada di 21 halaman. Itulah sebabnya setiap
+    // pengambilan data menelan galatnya sendiri: tidak ada tempat mendarat.
+    for (const berkas of ['error.tsx', 'global-error.tsx', 'not-found.tsx']) {
+      assert.ok(
+        fs.existsSync(path.join(AKAR, berkas)),
+        `src/app/${berkas} wajib ada`
+      );
+    }
+  });
+
+  it('area admin punya batas galat dan keadaan memuat sendiri', () => {
+    const dir = path.join(AKAR, 'admin', '(dashboard)');
+    assert.ok(fs.existsSync(path.join(dir, 'error.tsx')));
+    assert.ok(fs.existsSync(path.join(dir, 'loading.tsx')));
+  });
+
+  it('error.tsx dan global-error.tsx adalah Client Component dengan reset', () => {
+    for (const berkas of ['error.tsx', 'global-error.tsx', path.join('admin', '(dashboard)', 'error.tsx')]) {
+      const isi = fs.readFileSync(path.join(AKAR, berkas), 'utf8');
+      assert.match(isi, /^'use client';/, `${berkas} wajib Client Component`);
+      assert.match(isi, /reset:\s*\(\)\s*=>\s*void/, `${berkas} wajib menerima reset`);
+    }
+  });
+
+  it('global-error.tsx merender html dan body sendiri', () => {
+    // Ia menggantikan seluruh dokumen ketika layout-nya sendiri yang gagal;
+    // tanpa <html>/<body> hasilnya halaman putih kosong.
+    const isi = kodeSaja(path.join(AKAR, 'global-error.tsx'));
+    assert.match(isi, /<html/);
+    assert.match(isi, /<body/);
+    // Tidak boleh bergantung pada apa pun dari layout yang baru saja gagal.
+    assert.doesNotMatch(isi, /from '@\/components\//);
+  });
+
+  it('halaman galat tidak menampilkan error.message ke pengunjung', () => {
+    // `error.message` di Server Component bisa memuat potongan query, nama
+    // kolom, host database, dan kadang nilai parameter. `digest` justru
+    // dirancang untuk dibagikan: penanda yang bisa dicocokkan dengan log.
+    for (const berkas of ['error.tsx', 'global-error.tsx', path.join('admin', '(dashboard)', 'error.tsx')]) {
+      const isi = kodeSaja(path.join(AKAR, berkas));
+      assert.doesNotMatch(isi, /\{error\.message\}/, `${berkas} membocorkan error.message`);
+      assert.match(isi, /error\.digest/, `${berkas} wajib menampilkan digest`);
+    }
+  });
+
+  it('not-found.tsx adalah Server Component', () => {
+    // Tidak ada state dan tidak ada penangan peristiwa di sana, jadi tidak ada
+    // alasan mengirim JavaScript-nya ke browser.
+    //
+    // Komentar dibuang lebih dulu: komentar berkas itu MENYEBUT `'use client'`
+    // untuk menjelaskan kenapa direktifnya sengaja tidak dipakai.
+    const isi = kodeSaja(path.join(AKAR, 'not-found.tsx'));
+    assert.doesNotMatch(isi, /'use client'/);
+  });
+
+  it('halaman depan tidak lagi mengembalikan daftar kosong saat query gagal', () => {
+    const isi = kodeSaja(path.join(AKAR, 'page.tsx'));
+    assert.doesNotMatch(isi, /return \[\]/);
+    assert.doesNotMatch(isi, /catch\s*\(error\)/);
+  });
+
+  it('halaman detail billboard memakai notFound(), bukan kartu 200 OK', () => {
+    const isi = kodeSaja(path.join(AKAR, 'billboard', '[slug]', 'page.tsx'));
+    // `notFound()` mengembalikan 404 sebenarnya. Kartu buatan sendiri dulu
+    // dikirim dengan status 200, jadi slug yang sudah dihapus tetap terindeks.
+    assert.match(isi, /import \{ notFound \} from 'next\/navigation'/);
+    assert.match(isi, /notFound\(\);/);
+    assert.doesNotMatch(isi, /Billboard Tidak Ditemukan/);
+    // `catch` yang mengembalikan null pada query billboard sudah hilang, jadi
+    // `null` kembali bermakna tunggal: barisnya tidak ada.
+    assert.doesNotMatch(isi, /console\.error\('Gagal mengambil detail billboard/);
+  });
+
+  it('pengaturan sistem tetap boleh gagal tanpa merusak halaman produk', () => {
+    // Ini catch yang SENGAJA dipertahankan: peta yang tidak muncul tidak boleh
+    // membuat seluruh halaman produk gagal terbuka. Bedanya dengan yang dihapus
+    // — di sini nilai baliknya opsional, bukan isi utama halaman.
+    const isi = kodeSaja(path.join(AKAR, 'billboard', '[slug]', 'page.tsx'));
+    assert.match(isi, /getSystemSettings[\s\S]*?catch\s*\(error\)/);
+  });
+
+  it('daftar percakapan CS tidak lagi tampil kosong saat database gagal', () => {
+    const isi = kodeSaja(path.join(AKAR, 'admin', '(dashboard)', 'live-chat', 'actions.ts'));
+    assert.doesNotMatch(isi, /return \[\]/);
+    // Gerbang peran WAJIB tetap ada: Server Action adalah endpoint HTTP publik.
+    assert.match(isi, /await pastikanBolehLihatChat\(\)/);
+  });
+
+  it('pemanggil getMessagesForSession menangkap galat dan melepas loading', () => {
+    const isi = kodeSaja(
+      path.join(__dirname, '..', 'src', 'app', 'admin', '_components', 'cs', 'CS_InboxLayout.tsx')
+    );
+    const pilih = isi.match(/const handleSelectSession = async \(session: any\) => \{[\s\S]*?\n  \};/);
+    assert.ok(pilih, 'handleSelectSession tidak ditemukan');
+    assert.match(pilih[0], /catch\s*\(/);
+    assert.match(pilih[0], /finally\s*\{[\s\S]*?setIsLoadingMessages\(false\)/);
+  });
+});

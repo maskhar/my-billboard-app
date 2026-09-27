@@ -1,5 +1,5 @@
 // src/app/billboard/[slug]/page.tsx
-import Link from 'next/link';
+import { notFound } from 'next/navigation';
 import BillboardDetailClient from './BillboardDetailClient';
 import { Billboard, SystemSetting } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
@@ -25,9 +25,22 @@ type BillboardDetailData = Billboard & {
 // `startDate`/`endDate` yang diambil — sisa kolom booking memuat data pesanan
 // orang lain (nilai transaksi, catatan refund) dan tidak ada urusannya dengan
 // kalender ketersediaan publik.
+//
+// `try/catch` yang mengembalikan `null` DIHAPUS dari fungsi ini.
+//
+// Nilai `null` di sini punya dua arti yang tidak bisa dipisahkan lagi setelah
+// digabung: "slug ini memang tidak ada" dan "database tidak bisa dihubungi".
+// Keduanya lalu mendarat di cabang render yang sama dan mencetak "Billboard
+// Tidak Ditemukan" — kalimat yang pada kasus kedua adalah kebohongan, dan
+// kebohongan yang mahal: pengunjung yang mengeklik tautan dari iklan atau hasil
+// pencarian menyimpulkan produknya sudah tidak dijual, lalu pergi. Halaman
+// membalas 200 OK, jadi tidak ada satu pun pemantau yang berbunyi.
+//
+// Sekarang kegagalan query melempar ke `src/app/error.tsx` ("gagal dimuat"),
+// sementara `null` kembali bermakna tunggal: baris yang dicari tidak ada, yang
+// dijawab `notFound()` dengan status 404 yang benar.
 async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | null> {
-  try {
-    return await prisma.billboard.findFirst({
+  return await prisma.billboard.findFirst({
       where: {
         slug,
         publishStatus: 'PUBLISHED',
@@ -46,10 +59,6 @@ async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | n
         },
       },
     });
-  } catch (error) {
-    console.error('Gagal mengambil detail billboard:', error);
-    return null;
-  }
 }
 
 // Fungsi ini dulu mengembalikan nilai tetap yang ditulis langsung di kode —
@@ -112,14 +121,14 @@ export default async function DetailPage({ params, searchParams }: Props) {
     getSystemSettings()
   ]);
 
-  // Kondisi "Tidak Ditemukan" akan aktif jika fetch gagal atau backend mengembalikan 404
+  // `notFound()` menggantikan kartu buatan sendiri di sini.
+  //
+  // Blok lama mengembalikan JSX dengan status HTTP 200. Bagi mesin pencari itu
+  // berarti "halaman ini ada dan isinya sah", jadi slug yang sudah dihapus tetap
+  // terindeks dan terus muncul di hasil pencarian selamanya. `notFound()`
+  // mengembalikan 404 yang sebenarnya dan merender `src/app/not-found.tsx`.
   if (!rawData) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-gray-50 flex-col gap-4 font-sans">
-        <h1 className="text-2xl font-bold text-gray-400">Billboard Tidak Ditemukan</h1>
-        <Link href="/" className="text-utero font-bold hover:underline">Kembali ke Peta</Link>
-      </div>
-    );
+    notFound();
   }
 
   // Proses data seperti biasa

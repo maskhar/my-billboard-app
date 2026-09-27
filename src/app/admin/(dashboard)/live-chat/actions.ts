@@ -22,24 +22,27 @@ async function pastikanBolehLihatChat() {
   }
 }
 
+// `catch` yang mengembalikan `[]` DIHAPUS.
+//
+// Pemanggilnya adalah Server Component (`live-chat/page.tsx`), yang meneruskan
+// hasilnya langsung ke `CS_InboxLayout`. Daftar kosong di sana dirender sebagai
+// kotak masuk yang bersih — tidak ada percakapan yang menunggu. Itu persis
+// kalimat yang tidak boleh diucapkan saat database gagal dihubungi: CS melihat
+// layar tenang, tidak menjawab siapa pun, dan pelanggan yang sedang mengetik di
+// widget chat tidak pernah dibalas. Galat sekarang melempar ke
+// `admin/(dashboard)/error.tsx`, yang menyatakan datanya gagal dimuat.
 export async function getChatSessions() {
   await pastikanBolehLihatChat();
 
-  try {
-    const sessions = await prisma.chatSession.findMany({
-      orderBy: { updatedAt: 'desc' },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'desc' },
-          take: 1, // Hanya ambil pesan terakhir untuk preview
-        },
+  return await prisma.chatSession.findMany({
+    orderBy: { updatedAt: 'desc' },
+    include: {
+      messages: {
+        orderBy: { createdAt: 'desc' },
+        take: 1, // Hanya ambil pesan terakhir untuk preview
       },
-    });
-    return sessions;
-  } catch (error) {
-    console.error("Failed to fetch chat sessions:", error);
-    return []; // Kembalikan array kosong jika terjadi error
-  }
+    },
+  });
 }
 
 export async function getMessagesForSession(sessionId: string) {
@@ -47,18 +50,22 @@ export async function getMessagesForSession(sessionId: string) {
 
   if (!sessionId) return null;
 
-  try {
-    const sessionWithMessages = await prisma.chatSession.findUnique({
-      where: { id: sessionId },
-      include: {
-        messages: {
-          orderBy: { createdAt: 'asc' },
-        },
+  // `catch` yang mengembalikan `null` DIHAPUS di sini juga. Pemanggilnya
+  // (`CS_InboxLayout.handleSelectSession`) menulis `fullSession?.messages || []`,
+  // jadi `null` menjadi percakapan yang tampil KOSONG — bukan gagal. CS membuka
+  // percakapan pelanggan, melihat riwayatnya lenyap, dan menjawab tanpa tahu apa
+  // yang sudah dibicarakan sebelumnya.
+  //
+  // `null` tetap dipakai untuk satu arti saja: sesi dengan id itu tidak ada.
+  // Pemanggil sekarang menangkap galat dan menampilkannya (lihat try/catch di
+  // sana), karena ini Client Component — melempar ke batas galat akan
+  // membongkar seluruh kotak masuk hanya karena satu percakapan gagal dibuka.
+  return await prisma.chatSession.findUnique({
+    where: { id: sessionId },
+    include: {
+      messages: {
+        orderBy: { createdAt: 'asc' },
       },
-    });
-    return sessionWithMessages;
-  } catch (error) {
-    console.error(`Failed to fetch messages for session ${sessionId}:`, error);
-    return null;
-  }
+    },
+  });
 }
