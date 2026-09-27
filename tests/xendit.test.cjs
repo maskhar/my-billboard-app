@@ -2362,6 +2362,8 @@ describe('POST /api/booking/create', () => {
   function buatRouteBooking({ body, harga = '1000000' }) {
     let createData = null;
     let pembayaranTerpisah = 0;
+    const identitasTersimpan = [];
+    const urutan = [];
     const prisma = {
       billboard: {
         async findUnique() {
@@ -2370,11 +2372,19 @@ describe('POST /api/booking/create', () => {
       },
       async $transaction(kerja) {
         return kerja({
+          user: {
+            async update(args) {
+              urutan.push('user.update');
+              identitasTersimpan.push({ where: args.where, data: args.data });
+              return { id: 'user-1' };
+            },
+          },
           booking: {
             async findFirst() {
               return null;
             },
             async create(args) {
+              urutan.push('booking.create');
               createData = args.data;
               const payment = {
                 id: 'pay-awal',
@@ -2405,7 +2415,27 @@ describe('POST /api/booking/create', () => {
         sapuPesananKedaluwarsa: async () => 0,
       },
     });
-    return { route, data: () => createData, pembayaranTerpisah: () => pembayaranTerpisah, body };
+    // Identitas penyewa wajib dan diperiksa sebelum pesanan disimpan, jadi
+    // setiap body uji membawanya kecuali test itu sendiri yang menimpanya.
+    const bodyLengkap = { name: 'Budi Santoso', whatsapp: '08123456789', ...body };
+
+    return {
+      route,
+      data: () => createData,
+      pembayaranTerpisah: () => pembayaranTerpisah,
+      identitas: () => identitasTersimpan,
+      urutan: () => urutan,
+      body: bodyLengkap,
+    };
+  }
+
+  async function kirim(fake) {
+    return fake.route.POST(
+      new Request('https://contoh.test/api/booking/create', {
+        method: 'POST',
+        body: JSON.stringify(fake.body),
+      })
+    );
   }
 
   for (const [paymentType, tujuan, tagihan] of [
@@ -2442,6 +2472,316 @@ describe('POST /api/booking/create', () => {
       assert.equal(Object.keys(data.payments).join(','), 'create');
     });
   }
+
+  // =========================================================================
+  // IDENTITAS PENYEWA IKUT TERSIMPAN
+  //
+  // Sebelumnya empat kolom "Data Penyewa" di checkout tidak punya `value`
+  // maupun `onChange`, dan payload ke route ini tidak pernah memuat satu pun
+  // di antaranya. Akibatnya bukan cuma data hilang: `siapkanSesiPembayaran`
+  // di halaman berikutnya MENOLAK dengan `PROFIL_BELUM_LENGKAP` karena nama
+  // atau nomor WhatsApp kosong — tepat setelah pembeli mengisi keduanya.
+  // =========================================================================
+  const BODY_DASAR = {
+    billboardId: 'bb-1',
+    duration: 1,
+    paymentType: 'full',
+    designOption: 'upload',
+    startDateString: '2026-10-01T00:00:00.000Z',
+  };
+
+  it('menyimpan nama dan nomor WhatsApp ke akun, di transaksi yang sama', async () => {
+    const fake = buatRouteBooking({
+      body: { ...BODY_DASAR, name: '  Budi Santoso  ', whatsapp: '0812-3456-789' },
+    });
+
+    const response = await kirim(fake);
+    const identitas = fake.identitas();
+
+    assert.equal(response.status, 200);
+    assert.equal(identitas.length, 1);
+    assert.deepEqual(identitas[0].where, { id: 'user-1' });
+    assert.equal(identitas[0].data.name, 'Budi Santoso');
+    // Disimpan ternormalisasi, sama dengan `api/register` — supaya gerbang
+    // pembayaran tidak perlu menafsirkannya ulang.
+    assert.equal(identitas[0].data.whatsapp, '628123456789');
+    // Satu transaksi: identitas dan pesanan sama-sama tertulis atau sama-sama
+    // tidak. Nama yang tersimpan tanpa pesanannya adalah profil yang berubah
+    // karena pemesanan yang gagal.
+    assert.deepEqual(fake.urutan(), ['user.update', 'booking.create']);
+  });
+
+  it('menyimpan perusahaan dan NPWP hanya bila pembeli mengisinya', async () => {
+    const fake = buatRouteBooking({
+      body: {
+        ...BODY_DASAR,
+        companyName: '  PT Maju Jaya  ',
+        npwp: '09.254.294.3-407.000',
+        needFaktur: true,
+      },
+    });
+
+    const response = await kirim(fake);
+    const data = fake.identitas()[0].data;
+
+    assert.equal(response.status, 200);
+    assert.equal(data.companyName, 'PT Maju Jaya');
+    // Tanda baca dibuang: satu nomor yang sama ditulis dua cara harus tercatat
+    // satu bentuk, kalau tidak tidak bisa dicocokkan.
+    assert.equal(data.npwp, '092542943407000');
+  });
+
+  it('kolom yang dibiarkan kosong berarti "tidak diubah", bukan "hapus"', async () => {
+    const fake = buatRouteBooking({ body: { ...BODY_DASAR } });
+
+    const response = await kirim(fake);
+    const data = fake.identitas()[0].data;
+
+    assert.equal(response.status, 200);
+    // Pembeli yang tahun lalu mengisi NPWP-nya tidak boleh kehilangan nomor itu
+    // hanya karena pesanan kali ini tidak butuh faktur.
+    assert.equal('companyName' in data, false);
+    assert.equal('npwp' in data, false);
+  });
+
+  it('email TIDAK pernah ditulis dari badan permintaan', async () => {
+    const fake = buatRouteBooking({
+      body: { ...BODY_DASAR, email: 'penyerang@contoh.test' },
+    });
+
+    const response = await kirim(fake);
+
+    assert.equal(response.status, 200);
+    // `User.email` adalah kunci login dan `@unique`. Satu permintaan pemesanan
+    // tidak boleh memindahkan akun ke alamat lain.
+    assert.equal('email' in fake.identitas()[0].data, false);
+  });
+
+  const IDENTITAS_DITOLAK = [
+    ['nama kosong', { name: '   ' }, /Nama lengkap penyewa wajib diisi/],
+    ['nama bukan teks', { name: { not: '' } }, /Nama lengkap penyewa wajib diisi/],
+    ['nama hilang', { name: undefined }, /Nama lengkap penyewa wajib diisi/],
+    ['nomor tercemar huruf', { whatsapp: '0812ABC4567' }, /Nomor WhatsApp tidak valid/],
+    ['nomor terlalu pendek', { whatsapp: '0812' }, /Nomor WhatsApp tidak valid/],
+    ['nomor objek', { whatsapp: { not: '' } }, /Nomor WhatsApp tidak valid/],
+    ['nomor hilang', { whatsapp: undefined }, /Nomor WhatsApp tidak valid/],
+    ['faktur tanpa NPWP', { needFaktur: true, npwp: '' }, /NPWP 15 atau 16 digit/],
+    ['faktur dengan NPWP pendek', { needFaktur: true, npwp: '12345' }, /NPWP 15 atau 16 digit/],
+  ];
+
+  for (const [judul, ganti, pesan] of IDENTITAS_DITOLAK) {
+    it(`menolak 400 sebelum menulis apa pun: ${judul}`, async () => {
+      const fake = buatRouteBooking({ body: { ...BODY_DASAR, ...ganti } });
+
+      const response = await kirim(fake);
+      const isi = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.match(isi.message, pesan);
+      // Tidak ada transaksi yang dibuka: pesanan yang tersimpan dengan nomor
+      // yang bentuknya salah akan mengunci tanggalnya tanpa pernah bisa dibayar.
+      assert.deepEqual(fake.urutan(), []);
+      assert.equal(fake.data(), null);
+    });
+  }
+
+  it('surat ke pembeli memakai nama dari checkout, bukan nama di token sesi', () => {
+    const kode = fs
+      .readFileSync(JALUR_ROUTE_BOOKING, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    // Token JWT dibuat saat login dan tidak ikut berubah saat nama diperbarui
+    // beberapa baris di atasnya; memakainya berarti pembeli yang baru saja
+    // memperbaiki namanya menerima surat dengan nama lama.
+    assert.doesNotMatch(kode, /amankanHtml\(\s*session\.user\.name\s*\)/);
+    assert.match(kode, /amankanHtml\(namaPenyewa\)/);
+    assert.match(kode, /from ['"]@\/lib\/identitas-penyewa['"]/);
+  });
+});
+
+// ===========================================================================
+// IDENTITAS PENYEWA: SATU TEMPAT MENAFSIRKAN ISIAN CHECKOUT
+// ===========================================================================
+describe('src/lib/identitas-penyewa.ts', () => {
+  // `muatDenganModulPalsu` dengan nol palsu: yang dibutuhkan hanya resolusi
+  // alias `@/lib/telepon`, dan `telepon.ts` ASLI yang dipakai — memalsukannya
+  // berarti menguji pembuktian bentuk nomor yang tidak pernah dijalankan.
+  const { bacaIdentitasPenyewa, keNpwp } = muatDenganModulPalsu(
+    path.join(__dirname, '..', 'src', 'lib', 'identitas-penyewa.ts'),
+    {}
+  );
+
+  const DASAR = { name: 'Budi Santoso', whatsapp: '08123456789' };
+
+  it('menerima NPWP 15 digit dan 16 digit, menolak panjang lain', () => {
+    // 15 digit NPWP lama; 16 digit NIK yang dipakai orang pribadi sejak 2024.
+    // Keduanya sah di faktur pajak hari ini.
+    assert.equal(keNpwp('092542943407000'), '092542943407000');
+    assert.equal(keNpwp('3201234567890001'), '3201234567890001');
+    assert.equal(keNpwp('09.254.294.3-407.000'), '092542943407000');
+    assert.equal(keNpwp(' 3201 2345 6789 0001 '), '3201234567890001');
+
+    assert.equal(keNpwp('12345678901234'), null);   // 14
+    assert.equal(keNpwp('32012345678900011'), null); // 17
+    assert.equal(keNpwp(''), null);
+    assert.equal(keNpwp('bukan-angka'), null);
+    assert.equal(keNpwp(null), null);
+    assert.equal(keNpwp(undefined), null);
+    assert.equal(keNpwp(92542943407000), null);
+    assert.equal(keNpwp({ not: '' }), null);
+  });
+
+  it('memotong teks bebas pada batasnya, bukan menolaknya', () => {
+    const hasil = bacaIdentitasPenyewa(
+      { ...DASAR, name: 'A'.repeat(200), companyName: 'B'.repeat(300) },
+      false
+    );
+
+    assert.equal(hasil.sah, true);
+    assert.equal(hasil.nilai.name.length, 120);
+    assert.equal(hasil.nilai.companyName.length, 160);
+  });
+
+  it('menerima nomor bertipe angka — `input type=number` mengirimkannya begitu', () => {
+    const hasil = bacaIdentitasPenyewa({ ...DASAR, whatsapp: 8123456789 }, false);
+
+    assert.equal(hasil.sah, true);
+    assert.equal(hasil.nilai.whatsapp, '628123456789');
+  });
+
+  it('objek TIDAK diubah menjadi teks sebelum diperiksa', () => {
+    // `String({})` menghasilkan `"[object Object]"`. Diubah lebih dulu lalu
+    // diperiksa, nilai itu lolos pola ketikan dan pulang sebagai nomor karangan.
+    for (const nilai of [{}, { not: '' }, [], ['08123456789'], true, NaN, Infinity]) {
+      const hasil = bacaIdentitasPenyewa({ ...DASAR, whatsapp: nilai }, false);
+      assert.equal(hasil.sah, false, `whatsapp ${JSON.stringify(nilai)} harus ditolak`);
+    }
+  });
+
+  it('body yang bukan objek ditolak tanpa melempar', () => {
+    for (const body of [null, undefined, 'teks', 12345]) {
+      const hasil = bacaIdentitasPenyewa(body, false);
+      assert.equal(hasil.sah, false);
+      assert.match(hasil.pesan, /Nama lengkap penyewa wajib diisi/);
+    }
+  });
+
+  it('NPWP yang terisi selalu disimpan walau faktur tidak diminta', () => {
+    // Satu-satunya jejak bahwa pembeli punya NPWP adalah nomor itu sendiri —
+    // tidak ada kolom penanda faktur di skema.
+    const hasil = bacaIdentitasPenyewa({ ...DASAR, npwp: '092542943407000' }, false);
+
+    assert.equal(hasil.sah, true);
+    assert.equal(hasil.nilai.npwp, '092542943407000');
+  });
+
+  it('perusahaan kosong menjadi null, bukan teks kosong', () => {
+    for (const nilai of ['', '   ', undefined, { not: '' }, 12345]) {
+      const hasil = bacaIdentitasPenyewa({ ...DASAR, companyName: nilai }, false);
+      assert.equal(hasil.sah, true);
+      assert.equal(hasil.nilai.companyName, null);
+    }
+  });
+
+  it('pesan galat menyebut kolomnya, bukan "data tidak valid"', () => {
+    const tanpaNama = bacaIdentitasPenyewa({ ...DASAR, name: '' }, false);
+    const nomorSalah = bacaIdentitasPenyewa({ ...DASAR, whatsapp: 'abc' }, false);
+    const fakturKosong = bacaIdentitasPenyewa(DASAR, true);
+
+    assert.match(tanpaNama.pesan, /Nama lengkap/);
+    assert.match(nomorSalah.pesan, /WhatsApp/);
+    assert.match(fakturKosong.pesan, /NPWP/);
+    // Tiga pesan berbeda untuk tiga kolom berbeda. Pesan seragam memaksa
+    // pembeli menebak, dan di checkout tebakan salah berarti pesanan tidak jadi.
+    assert.equal(new Set([tanpaNama.pesan, nomorSalah.pesan, fakturKosong.pesan]).size, 3);
+  });
+});
+
+// ===========================================================================
+// CHECKOUT: ISIAN YANG DIKETIK HARUS TERKIRIM
+// ===========================================================================
+describe('CheckoutForm & halaman checkout', () => {
+  const JALUR_FORM = path.join(__dirname, '..', 'src', 'components', 'CheckoutForm.tsx');
+  const JALUR_HALAMAN = path.join(__dirname, '..', 'src', 'app', 'checkout', 'page.tsx');
+
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('keempat kolom Data Penyewa terkendali, bukan input tanpa value', () => {
+    const kode = kodeSaja(JALUR_FORM);
+
+    for (const [nilai, penyetel] of [
+      ['nama', 'setNama'],
+      ['whatsapp', 'setWhatsapp'],
+      ['perusahaan', 'setPerusahaan'],
+      ['npwp', 'setNpwp'],
+    ]) {
+      assert.match(kode, new RegExp(`value=\\{${nilai}\\}`), `kolom ${nilai} tanpa value`);
+      assert.match(kode, new RegExp(`${penyetel}\\(e\\.target\\.value\\)`), `kolom ${nilai} tanpa onChange`);
+    }
+  });
+
+  it('keempat nilai itu ikut di payload ke api/booking/create', () => {
+    const kode = kodeSaja(JALUR_FORM);
+    const payload = kode.slice(kode.indexOf('const payload = {'), kode.indexOf('try {'));
+
+    assert.match(payload, /name:\s*nama/);
+    assert.match(payload, /whatsapp:\s*whatsapp/);
+    assert.match(payload, /companyName:\s*perusahaan/);
+    assert.match(payload, /npwp:\s*npwp/);
+    assert.match(payload, /needFaktur:\s*needFaktur/);
+
+    // Nominal tetap tidak boleh kembali ke payload — harga ditentukan server.
+    assert.doesNotMatch(payload, /totalPrice|dpAmount|grandTotal|mustPayNow/);
+    // Email adalah kunci login `@unique`; tidak dikirim dari checkout.
+    assert.doesNotMatch(payload, /\bemail\s*:/);
+  });
+
+  it('kolom email hanya ditampilkan, tidak menerima ketikan', () => {
+    const kode = kodeSaja(JALUR_FORM);
+    assert.match(kode, /value=\{penyewa\.email\}/);
+    assert.match(kode, /readOnly/);
+  });
+
+  it('nomor dan NPWP bukan input type=number', () => {
+    const kode = kodeSaja(JALUR_FORM);
+    // `type="number"` membuang tanda `+` sehingga `+628…` tidak bisa diketik,
+    // dan menolak titik serta tanda hubung pada NPWP.
+    assert.match(kode, /id="whatsappPenyewa"[\s\S]{0,200}?inputMode="tel"/);
+    assert.doesNotMatch(kode, /id="whatsappPenyewa"[\s\S]{0,200}?type="number"/);
+    assert.doesNotMatch(kode, /id="npwpPenyewa"[\s\S]{0,200}?type="number"/);
+  });
+
+  it('halaman checkout menolak tamu dan admin sebelum formulir dirender', () => {
+    const kode = kodeSaja(JALUR_HALAMAN);
+
+    // Tanpa gerbang di sini, pembeli mengisi seluruh formulir lalu dijawab 401
+    // oleh route — setelah semuanya diketik.
+    assert.match(kode, /getServerSession\(authOptions\)/);
+    assert.match(kode, /callbackUrl=/);
+    assert.match(kode, /'ADMIN'|"ADMIN"/);
+  });
+
+  it('halaman checkout mengisi formulir dari database, bukan dari token sesi', () => {
+    const kode = kodeSaja(JALUR_HALAMAN);
+
+    assert.match(kode, /prisma\.user\.findUnique/);
+    // Kolomnya dipilih satu per satu: `findUnique` tanpa `select` membawa
+    // `ktp`, `ktpAddress`, dan `xenditCustomerId` ke halaman yang tidak
+    // memerlukannya.
+    assert.match(kode, /select:\s*\{[^}]*whatsapp:\s*true/);
+    assert.doesNotMatch(kode, /ktp|xenditCustomerId/);
+  });
 });
 
 // ===========================================================================

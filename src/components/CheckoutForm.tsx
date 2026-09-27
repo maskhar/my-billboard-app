@@ -16,18 +16,46 @@ interface CheckoutProps {
   };
   startDate: string;
   duration: number;
+  /** Identitas yang sudah tersimpan di akun, untuk mengisi formulir di bawah. */
+  penyewa: {
+    name: string;
+    email: string;
+    whatsapp: string;
+    companyName: string;
+    npwp: string;
+  };
 }
 
-export default function CheckoutForm({ billboard, startDate, duration: initialDuration }: CheckoutProps) {
+export default function CheckoutForm({ billboard, startDate, duration: initialDuration, penyewa }: CheckoutProps) {
   const router = useRouter();
-  
+
   // STATE LOKAL BARU
   const [duration, setDuration] = useState(initialDuration || 1);
   const [paymentType, setPaymentType] = useState('full');
   const [designOption, setDesignOption] = useState('upload');
   const [needFaktur, setNeedFaktur] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  
+
+  // ==========================================================================
+  // DATA PENYEWA — dulu empat kolom yang isinya dibuang.
+  //
+  // Keempat `<input>` di blok "Data Penyewa" tidak punya `value` maupun
+  // `onChange`, dan payload di `handlePayment` tidak pernah memuat satu pun di
+  // antaranya. Pembeli mengisi nama, WhatsApp, email, dan NPWP-nya, menekan
+  // tombol, dan seluruh isian itu hilang tanpa jejak — lalu halaman pembayaran
+  // berikutnya MENOLAK dengan "Lengkapi nama lengkap, nomor WhatsApp di
+  // Pengaturan Akun sebelum membayar", tepat untuk kolom yang baru saja diisi.
+  //
+  // Nilai awalnya datang dari server (`penyewa`), bukan dari `useSession()`:
+  // token JWT dibuat saat login dan tidak memuat `whatsapp`, `companyName`,
+  // maupun `npwp` sama sekali.
+  // ==========================================================================
+  const [nama, setNama] = useState(penyewa.name);
+  const [whatsapp, setWhatsapp] = useState(penyewa.whatsapp);
+  const [perusahaan, setPerusahaan] = useState(penyewa.companyName);
+  const [npwp, setNpwp] = useState(penyewa.npwp);
+  const [galatIdentitas, setGalatIdentitas] = useState<string | null>(null);
+
   // Data User
   const { data: session } = useSession();
 
@@ -73,17 +101,47 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
           return;
       }
 
+      // Pemeriksaan di sini hanya untuk MENGHEMAT satu perjalanan ke server dan
+      // menandai kolomnya di layar. Yang mengikat tetap `bacaIdentitasPenyewa`
+      // di server — pemeriksaan browser bisa dilewati dengan `curl`.
+      if (nama.trim() === '') {
+          setGalatIdentitas('Nama lengkap penyewa wajib diisi.');
+          return;
+      }
+      if (whatsapp.trim() === '') {
+          setGalatIdentitas('Nomor WhatsApp wajib diisi. Contoh: 08123456789.');
+          return;
+      }
+      if (needFaktur && npwp.replace(/\D/g, '').length === 0) {
+          setGalatIdentitas('Faktur pajak membutuhkan NPWP 15 atau 16 digit.');
+          return;
+      }
+      setGalatIdentitas(null);
+
       setIsLoading(true);
 
       // TIDAK ADA NOMINAL DI SINI, dan jangan ditambahkan kembali.
       // `paymentType` memilih SKEMA bayar (lunas / DP); besarnya ditentukan
       // server. Lihat catatan pratinjau harga di atas.
+      //
+      // `email` SENGAJA tidak dikirim. Kolom itu kunci login dan `@unique`;
+      // mengizinkan satu permintaan pemesanan menggantinya berarti pesanan bisa
+      // memindahkan akun ke alamat lain — atau menabrak alamat orang lain dan
+      // gagal dengan galat unique yang tidak menyebut email sama sekali.
       const payload = {
           billboardId: billboard.id,
           duration: duration,
           paymentType: paymentType,
           designOption: designOption,
-          startDateString: dateInput.value
+          startDateString: dateInput.value,
+          name: nama,
+          whatsapp: whatsapp,
+          companyName: perusahaan,
+          // NPWP tetap dikirim walau centang faktur dilepas: satu-satunya jejak
+          // bahwa pembeli punya NPWP adalah nomor itu sendiri, dan server hanya
+          // menimpanya bila terisi.
+          npwp: npwp,
+          needFaktur: needFaktur,
       };
 
       try {
@@ -125,7 +183,15 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
               );
               router.push(`/dashboard/order/${encodeURIComponent(orderId)}/payment`);
           } else {
-              alert("❌ Gagal: " + (result.message || `Server menolak (${response.status}).`));
+              // Pesan server ditampilkan juga di dekat formulirnya, tidak hanya
+              // di `alert` yang hilang begitu ditutup. Pesan penolakan identitas
+              // menyebut kolom mana yang salah; membuangnya memaksa pembeli
+              // menebak dari empat kolom.
+              const pesan = typeof result.message === 'string' && result.message.trim() !== ''
+                  ? result.message
+                  : `Server menolak (${response.status}).`;
+              setGalatIdentitas(pesan);
+              alert("❌ Gagal: " + pesan);
           }
 
       } catch (err) {
@@ -195,19 +261,76 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase">Nama Lengkap / Perusahaan</label>
-                        <input type="text" className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1" placeholder="PT. Maju Jaya" />
+                        <label htmlFor="namaPenyewa" className="text-xs font-bold text-gray-500 uppercase">Nama Lengkap</label>
+                        <input
+                            type="text"
+                            id="namaPenyewa"
+                            value={nama}
+                            onChange={(e) => setNama(e.target.value)}
+                            maxLength={120}
+                            required
+                            className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1"
+                            placeholder="Budi Santoso"
+                        />
                     </div>
                     <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase">WhatsApp</label>
-                        <input type="number" className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1" placeholder="08..." />
+                        {/*
+                          `type="tel"`, bukan `type="number"`. Kolom number
+                          membuang karakter `+` sehingga `+628…` tidak bisa
+                          diketik, dan di beberapa browser memperlakukan nomor
+                          panjang sebagai bilangan — `081200000000000000` pulang
+                          dalam notasi eksponen. Nomor telepon bukan bilangan
+                          yang dihitung.
+                        */}
+                        <label htmlFor="whatsappPenyewa" className="text-xs font-bold text-gray-500 uppercase">WhatsApp</label>
+                        <input
+                            type="tel"
+                            id="whatsappPenyewa"
+                            inputMode="tel"
+                            value={whatsapp}
+                            onChange={(e) => setWhatsapp(e.target.value)}
+                            maxLength={20}
+                            required
+                            className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1"
+                            placeholder="08123456789"
+                        />
                     </div>
 
                     <div className="md:col-span-2">
-                        <label className="text-xs font-bold text-gray-500 uppercase">Email (Untuk Invoice)</label>
-                        <input type="email" className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1" placeholder="admin@pt.com" />
+                        <label htmlFor="perusahaanPenyewa" className="text-xs font-bold text-gray-500 uppercase">Nama Perusahaan <span className="normal-case font-semibold text-gray-400">(opsional)</span></label>
+                        <input
+                            type="text"
+                            id="perusahaanPenyewa"
+                            value={perusahaan}
+                            onChange={(e) => setPerusahaan(e.target.value)}
+                            maxLength={160}
+                            className="w-full mt-1 border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1"
+                            placeholder="PT. Maju Jaya"
+                        />
                     </div>
-                    
+
+                    {/*
+                      Email hanya DITAMPILKAN, tidak diterima.
+                      `User.email` adalah kunci login dan `@unique`, dan halaman
+                      Pengaturan Akun sudah menyatakannya tidak dapat diubah.
+                      Kolom yang bisa diketik di sini akan menjanjikan perubahan
+                      yang tidak pernah dikirim — atau, kalau dikirim, memindahkan
+                      akun pembeli ke alamat lain lewat satu permintaan pemesanan.
+                    */}
+                    <div className="md:col-span-2">
+                        <label className="text-xs font-bold text-gray-500 uppercase">Email (Untuk Invoice)</label>
+                        <input
+                            type="email"
+                            value={penyewa.email}
+                            readOnly
+                            aria-describedby="catatanEmail"
+                            className="w-full mt-1 border border-gray-200 bg-gray-100 text-gray-500 rounded-lg p-2.5 outline-none cursor-not-allowed"
+                        />
+                        <p id="catatanEmail" className="text-xs text-gray-400 mt-1">
+                            Invoice dikirim ke alamat akun Anda. Alamat ini tidak dapat diubah.
+                        </p>
+                    </div>
+
                     <div className="md:col-span-2 mt-2 bg-gray-50 p-3 rounded-lg flex items-center gap-3 border border-dashed border-gray-300">
                         <input type="checkbox" id="fakturCheck" className="w-5 h-5 accent-utero cursor-pointer" checked={needFaktur} onChange={(e) => setNeedFaktur(e.target.checked)} />
                         <label htmlFor="fakturCheck" className="text-sm text-gray-700 font-semibold cursor-pointer select-none flex items-center gap-2">
@@ -217,8 +340,31 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
 
                     {needFaktur && (
                          <div className="md:col-span-2">
-                            <label className="text-xs font-bold text-utero">NOMOR NPWP</label>
-                            <input type="number" className="w-full mt-1 border border-utero/30 bg-red-50 rounded-lg p-2.5 outline-none text-gray-800 font-bold" placeholder="00.000..." />
+                            {/*
+                              `type="text"`, bukan number: NPWP ditulis dengan
+                              titik dan tanda hubung (`09.254.294.3-407.000`),
+                              dan kolom number menolak keduanya. Tanda bacanya
+                              dibuang server sebelum disimpan.
+                            */}
+                            <label htmlFor="npwpPenyewa" className="text-xs font-bold text-utero">NOMOR NPWP</label>
+                            <input
+                                type="text"
+                                id="npwpPenyewa"
+                                inputMode="numeric"
+                                value={npwp}
+                                onChange={(e) => setNpwp(e.target.value)}
+                                maxLength={30}
+                                className="w-full mt-1 border border-utero/30 bg-red-50 rounded-lg p-2.5 outline-none text-gray-800 font-bold"
+                                placeholder="09.254.294.3-407.000"
+                            />
+                            <p className="text-xs text-gray-500 mt-1">15 digit (NPWP lama) atau 16 digit (NIK).</p>
+                        </div>
+                    )}
+
+                    {galatIdentitas && (
+                        <div className="md:col-span-2 flex items-start gap-2 bg-red-50 border border-utero/30 text-utero rounded-lg p-3">
+                            <AlertCircle size={18} className="shrink-0 mt-0.5" />
+                            <p className="text-sm font-semibold">{galatIdentitas}</p>
                         </div>
                     )}
                 </div>

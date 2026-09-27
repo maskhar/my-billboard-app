@@ -9,6 +9,7 @@ import { addMonths, isBefore, startOfDay } from "date-fns";
 import { PaymentStatus, PaymentTujuan, Prisma } from "@prisma/client";
 import { jumlah, kali, keAngka, keDecimal, kurang, persen, rupiah } from "@/lib/money";
 import { adalahBentrokTanggal } from "@/lib/db-error";
+import { bacaIdentitasPenyewa } from "@/lib/identitas-penyewa";
 import {
   STATUS_MENGUNCI_TANGGAL,
   hitungTenggatPembayaran,
@@ -86,6 +87,22 @@ export async function POST(req: Request) {
     // saat ada yang menambahkannya kembali ke sini, harganya kembali ditentukan
     // browser — lihat catatan tarif di atas.
     const { billboardId, duration, paymentType, designOption, startDateString } = body;
+
+    // IDENTITAS PENYEWA — dulu diketik pembeli lalu dibuang.
+    //
+    // Empat kolom di blok "Data Penyewa" pada `CheckoutForm.tsx` tidak punya
+    // `value` maupun `onChange`, dan payload ke route ini tidak pernah memuat
+    // satu pun di antaranya. Akibatnya bukan cuma data yang hilang: halaman
+    // pembayaran berikutnya MENOLAK dengan `PROFIL_BELUM_LENGKAP` karena nama
+    // atau nomor WhatsApp kosong — tepat setelah pembeli mengisi keduanya.
+    //
+    // Divalidasi SEBELUM pesanan disimpan, bukan sesudah: nomor yang bentuknya
+    // salah tidak bisa dipakai gerbang pembayaran, dan pesanan yang tersimpan
+    // dengan nomor begitu akan mengunci tanggalnya tanpa pernah bisa dibayar.
+    const identitas = bacaIdentitasPenyewa(body, body?.needFaktur === true);
+    if (!identitas.sah) {
+        return NextResponse.json({ message: identitas.pesan }, { status: 400 });
+    }
 
     // Kolom `designOption` bertipe enum (`upload` / `service`, huruf kecil —
     // lihat catatan di schema.prisma). Nilai ini datang mentah dari browser
@@ -215,6 +232,30 @@ export async function POST(req: Request) {
                 throw new TanggalBentrok(bentrok.startDate, bentrok.endDate);
             }
 
+            // Identitas disimpan di transaksi yang sama dengan pesanannya.
+            //
+            // Kolomnya milik `User`, bukan `Booking` — skema tidak punya kolom
+            // identitas per pesanan, dan menambahkannya butuh migrasi. Yang
+            // dibaca gerbang pembayaran dan dashboard admin memang kolom `User`
+            // ini, jadi di sanalah isian checkout harus mendarat.
+            //
+            // `companyName` dan `npwp` hanya ditimpa bila pembeli benar-benar
+            // mengisinya. Kolom yang dibiarkan kosong di checkout berarti
+            // "tidak saya ubah", bukan "hapus yang sudah tersimpan" — pembeli
+            // yang tahun lalu mengisi NPWP-nya tidak kehilangan nomor itu hanya
+            // karena pesanan kali ini tidak butuh faktur.
+            await tx.user.update({
+                where: { id: session.user.id },
+                data: {
+                    name: identitas.nilai.name,
+                    whatsapp: identitas.nilai.whatsapp,
+                    ...(identitas.nilai.companyName !== null
+                        ? { companyName: identitas.nilai.companyName }
+                        : {}),
+                    ...(identitas.nilai.npwp !== null ? { npwp: identitas.nilai.npwp } : {}),
+                },
+            });
+
             // Transaksi ini memakai tingkat isolasi bawaan PostgreSQL (read
             // committed), jadi dua permintaan yang tiba pada detik yang sama
             // bisa sama-sama lolos pemeriksaan di atas sebelum salah satunya
@@ -331,6 +372,12 @@ export async function POST(req: Request) {
 
     const labelTagihan = bayarDp ? `DP ${PERSEN_DP}%` : "Lunas";
 
+    // Nama diambil dari isian checkout, BUKAN dari `session.user.name`. Token
+    // JWT sesi dibuat saat login dan tidak ikut berubah saat nama diperbarui
+    // beberapa baris di atas; memakainya berarti pembeli yang baru saja
+    // memperbaiki namanya menerima surat yang menyapanya dengan nama lama.
+    const namaPenyewa = identitas.nilai.name;
+
     // 4. KIRIM EMAIL KE USER
     //
     // Dulu email ini selalu memuat `totalPrice` dan berjudul seolah tagihan
@@ -353,11 +400,11 @@ export async function POST(req: Request) {
             // sementara cabang ini justru pesanan yang dibayar sekali penuh.
             title: bayarDp ? "Pesanan Diterima — Menunggu DP" : "Pesanan Diterima — Menunggu Pembayaran",
             message: bayarDp
-                ? `Halo ${amankanHtml(session.user.name)}, pesanan Anda telah kami terima.<br/><br/>` +
+                ? `Halo ${amankanHtml(namaPenyewa)}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Total nilai pesanan: <b>${rupiah(totalPrice)}</b><br/>` +
                   `Yang perlu dibayar sekarang (DP ${PERSEN_DP}%): <b>${rupiah(dpAmount)}</b><br/>` +
                   `Sisa <b>${rupiah(kurang(totalPrice, dpAmount))}</b> dibayarkan H-3 sebelum tayang.`
-                : `Halo ${amankanHtml(session.user.name)}, pesanan Anda telah kami terima.<br/><br/>` +
+                : `Halo ${amankanHtml(namaPenyewa)}, pesanan Anda telah kami terima.<br/><br/>` +
                   `Yang perlu dibayar sekarang (lunas): <b>${rupiah(totalPrice)}</b>`,
             orderDetail: {
                 id: newBooking.id,
@@ -389,7 +436,7 @@ export async function POST(req: Request) {
             }),
             title: "Pesanan Baru Masuk",
             message:
-                `User ${amankanHtml(session.user.name)} baru saja membuat pesanan.<br/>` +
+                `User ${amankanHtml(namaPenyewa)} baru saja membuat pesanan.<br/>` +
                 `Nilai pesanan: <b>${rupiah(totalPrice)}</b> — skema bayar: <b>${labelTagihan}</b>` +
                 (bayarDp ? `, ditagih sekarang <b>${rupiah(dpAmount)}</b>` : "") +
                 `.<br/>Mohon cek dashboard.`,

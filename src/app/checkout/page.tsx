@@ -3,6 +3,8 @@ import Navbar from '@/components/Navbar';
 import { prisma } from '@/lib/prisma';
 import CheckoutForm from '@/components/CheckoutForm';
 import { redirect } from 'next/navigation';
+import { getServerSession } from 'next-auth/next';
+import { authOptions } from '@/lib/auth';
 import { uangUntukClient } from '@/lib/money';
 
 // Kita gunakan ini untuk menangkap parameter dari URL
@@ -25,10 +27,41 @@ export default async function CheckoutPage({ searchParams }: Props) {
       redirect('/');
   }
 
-  // 3. Ambil Data ASLI dari Database
-  const billboard = await prisma.billboard.findUnique({
-      where: { id: billboardId }
-  });
+  // 3. SESI WAJIB.
+  //
+  // Halaman ini dulu bisa dibuka tanpa login. Pembeli mengisi seluruh formulir,
+  // menekan Lanjutkan, dan `api/booking/create` menjawab 401 "Sesi Habis." —
+  // yang di layar muncul sebagai `alert("❌ Gagal: Sesi Habis.")` setelah semua
+  // isian selesai diketik. Ditolak di sini, sebelum satu kolom pun diisi, dan
+  // `callbackUrl` membawa pembeli kembali ke checkout yang sama setelah login
+  // (termasuk tanggal dan durasinya).
+  const session = await getServerSession(authOptions);
+  if (!session?.user?.id) {
+      const tujuan = `/checkout?id=${encodeURIComponent(billboardId)}&date=${encodeURIComponent(startDate)}&duration=${encodeURIComponent(duration)}`;
+      redirect(`/login?callbackUrl=${encodeURIComponent(tujuan)}`);
+  }
+
+  // Admin tidak boleh memesan — gerbang yang sama dengan `api/booking/create`.
+  // Tanpa gerbang di sini, admin melihat formulir lengkap lalu ditolak 403 oleh
+  // route, dan `CheckoutForm` memberi `alert` setelah semuanya diisi.
+  if (session.user.role === 'ADMIN' || session.user.role === 'SUPER_ADMIN') {
+      redirect('/admin');
+  }
+
+  // 4. Ambil Data ASLI dari Database
+  //
+  // Identitas penyewa diambil bersamaan agar formulirnya terisi lebih dulu.
+  // Kolomnya HANYA yang dirender: `findUnique` tanpa `select` membawa `ktp`,
+  // `ktpAddress`, dan `xenditCustomerId` ke halaman yang tidak memerlukannya.
+  const [billboard, penyewa] = await Promise.all([
+      prisma.billboard.findUnique({
+          where: { id: billboardId }
+      }),
+      prisma.user.findUnique({
+          where: { id: session.user.id },
+          select: { name: true, email: true, whatsapp: true, companyName: true, npwp: true },
+      }),
+  ]);
 
   // Jika ID billboard tidak valid, redirect juga.
   if (!billboard) {
@@ -65,6 +98,17 @@ export default async function CheckoutPage({ searchParams }: Props) {
           }}
           startDate={startDate}
           duration={parseInt(duration)}
+          penyewa={{
+            // Diambil dari database, BUKAN dari `useSession()` di browser. Token
+            // JWT dibuat saat login dan tidak ikut berubah saat profil
+            // diperbarui, jadi sesi bisa membawa nama lama; `whatsapp`,
+            // `companyName`, dan `npwp` tidak ada di token sama sekali.
+            name: penyewa?.name ?? '',
+            email: penyewa?.email ?? '',
+            whatsapp: penyewa?.whatsapp ?? '',
+            companyName: penyewa?.companyName ?? '',
+            npwp: penyewa?.npwp ?? '',
+          }}
         />
         
       </div>
