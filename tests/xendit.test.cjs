@@ -10345,3 +10345,224 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
     });
   });
 });
+
+// ===========================================================================
+// PENJADWAL: SAPUAN PESANAN KEDALUWARSA PUNYA PEMICU BERJADWAL
+// ===========================================================================
+describe('GET /api/cron/sweep', () => {
+  const JALUR_ROUTE_CRON = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'api',
+    'cron',
+    'sweep',
+    'route.ts'
+  );
+  const JALUR_VERCEL = path.join(__dirname, '..', 'vercel.json');
+  const RAHASIA = 'a'.repeat(64);
+
+  /** Muat route dengan penyapu palsu yang mencatat pemanggilannya. */
+  function muatRoute(hasilSapuan = 0) {
+    const panggilan = [];
+    const route = muatDenganModulPalsu(JALUR_ROUTE_CRON, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      '@/lib/transisi-status': {
+        sapuPesananKedaluwarsa: async (billboardId) => {
+          panggilan.push(billboardId);
+          return hasilSapuan;
+        },
+      },
+    });
+    return { route, panggilan };
+  }
+
+  function permintaan(headerAuth) {
+    return {
+      headers: {
+        get: (nama) => (nama.toLowerCase() === 'authorization' ? headerAuth ?? null : null),
+      },
+    };
+  }
+
+  /** Jalankan `fn` dengan console.error/warn dibungkam. */
+  async function tanpaLog(fn) {
+    const errorAsli = console.error;
+    const warnAsli = console.warn;
+    console.error = () => {};
+    console.warn = () => {};
+    try {
+      return await fn();
+    } finally {
+      console.error = errorAsli;
+      console.warn = warnAsli;
+    }
+  }
+
+  let rahasiaAsli;
+  beforeEach(() => {
+    rahasiaAsli = process.env.CRON_SECRET;
+  });
+  afterEach(() => {
+    if (rahasiaAsli === undefined) delete process.env.CRON_SECRET;
+    else process.env.CRON_SECRET = rahasiaAsli;
+  });
+
+  it('gagal tertutup tanpa CRON_SECRET dan tidak memanggil penyapu', async () => {
+    delete process.env.CRON_SECRET;
+    const { route, panggilan } = muatRoute();
+
+    const response = await tanpaLog(() => route.GET(permintaan(`Bearer ${RAHASIA}`)));
+
+    assert.equal(response.status, 401);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.deepEqual(panggilan, [], 'penyapu tidak boleh berjalan tanpa rahasia terpasang');
+  });
+
+  it('menolak permintaan tanpa header Authorization', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute();
+
+    const response = await tanpaLog(() => route.GET(permintaan(null)));
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(panggilan, []);
+  });
+
+  it('menolak rahasia yang salah dengan panjang sama', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute();
+
+    const response = await tanpaLog(() => route.GET(permintaan(`Bearer ${'b'.repeat(64)}`)));
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(panggilan, []);
+  });
+
+  it('menolak rahasia yang salah dengan panjang berbeda', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute();
+
+    const response = await tanpaLog(() => route.GET(permintaan('Bearer pendek')));
+
+    assert.equal(response.status, 401);
+    assert.deepEqual(panggilan, []);
+  });
+
+  it('menerima rahasia benar berprefiks Bearer dan menyapu SELURUH pesanan', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute(3);
+
+    const response = await route.GET(permintaan(`Bearer ${RAHASIA}`));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('Cache-Control'), 'no-store');
+    assert.equal(body.status, 'ok');
+    assert.equal(body.dihanguskan, 3);
+    // `undefined`, bukan sebuah billboardId: sapuan berjadwal harus melepas
+    // tanggal SEMUA billboard, bukan satu yang kebetulan sedang dilihat.
+    assert.deepEqual(panggilan, [undefined]);
+  });
+
+  it('menerima rahasia benar tanpa prefiks Bearer', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute(0);
+
+    const response = await route.GET(permintaan(RAHASIA));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.dihanguskan, 0);
+    assert.equal(panggilan.length, 1);
+  });
+
+  it('tidak pernah mencatat nilai rahasia, bahkan pada penolakan', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route } = muatRoute();
+
+    const tercatat = [];
+    const errorAsli = console.error;
+    const warnAsli = console.warn;
+    const logAsli = console.log;
+    console.error = (...a) => tercatat.push(a.join(' '));
+    console.warn = (...a) => tercatat.push(a.join(' '));
+    console.log = (...a) => tercatat.push(a.join(' '));
+    try {
+      await route.GET(permintaan(`Bearer ${'b'.repeat(64)}`));
+      delete process.env.CRON_SECRET;
+      await route.GET(permintaan(`Bearer ${RAHASIA}`));
+    } finally {
+      console.error = errorAsli;
+      console.warn = warnAsli;
+      console.log = logAsli;
+    }
+
+    const semua = tercatat.join('\n');
+    assert.ok(tercatat.length > 0, 'penolakan harus meninggalkan jejak yang bisa dibaca operator');
+    assert.doesNotMatch(semua, new RegExp(RAHASIA));
+    assert.doesNotMatch(semua, /b{16}/);
+  });
+
+  it('membandingkan rahasia dengan timingSafeEqual, bukan ===', () => {
+    const sumber = kodeSajaCron(JALUR_ROUTE_CRON);
+    assert.match(sumber, /timingSafeEqual/);
+    assert.doesNotMatch(sumber, /process\.env\.CRON_SECRET\s*===|===\s*process\.env\.CRON_SECRET/);
+  });
+
+  it('tidak menulis logika penghangusan kedua — hanya memanggil penyapu yang ada', () => {
+    const sumber = kodeSajaCron(JALUR_ROUTE_CRON);
+    assert.match(sumber, /sapuPesananKedaluwarsa\(\)/);
+    // Tidak ada akses Prisma, tidak ada enum status, tidak ada perhitungan
+    // tenggat. Semuanya milik `src/lib/transisi-status.ts`.
+    assert.doesNotMatch(sumber, /prisma|BookingStatus|PaymentStatus|updateMany|expiresAt/);
+  });
+
+  it('memakai force-dynamic supaya tidak dijawab dari cache', () => {
+    const sumber = kodeSajaCron(JALUR_ROUTE_CRON);
+    assert.match(sumber, /export const dynamic = 'force-dynamic'/);
+  });
+
+  it('vercel.json menjadwalkan jalur route yang benar-benar ada', () => {
+    const konfigurasi = JSON.parse(fs.readFileSync(JALUR_VERCEL, 'utf8'));
+    assert.ok(Array.isArray(konfigurasi.crons) && konfigurasi.crons.length > 0);
+
+    for (const jadwal of konfigurasi.crons) {
+      assert.equal(typeof jadwal.schedule, 'string');
+      assert.match(jadwal.path, /^\//);
+      // Jalur cron harus menunjuk route handler yang ada di disk. Jadwal yang
+      // menunjuk 404 berjalan tiap jam tanpa menyapu apa pun, dan tidak ada
+      // satu pun yang gagal dengan cara yang terlihat.
+      const jalurBerkas = path.join(
+        __dirname,
+        '..',
+        'src',
+        'app',
+        ...jadwal.path.replace(/^\//, '').split('/'),
+        'route.ts'
+      );
+      assert.ok(fs.existsSync(jalurBerkas), `route untuk jadwal ${jadwal.path} tidak ada`);
+    }
+  });
+
+  it('.env.example menyebut CRON_SECRET dan batas AI global tanpa nilai', () => {
+    const contoh = fs.readFileSync(path.join(__dirname, '..', '.env.example'), 'utf8');
+    assert.match(contoh, /^CRON_SECRET=""$/m);
+    // Dibaca `chat-server/index.js` tapi sebelumnya tidak terdaftar di mana
+    // pun: pemasang tidak punya cara mengetahui pagar tagihan ini ada.
+    assert.match(contoh, /^CHAT_AI_BATAS_GLOBAL_PER_MENIT=""$/m);
+  });
+});
+
+/** Kode tanpa komentar: komentar berkas ini menyebut konstruk yang diuji. */
+function kodeSajaCron(jalur) {
+  return fs
+    .readFileSync(jalur, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .split('\n')
+    .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+    .join('\n');
+}
