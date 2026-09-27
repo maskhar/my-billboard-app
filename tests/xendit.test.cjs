@@ -104,6 +104,13 @@ const jalurBillboardRoute = (nama) =>
 const JALUR_ROUTE_ROLLBACK = jalurBillboardRoute('rollback');
 const JALUR_ROUTE_BILLBOARD_CREATE = jalurBillboardRoute('create');
 const JALUR_ROUTE_BILLBOARD_UPDATE = jalurBillboardRoute('update');
+const JALUR_TIPE_CHAT = path.join(__dirname, '..', 'src', 'lib', 'tipe-chat.ts');
+const JALUR_AKSI_CHAT = path.join(
+  __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'live-chat', 'actions.ts'
+);
+const JALUR_INBOX_CS = path.join(
+  __dirname, '..', 'src', 'app', 'admin', '_components', 'cs', 'CS_InboxLayout.tsx'
+);
 const JALUR_ROUTE_CANCEL = path.join(
   __dirname, '..', 'src', 'app', 'api', 'booking', 'cancel', 'route.ts'
 );
@@ -10021,7 +10028,12 @@ describe('batas galat: kegagalan database tidak lagi tampil sebagai "tidak ada"'
     const isi = kodeSaja(
       path.join(__dirname, '..', 'src', 'app', 'admin', '_components', 'cs', 'CS_InboxLayout.tsx')
     );
-    const pilih = isi.match(/const handleSelectSession = async \(session: any\) => \{[\s\S]*?\n  \};/);
+    // Tipe parameternya TIDAK dipatok di pola ini. Dulu tertulis
+    // `(session: any)`, dan mengunci `any` di regex membuat test ini menuntut
+    // cacat yang justru sedang dibereskan: menghapus `any` membuat assertion
+    // "catch dan finally masih ada" gagal karena blok yang dicarinya tak lagi
+    // cocok — bukan karena penanganan galatnya hilang.
+    const pilih = isi.match(/const handleSelectSession = async \(session: \w+\) => \{[\s\S]*?\n  \};/);
     assert.ok(pilih, 'handleSelectSession tidak ditemukan');
     assert.match(pilih[0], /catch\s*\(/);
     assert.match(pilih[0], /finally\s*\{[\s\S]*?setIsLoadingMessages\(false\)/);
@@ -11300,5 +11312,256 @@ describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
     // `import type`, supaya baris itu hilang saat kompilasi dan tidak menarik
     // runtime Prisma ke bundle.
     assert.match(kode, /import type \{ Prisma \}/);
+  });
+});
+
+// =====================================================================
+// KOTAK MASUK CS: KUERI YANG DIBATASI, DAN DATA TAMU YANG DIPILIH
+// =====================================================================
+//
+// Dua kueri di `live-chat/actions.ts` dulu tanpa batas dan tanpa `select`.
+// Keduanya menyeberang ke `CS_InboxLayout` (`'use client'`), artinya hasilnya
+// tertanam di HTML halaman — jadi "tanpa batas" dan "tanpa select" pada tabel
+// yang menyimpan nama, email, dan nomor telepon tamu bukan soal kecepatan saja.
+
+// `kodeSaja` milik suite lain tidak terlihat dari sini. Komentar di ketiga
+// berkas menyebut konstruksi yang dibuang secara verbatim (`include`, `any`,
+// `setSessions`), jadi tanpa penghapus komentar setiap assertion "tidak lagi
+// memuat X" akan gagal atas komentarnya sendiri.
+//
+// Blok `/* */` TIDAK dibuang: pola dan literal di berkas-berkas ini bisa
+// membuat penghapus blok melenyapkan kode di antaranya.
+function kodeSajaChat(jalur) {
+  return fs
+    .readFileSync(jalur, 'utf8')
+    .split('\n')
+    .filter((baris) => !/^\s*(\/\/|\*|\/\*)/.test(baris))
+    .join('\n');
+}
+
+describe('kotak masuk CS membatasi kueri dan memilih kolomnya', () => {
+  // Prisma palsu yang MEREKAM argumennya. Yang diuji di sini adalah bentuk
+  // kueri — `take`, `select`, `orderBy` — jadi argumen itulah datanya, bukan
+  // hasilnya.
+  function prismaPalsu(hasilSesi, hasilSatu) {
+    const dicatat = [];
+    return {
+      dicatat,
+      prisma: {
+        chatSession: {
+          findMany: async (args) => {
+            dicatat.push({ jenis: 'findMany', args });
+            return hasilSesi;
+          },
+          findUnique: async (args) => {
+            dicatat.push({ jenis: 'findUnique', args });
+            return hasilSatu;
+          },
+        },
+      },
+    };
+  }
+
+  function pesan(i, menit = 0) {
+    return {
+      id: `m${i}`,
+      sessionId: 's1',
+      sender: i % 2 === 0 ? 'USER' : 'ADMIN',
+      message: `pesan ${i}`,
+      createdAt: new Date(Date.UTC(2026, 8, 27, 10, menit)),
+    };
+  }
+
+  function sesi(ganti = {}) {
+    return {
+      id: 's1',
+      guestName: 'Budi',
+      guestEmail: 'budi@example.com',
+      guestPhone: '0811',
+      status: 'OPEN',
+      createdAt: new Date(Date.UTC(2026, 8, 27, 9, 0)),
+      messages: [pesan(1)],
+      ...ganti,
+    };
+  }
+
+  function muat(hasilSesi, hasilSatu, peran = 'CS') {
+    const { dicatat, prisma } = prismaPalsu(hasilSesi, hasilSatu);
+    const modul = muatDenganModulPalsu(JALUR_AKSI_CHAT, {
+      'next-auth': { getServerSession: async () => ({ user: { id: 'u1', role: peran } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+    });
+    return { modul, dicatat };
+  }
+
+  it('daftar sesi dibatasi 50 baris terbaru', async () => {
+    const { modul, dicatat } = muat([sesi()], null);
+    await modul.getChatSessions();
+
+    const q = dicatat.find((d) => d.jenis === 'findMany');
+    assert.ok(q, 'findMany tidak dipanggil');
+    assert.strictEqual(q.args.take, 50, 'daftar sesi masih tanpa batas');
+    assert.deepStrictEqual(q.args.orderBy, { updatedAt: 'desc' });
+  });
+
+  it('daftar sesi memilih kolom, tidak memakai include', async () => {
+    const { modul, dicatat } = muat([sesi()], null);
+    await modul.getChatSessions();
+
+    const q = dicatat.find((d) => d.jenis === 'findMany').args;
+    assert.ok(q.select, 'kolomnya tidak dipilih — seluruh baris menyeberang');
+    assert.strictEqual(q.include, undefined, '`include` mengambil semua kolom');
+    // Yang dipilih tepat kolom yang dipakai layar. `isOnline` dan `updatedAt`
+    // sengaja TIDAK ada: keduanya tidak dibaca di mana pun di kotak masuk.
+    assert.deepStrictEqual(
+      Object.keys(q.select).sort(),
+      ['createdAt', 'guestEmail', 'guestName', 'guestPhone', 'id', 'messages', 'status']
+    );
+    assert.strictEqual(q.select.messages.take, 1, 'pratinjau harus satu pesan');
+    assert.ok(q.select.messages.select, 'kolom pesan pratinjau juga harus dipilih');
+  });
+
+  it('tanggal menyeberang sebagai teks ISO, bukan objek Date', async () => {
+    const { modul } = muat([sesi()], null);
+    const hasil = await modul.getChatSessions();
+
+    assert.strictEqual(typeof hasil[0].createdAt, 'string');
+    assert.strictEqual(hasil[0].createdAt, '2026-09-27T09:00:00.000Z');
+    assert.strictEqual(typeof hasil[0].messages[0].createdAt, 'string');
+  });
+
+  it('satu percakapan mengambil 200 pesan TERAKHIR, bukan yang pertama', async () => {
+    const { modul, dicatat } = muat([], sesi());
+    await modul.getMessagesForSession('s1');
+
+    const q = dicatat.find((d) => d.jenis === 'findUnique').args;
+    // `desc` + balik, bukan `asc` + take: `asc` memberi pembukaan percakapan —
+    // bagian yang paling tidak dibutuhkan CS saat hendak menjawab.
+    assert.deepStrictEqual(q.select.messages.orderBy, { createdAt: 'desc' });
+    // `+ 1` adalah cara mengetahui masih ada riwayat lebih lama tanpa `count`
+    // kedua.
+    assert.strictEqual(q.select.messages.take, 201);
+    assert.strictEqual(q.include, undefined);
+  });
+
+  it('riwayat dipulihkan ke urutan lama-ke-baru', async () => {
+    const urut = [pesan(3, 30), pesan(2, 20), pesan(1, 10)]; // seperti `desc`
+    const { modul } = muat([], sesi({ messages: urut }));
+    const hasil = await modul.getMessagesForSession('s1');
+
+    assert.deepStrictEqual(hasil.messages.map((m) => m.id), ['m1', 'm2', 'm3']);
+    assert.strictEqual(hasil.adaRiwayatLebihLama, false);
+  });
+
+  it('riwayat yang lebih panjang dari batas dipotong DAN ditandai', async () => {
+    // 201 baris: tepat apa yang dikembalikan `take: 201` saat masih ada yang
+    // lebih lama.
+    const banyak = Array.from({ length: 201 }, (_, i) => pesan(201 - i, 201 - i));
+    const { modul } = muat([], sesi({ messages: banyak }));
+    const hasil = await modul.getMessagesForSession('s1');
+
+    assert.strictEqual(hasil.messages.length, 200, 'baris kelebihan tidak dibuang');
+    assert.strictEqual(
+      hasil.adaRiwayatLebihLama,
+      true,
+      'pemotongan tidak ditandai — CS akan membaca pesan ke-200 sebagai awal percakapan'
+    );
+    // Yang dibuang harus yang PALING LAMA. `pesan(1)` adalah yang tertua.
+    assert.strictEqual(hasil.messages[0].id, 'm2');
+    assert.strictEqual(hasil.messages[199].id, 'm201');
+  });
+
+  it('riwayat tepat sebanyak batas tidak ditandai terpotong', async () => {
+    const pas = Array.from({ length: 200 }, (_, i) => pesan(200 - i, 200 - i));
+    const { modul } = muat([], sesi({ messages: pas }));
+    const hasil = await modul.getMessagesForSession('s1');
+
+    assert.strictEqual(hasil.messages.length, 200);
+    assert.strictEqual(hasil.adaRiwayatLebihLama, false);
+  });
+
+  it('sesi yang tidak ada tetap mengembalikan null, bukan objek kosong', async () => {
+    const { modul } = muat([], null);
+    assert.strictEqual(await modul.getMessagesForSession('tidak-ada'), null);
+    assert.strictEqual(await modul.getMessagesForSession(''), null);
+  });
+
+  it('peran di luar daftar chat ditolak sebelum kueri apa pun', async () => {
+    const { modul, dicatat } = muat([sesi()], sesi(), 'USER');
+    await assert.rejects(() => modul.getChatSessions(), /Unauthorized/);
+    await assert.rejects(() => modul.getMessagesForSession('s1'), /Unauthorized/);
+    assert.strictEqual(dicatat.length, 0, 'kueri berjalan walau akses ditolak');
+  });
+});
+
+describe('kotak masuk CS tidak lagi mengetik propnya `any`', () => {
+  it('tipe percakapan bersama ada dan tidak memuat kolom yang tidak dipakai', () => {
+    const kode = kodeSajaChat(JALUR_TIPE_CHAT);
+    for (const nama of ['PesanChat', 'SesiChat', 'SesiChatLengkap']) {
+      assert.match(kode, new RegExp(`export type ${nama}`), `${nama} tidak diekspor`);
+    }
+    assert.match(kode, /adaRiwayatLebihLama: boolean/);
+    // `createdAt` bertipe teks di batas: pesan dari socket membawa ISO string,
+    // pesan dari database membawa `Date`. Keduanya masuk ke satu array.
+    assert.match(kode, /createdAt: string/);
+    assert.doesNotMatch(kode, /createdAt: Date/);
+  });
+
+  it('komponen kotak masuk tidak lagi memuat `any`', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    assert.doesNotMatch(kode, /: any\b/, 'masih ada anotasi `any`');
+    assert.doesNotMatch(kode, /<any>/);
+    assert.match(kode, /import type \{ PesanChat, SesiChat \}/);
+  });
+
+  it('daftar sesi dipakai dari prop, bukan disalin ke state yang membeku', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    // `useState(initialSessions)` tanpa satu pun pemanggil `setSessions`
+    // membuat daftar sesi BEKU pada render pertama: percakapan baru tidak
+    // muncul walaupun server mengirim prop yang baru.
+    assert.doesNotMatch(kode, /setSessions/);
+    assert.doesNotMatch(kode, /initialSessions/);
+    assert.match(kode, /export default function CS_InboxLayout\(\{ sessions \}/);
+  });
+
+  it('pesan dari socket diperiksa bentuknya sebelum dirender', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    // `renderMessageText` memanggil `text.split`. `message` yang bukan teks
+    // melempar di sana dan mematikan seluruh kotak masuk — dan payload socket
+    // berada di luar pemeriksaan tipe apa pun.
+    assert.match(kode, /typeof m\.message !== 'string'/);
+    assert.match(kode, /typeof m\.id !== 'string'/);
+    assert.doesNotMatch(kode, /setMessages\(\(prevMessages\) => \[\.\.\.prevMessages, newMessage\]\)/);
+  });
+
+  it('kegagalan memuat riwayat tampil di halaman, bukan lewat alert()', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    assert.doesNotMatch(kode, /\balert\(/, 'masih memakai dialog native');
+    assert.doesNotMatch(kode, /catch \(e: any\)/);
+    assert.match(kode, /e instanceof Error \? e\.message/);
+  });
+
+  it('judul galat tidak lagi selalu "Chat tidak tersambung"', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    // Banner yang sama sekarang juga memuat kegagalan memuat satu percakapan.
+    // Di kasus itu chatnya TERSAMBUNG, jadi judul tetap itu berbohong.
+    assert.doesNotMatch(kode, /<strong className="font-bold">Chat tidak tersambung\.<\/strong>/);
+    assert.match(kode, /role="alert"/);
+  });
+
+  it('server action mengumumkan tipe kembaliannya', () => {
+    const kode = kodeSajaChat(JALUR_AKSI_CHAT);
+    assert.match(kode, /getChatSessions\(\): Promise<SesiChat\[\]>/);
+    assert.match(kode, /Promise<SesiChatLengkap \| null>/);
+    assert.match(kode, /import type \{ PesanChat, SesiChat, SesiChatLengkap \}/);
+  });
+
+  it('array asli tidak dibalik di tempat', () => {
+    const kode = kodeSajaChat(JALUR_AKSI_CHAT);
+    // `reverse()` mengubah array aslinya, dan array itu masih dibaca
+    // `adaRiwayatLebihLama` di atasnya.
+    assert.match(kode, /\.slice\(\)\.reverse\(\)/);
+    assert.doesNotMatch(kode, /messages\.reverse\(\)/);
   });
 });

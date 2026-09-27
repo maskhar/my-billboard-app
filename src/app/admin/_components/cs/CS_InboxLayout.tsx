@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Search, Loader2, MessageSquare, Send, ArrowRight } from 'lucide-react';
 import { getMessagesForSession } from '@/app/admin/(dashboard)/live-chat/actions';
 import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
+import type { PesanChat, SesiChat } from '@/lib/tipe-chat';
 
 // Label status percakapan. `ChatSessionStatus` punya tiga nilai dan ketiganya
 // benar-benar ditulis: OPEN (tamu menunggu), AGENT (sudah dipegang admin),
@@ -31,16 +32,24 @@ const BadgeStatus = ({ status }: { status?: string }) => {
 // kotak yang menerima ketikan lalu membuangnya. Operator yang punya 40
 // percakapan mengetik nama pelanggan, daftarnya tidak bergerak, dan ia
 // menyimpulkan pelanggan itu tidak ada di sistem. Kini benar-benar menyaring.
-const ChatList = ({ sessions, onSelectSession, selectedSessionId }: any) => {
+const ChatList = ({
+    sessions,
+    onSelectSession,
+    selectedSessionId,
+}: {
+    sessions: SesiChat[];
+    onSelectSession: (sesi: SesiChat) => void;
+    selectedSessionId?: string;
+}) => {
     const [cari, setCari] = useState('');
 
     const kunci = cari.trim().toLowerCase();
     const terlihat = !kunci
-        ? sessions || []
-        : (sessions || []).filter((s: any) =>
+        ? sessions
+        : sessions.filter((s) =>
               [s.guestName, s.guestEmail, s.guestPhone]
                   .filter(Boolean)
-                  .some((nilai: string) => nilai.toLowerCase().includes(kunci))
+                  .some((nilai) => nilai.toLowerCase().includes(kunci))
           );
 
     return (
@@ -61,7 +70,7 @@ const ChatList = ({ sessions, onSelectSession, selectedSessionId }: any) => {
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
             {terlihat.length > 0 ? (
-                terlihat.map((session: any) => (
+                terlihat.map((session) => (
                     <button
                         type="button"
                         key={session.id}
@@ -112,7 +121,19 @@ const renderMessageText = (text: string) => {
     });
 };
 
-const ChatRoom = ({ session, messages, isLoading, onSendMessage }: { session: any, messages: any[], isLoading: boolean, onSendMessage: (msg: string) => void }) => {
+const ChatRoom = ({
+    session,
+    messages,
+    isLoading,
+    adaRiwayatLebihLama,
+    onSendMessage,
+}: {
+    session: SesiChat | null;
+    messages: PesanChat[];
+    isLoading: boolean;
+    adaRiwayatLebihLama: boolean;
+    onSendMessage: (msg: string) => void;
+}) => {
     const [newMessage, setNewMessage] = useState("");
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -169,13 +190,27 @@ const ChatRoom = ({ session, messages, isLoading, onSendMessage }: { session: an
                         <Loader2 className="animate-spin text-gray-400" />
                     </div>
                 ) : (
-                    messages.map((msg: any) => (
+                    <>
+                    {/* Riwayat yang dipotong DINYATAKAN, bukan didiamkan.
+                        Kotak masuk hanya memuat 200 pesan terakhir; percakapan
+                        yang lebih panjang dari itu tampil seakan dimulai di
+                        tengah, dan CS yang membacanya dari atas menyimpulkan
+                        itu awal pembicaraan — lalu menjawab tanpa tahu apa yang
+                        sudah dijanjikan sebelumnya. */}
+                    {adaRiwayatLebihLama && (
+                        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800">
+                            Hanya 200 pesan terakhir yang ditampilkan. Percakapan ini punya
+                            riwayat yang lebih lama.
+                        </p>
+                    )}
+                    {messages.map((msg) => (
                         <div key={msg.id} className={`mb-4 flex ${msg.sender === 'USER' ? 'justify-end' : 'justify-start'}`}>
                             <div className={`p-3 rounded-lg max-w-xs ${msg.sender === 'USER' ? 'bg-blue-500 text-white' : 'bg-white border'}`}>
                                 <p className="text-sm">{renderMessageText(msg.message)}</p>
                             </div>
                         </div>
-                    ))
+                    ))}
+                    </>
                 )}
                 <div ref={messagesEndRef} />
             </div>
@@ -213,7 +248,7 @@ const ChatRoom = ({ session, messages, isLoading, onSendMessage }: { session: an
 );
 };
 
-const VisitorDetails = ({ session }: { session: any }) => {
+const VisitorDetails = ({ session }: { session: SesiChat | null }) => {
     if (!session) return <div className="h-full border-l border-gray-200 bg-white p-4"></div>; // Return empty state
 
     return (
@@ -270,13 +305,18 @@ const VisitorDetails = ({ session }: { session: any }) => {
 
 
 
-export default function CS_InboxLayout({ sessions: initialSessions }: { sessions: any[] }) {
-  const [sessions, setSessions] = useState(initialSessions);
-  const [selectedSession, setSelectedSession] = useState<any>(null);
-  const [messages, setMessages] = useState<any[]>([]);
+export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
+  // `useState(initialSessions)` DIHAPUS. Salinannya tidak pernah diperbarui —
+  // `setSessions` nol pemanggil — sehingga daftar sesi justru MEMBEKU pada
+  // keadaan saat halaman pertama dirender: percakapan baru yang masuk tidak
+  // muncul walaupun `router.refresh()` atau navigasi memberi prop yang baru.
+  // Prop dari server dipakai langsung.
+  const [selectedSession, setSelectedSession] = useState<SesiChat | null>(null);
+  const [messages, setMessages] = useState<PesanChat[]>([]);
+  const [adaRiwayatLebihLama, setAdaRiwayatLebihLama] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [galatChat, setGalatChat] = useState('');
-  const socketRef = useRef<any>(null);
+  const socketRef = useRef<ReturnType<typeof io> | null>(null);
 
   // Efek untuk koneksi Socket.IO
   useEffect(() => {
@@ -290,7 +330,10 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     // diberi tahu — bukan dibiarkan menatap inbox yang tidak pernah hidup.
     const chatUrl = alamatChat();
     if (!chatUrl) {
-      setGalatChat(PESAN_CHAT_BELUM_DIKONFIGURASI);
+      setGalatChat(
+        `Chat tidak tersambung. ${PESAN_CHAT_BELUM_DIKONFIGURASI} ` +
+          'Pesan baru tidak akan masuk sampai ini dibereskan.'
+      );
       return;
     }
     setGalatChat('');
@@ -306,10 +349,27 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
       console.warn('Chat server menolak permintaan:', err?.event, err?.message);
     });
 
-    socket.on('newMessage', (newMessage) => {
-      if (newMessage.sessionId === selectedSession?.id) {
-        setMessages((prevMessages) => [...prevMessages, newMessage]);
-      }
+    // Bentuknya diperiksa sebelum dipakai, bukan dipercaya. Payload ini datang
+    // dari socket — jalur di luar pemeriksaan tipe apa pun — dan langsung
+    // dirender sebagai isi percakapan. `message` yang bukan teks akan melempar
+    // di `renderMessageText` (`text.split`) dan mematikan seluruh kotak masuk.
+    socket.on('newMessage', (masuk: unknown) => {
+      if (masuk === null || typeof masuk !== 'object') return;
+      const m = masuk as Partial<PesanChat>;
+      if (typeof m.id !== 'string' || typeof m.message !== 'string') return;
+      if (m.sessionId !== selectedSession?.id) return;
+
+      setMessages((sebelumnya) => [
+        ...sebelumnya,
+        {
+          id: m.id as string,
+          sessionId: m.sessionId as string,
+          sender: typeof m.sender === 'string' ? m.sender : 'USER',
+          message: m.message as string,
+          createdAt:
+            typeof m.createdAt === 'string' ? m.createdAt : new Date().toISOString(),
+        },
+      ]);
     });
 
     return () => {
@@ -317,7 +377,7 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     };
   }, [selectedSession]);
 
-  const handleSelectSession = async (session: any) => {
+  const handleSelectSession = async (session: SesiChat) => {
     // `socketRef.current` bisa `null`: efek koneksi keluar lebih awal saat
     // alamat chat tidak ada. Tanpa `?.` baris ini melempar TypeError dan
     // seluruh panel berhenti merender — galat konfigurasi berubah menjadi
@@ -336,12 +396,19 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     try {
       const fullSession = await getMessagesForSession(session.id);
       setMessages(fullSession?.messages || []);
+      setAdaRiwayatLebihLama(fullSession?.adaRiwayatLebihLama === true);
       socketRef.current?.emit('joinRoom', session.id);
-    } catch (e: any) {
+    } catch (e) {
       setMessages([]);
-      alert(
-        `Riwayat percakapan gagal dimuat: ${e?.message || 'galat tidak diketahui'}. ` +
-          'Jangan menjawab sebelum riwayatnya tampil — pilih ulang percakapan ini.'
+      setAdaRiwayatLebihLama(false);
+      // `e: any` lalu `e?.message` adalah cacat, bukan kelonggaran tipe:
+      // `throw` boleh melempar apa saja, dan Server Action yang gagal karena
+      // jaringan menolak dengan nilai yang belum tentu punya `message`.
+      // Membacanya lewat `any` berarti penangkap ini sendiri bisa melempar.
+      setGalatChat(
+        `Riwayat percakapan gagal dimuat: ${
+          e instanceof Error ? e.message : 'galat tidak diketahui'
+        }. Jangan menjawab sebelum riwayatnya tampil — pilih ulang percakapan ini.`
       );
     } finally {
       setIsLoadingMessages(false);
@@ -355,7 +422,9 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
     // keluar dari browser. Kegagalannya dinyatakan, bukan disembunyikan.
     if (!socketRef.current) {
       setGalatChat(
-        'Balasan tidak terkirim: chat tidak tersambung. ' + PESAN_CHAT_BELUM_DIKONFIGURASI
+        'Balasan tidak terkirim: chat tidak tersambung. ' +
+          PESAN_CHAT_BELUM_DIKONFIGURASI +
+          ' Pesan baru tidak akan masuk sampai ini dibereskan.'
       );
       return;
     }
@@ -390,10 +459,15 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
 
   return (
     <div className="grid grid-cols-12 h-screen w-full overflow-hidden">
+        {/* Judul "Chat tidak tersambung." yang DITULIS TETAP di sini dibuang:
+            banner yang sama sekarang juga memuat kegagalan memuat riwayat, dan
+            di kasus itu kalimatnya salah — chatnya tersambung, yang gagal
+            adalah satu percakapan. Pesannya sendiri sudah menyatakan apa yang
+            terjadi, jadi judulnya tidak menambah apa pun kecuali risiko
+            berbohong. */}
         {galatChat && (
             <div role="alert" className="col-span-12 bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800">
-                <strong className="font-bold">Chat tidak tersambung.</strong> {galatChat}{' '}
-                Pesan baru tidak akan masuk sampai ini dibereskan.
+                {galatChat}
             </div>
         )}
         <div className="col-span-12 md:col-span-3 h-screen overflow-y-auto">
@@ -406,8 +480,9 @@ export default function CS_InboxLayout({ sessions: initialSessions }: { sessions
         <div className="col-span-12 md:col-span-6 h-screen overflow-y-auto">
             <ChatRoom 
                 session={selectedSession} 
-                messages={messages} 
-                isLoading={isLoadingMessages} 
+                messages={messages}
+                isLoading={isLoadingMessages}
+                adaRiwayatLebihLama={adaRiwayatLebihLama}
                 onSendMessage={handleSendMessage}
             />
         </div>
