@@ -3,37 +3,91 @@
 import { io } from "socket.io-client";
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Search, SlidersHorizontal, Loader2, MessageSquare, Send, ArrowRight } from 'lucide-react';
+import { Search, Loader2, MessageSquare, Send, ArrowRight } from 'lucide-react';
 import { getMessagesForSession } from '@/app/admin/(dashboard)/live-chat/actions';
 
+// Label status percakapan. `ChatSessionStatus` punya tiga nilai dan ketiganya
+// benar-benar ditulis: OPEN (tamu menunggu), AGENT (sudah dipegang admin),
+// CLOSED (ditutup lewat /api/admin/chat/close).
+const LABEL_STATUS: Record<string, { teks: string; kelas: string }> = {
+    OPEN: { teks: 'Menunggu dijawab', kelas: 'bg-amber-100 text-amber-800' },
+    AGENT: { teks: 'Sedang ditangani', kelas: 'bg-blue-100 text-blue-800' },
+    CLOSED: { teks: 'Ditutup', kelas: 'bg-gray-100 text-gray-600' },
+};
+
+const BadgeStatus = ({ status }: { status?: string }) => {
+    const label = LABEL_STATUS[status || ''] || { teks: status || 'Tidak diketahui', kelas: 'bg-gray-100 text-gray-600' };
+    return (
+        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${label.kelas}`}>
+            {label.teks}
+        </span>
+    );
+};
+
 // [DIPERBARUI] ChatList sekarang menerima data sesi
-const ChatList = ({ sessions, onSelectSession, selectedSessionId }: any) => (
+//
+// Kotak pencarian di sini dulu tidak punya `value` maupun `onChange`: sebuah
+// kotak yang menerima ketikan lalu membuangnya. Operator yang punya 40
+// percakapan mengetik nama pelanggan, daftarnya tidak bergerak, dan ia
+// menyimpulkan pelanggan itu tidak ada di sistem. Kini benar-benar menyaring.
+const ChatList = ({ sessions, onSelectSession, selectedSessionId }: any) => {
+    const [cari, setCari] = useState('');
+
+    const kunci = cari.trim().toLowerCase();
+    const terlihat = !kunci
+        ? sessions || []
+        : (sessions || []).filter((s: any) =>
+              [s.guestName, s.guestEmail, s.guestPhone]
+                  .filter(Boolean)
+                  .some((nilai: string) => nilai.toLowerCase().includes(kunci))
+          );
+
+    return (
     <div className="h-full border-r border-gray-200 flex flex-col bg-white">
         <div className="p-4 border-b border-gray-200 sticky top-0 bg-white z-10">
             <h2 className="font-bold text-lg text-gray-800">Inbox</h2>
             <div className="relative mt-2">
-                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input type="text" placeholder="Cari percakapan..." className="w-full pl-9 p-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500" />
+                <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" aria-hidden="true" />
+                <input
+                    type="search"
+                    value={cari}
+                    onChange={(e) => setCari(e.target.value)}
+                    aria-label="Cari percakapan berdasarkan nama, email, atau nomor telepon"
+                    placeholder="Cari nama, email, telepon..."
+                    className="w-full pl-9 p-2 text-sm border border-gray-300 rounded-lg focus:ring-1 focus:ring-blue-500 focus:border-blue-500"
+                />
             </div>
         </div>
         <div className="flex-1 overflow-y-auto p-2 space-y-1">
-            {sessions && sessions.length > 0 ? (
-                sessions.map((session: any) => (
-                    <div 
+            {terlihat.length > 0 ? (
+                terlihat.map((session: any) => (
+                    <button
+                        type="button"
                         key={session.id}
                         onClick={() => onSelectSession(session)}
-                        className={`p-3 rounded-lg cursor-pointer transition-colors ${selectedSessionId === session.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}`}
+                        aria-current={selectedSessionId === session.id ? 'true' : undefined}
+                        className={`block w-full text-left p-3 rounded-lg transition-colors ${selectedSessionId === session.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}`}
                     >
-                        <p className="font-bold text-sm text-gray-900">{session.guestName}</p>
-                        <p className="text-xs text-gray-600 truncate mt-1">{session.messages?.[0]?.message || 'Tidak ada pesan'}</p>
-                    </div>
+                        {/* `<span>`, bukan `<p>`: paragraf tidak sah di dalam
+                            tombol, dan peramban akan memindahkannya keluar. */}
+                        <span className="flex items-start justify-between gap-2">
+                            <span className="font-bold text-sm text-gray-900 truncate">{session.guestName}</span>
+                            <BadgeStatus status={session.status} />
+                        </span>
+                        <span className="block text-xs text-gray-600 truncate mt-1">{session.messages?.[0]?.message || 'Tidak ada pesan'}</span>
+                    </button>
                 ))
             ) : (
-                <div className="text-center text-sm text-gray-400 p-8">Tidak ada sesi chat.</div>
+                <div className="text-center text-sm text-gray-400 p-8">
+                    {kunci
+                        ? `Tidak ada percakapan yang cocok dengan "${cari.trim()}".`
+                        : 'Tidak ada sesi chat.'}
+                </div>
             )}
         </div>
     </div>
-);
+    );
+};
 
 // [BARU] Fungsi helper untuk merender link
 const renderMessageText = (text: string) => {
@@ -92,11 +146,21 @@ const ChatRoom = ({ session, messages, isLoading, onSendMessage }: { session: an
             <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center sticky top-0 z-10">
                 <div>
                     <h3 className="font-bold text-gray-800">{session.guestName}</h3>
-                    <span className="text-xs text-green-600 font-semibold flex items-center gap-1.5"><div className="w-1.5 h-1.5 bg-green-500 rounded-full"></div>Online</span>
+                    {/* Badge hijau "Online" di sini DITULIS TETAP di kode: setiap
+                        percakapan, selamanya, tanpa membaca apa pun. Kolom
+                        `ChatSession.isOnline` memang ada, tapi hanya ditulis di
+                        dua tempat (dibuat `true`, lalu `false` saat ditutup) dan
+                        tidak pernah mengikuti koneksi socket yang sesungguhnya —
+                        jadi nilainya juga bukan kehadiran. CS melihat "Online",
+                        menyangka tamunya sedang menatap layar, dan menulis
+                        jawaban panjang untuk orang yang sudah pergi sejak pagi.
+                        Diganti status percakapan yang benar-benar dicatat. */}
+                    <BadgeStatus status={session.status} />
                 </div>
-                <button className="p-2 rounded-lg hover:bg-gray-100 text-gray-500">
-                    <SlidersHorizontal size={18} />
-                </button>
+                {/* Tombol ikon `SlidersHorizontal` DIBUANG: tidak punya
+                    `onClick`, tidak punya nama yang terbaca, dan tidak ada satu
+                    pun panel pengaturan percakapan di aplikasi ini untuk
+                    dibukanya. */}
             </div>
             <div className="flex-1 p-6 overflow-y-auto">
                 {isLoading ? (
@@ -129,8 +193,18 @@ const ChatRoom = ({ session, messages, isLoading, onSendMessage }: { session: an
                             }
                         }}
                     />
-                    <button type="submit" className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition disabled:bg-gray-300">
-                        <Send size={16} />
+                    {/* `disabled:bg-gray-300` sudah ditulis di kelasnya, tapi
+                        `disabled` sendiri tidak pernah dipasang: gaya untuk
+                        keadaan yang tidak pernah terjadi. Tombolnya kini benar
+                        mati saat tidak ada yang bisa dikirim, dan `aria-label`
+                        memberinya nama — ikon panah saja tidak terbaca. */}
+                    <button
+                        type="submit"
+                        disabled={!newMessage.trim()}
+                        aria-label="Kirim balasan"
+                        className="absolute right-3 top-1/2 -translate-y-1/2 p-2 rounded-full bg-blue-500 text-white hover:bg-blue-600 transition disabled:bg-gray-300 disabled:hover:bg-gray-300 disabled:cursor-not-allowed"
+                    >
+                        <Send size={16} aria-hidden="true" />
                     </button>
                 </form>
             </div>
@@ -152,12 +226,42 @@ const VisitorDetails = ({ session }: { session: any }) => {
             </div>
             <div className="p-4 overflow-y-auto">
                  <h4 className="font-semibold text-xs text-gray-500 uppercase mb-2">Detail Pengunjung</h4>
-                 <div className="text-sm space-y-2 text-gray-700">
-                    <p><span className="font-semibold w-20 inline-block">Lokasi:</span> Indonesia</p>
-                    <p><span className="font-semibold w-20 inline-block">IP Address:</span> 127.0.0.1</p>
-                    <p><span className="font-semibold w-20 inline-block">Browser:</span> Chrome</p>
-                    <p><span className="font-semibold w-20 inline-block">OS:</span> Windows</p>
-                 </div>
+                 {/* Empat baris di sini dulu DITULIS TETAP di kode: "Lokasi:
+                     Indonesia", "IP Address: 127.0.0.1", "Browser: Chrome",
+                     "OS: Windows". Tidak satu pun dibaca dari mana pun; 127.0.0.1
+                     adalah alamat mesin itu sendiri, bukan alamat siapa pun.
+                     Ini bukan sekadar kosmetik: telemetri palsu yang tampak
+                     meyakinkan dipakai CS untuk mengambil keputusan — memutuskan
+                     sebuah percakapan mencurigakan atau tidak, atau menjawab
+                     "sepertinya Anda dari Jakarta". Data pengunjung yang benar
+                     (IP, user agent, geolokasi) sama sekali tidak dikumpulkan
+                     oleh chat-server dan tidak ada kolomnya di `ChatSession`;
+                     mengumpulkannya adalah fitur, dan fitur yang menyangkut data
+                     pribadi harus diputuskan dengan sadar, bukan dipura-purakan.
+                     Diganti data kontak yang MEMANG tersimpan dan memang
+                     diberikan tamu sendiri saat memulai percakapan. */}
+                 <dl className="text-sm space-y-2 text-gray-700">
+                    <div className="flex gap-2">
+                        <dt className="font-semibold w-24 shrink-0">Telepon</dt>
+                        <dd className="break-all">{session.guestPhone || <span className="text-gray-400">Tidak diisi</span>}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                        <dt className="font-semibold w-24 shrink-0">Email</dt>
+                        <dd className="break-all">{session.guestEmail || <span className="text-gray-400">Tidak diisi</span>}</dd>
+                    </div>
+                    <div className="flex gap-2">
+                        <dt className="font-semibold w-24 shrink-0">Status</dt>
+                        <dd><BadgeStatus status={session.status} /></dd>
+                    </div>
+                    <div className="flex gap-2">
+                        <dt className="font-semibold w-24 shrink-0">Mulai</dt>
+                        <dd>
+                            {session.createdAt
+                                ? new Date(session.createdAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
+                                : <span className="text-gray-400">Tidak diketahui</span>}
+                        </dd>
+                    </div>
+                 </dl>
             </div>
         </div>
 );

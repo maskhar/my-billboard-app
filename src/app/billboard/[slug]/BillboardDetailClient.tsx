@@ -201,9 +201,15 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
                   {selectedDate ? 'Lanjut ke Pembayaran' : 'Pilih Tanggal Dulu'}
                 </button>
               </Link>
-              <button className="w-full mt-3 bg-white border-2 border-gray-100 text-gray-600 font-bold py-4 rounded-xl hover:border-gray-300 hover:bg-gray-50 transition">
-                Hubungi Sales (WA)
-              </button>
+              {/* Tombol "Hubungi Sales (WA)" DIBUANG.
+                  Ia tidak punya `onClick`, tidak punya `href`, dan tidak ada
+                  satu pun nomor WhatsApp perusahaan di `.env.example` maupun di
+                  `SystemSetting` untuk dituju. Pengunjung yang ragu — persis
+                  orang yang paling butuh bicara dengan manusia sebelum
+                  mengeluarkan uang sebesar ini — mengkliknya, tidak terjadi
+                  apa-apa, dan pergi. Live chat di halaman depan adalah jalur
+                  kontak yang benar-benar tersambung; nomor WA sebagai
+                  pengaturan adalah fitur terpisah. */}
             </div>
           </div>
         </div>

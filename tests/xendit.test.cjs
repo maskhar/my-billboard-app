@@ -10160,3 +10160,188 @@ describe('StatusChanger: menu pengubah status memakai tombol, bukan tautan palsu
     assert.doesNotMatch(mentah, /\/\/\s*if \(type !== 'publishStatus'\)/);
   });
 });
+
+describe('UI mati dan UI yang berbohong dibuang', () => {
+  const SRC = path.join(__dirname, '..', 'src');
+
+  // Komentar dibuang lebih dulu: berkas-berkas ini MENYEBUT apa yang dibuang
+  // (`/list`, `127.0.0.1`, `Hubungi Sales (WA)`, `placeholder="Search..."`)
+  // verbatim di komentar penjelasnya.
+  function kodeSaja(...bagian) {
+    return fs
+      .readFileSync(path.join(SRC, ...bagian), 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  describe('Navbar tidak lagi menautkan ke halaman yang tidak ada', () => {
+    const kode = kodeSaja('components', 'Navbar.tsx');
+
+    it('tautan /list dan /about dibuang karena rutenya tidak ada', () => {
+      // Keduanya membalas 404. Diverifikasi ulang di bawah terhadap isi
+      // src/app/ yang sebenarnya, supaya test ini tetap benar bila salah satu
+      // halaman itu nanti dibuat.
+      assert.doesNotMatch(kode, /href="\/list"/);
+      assert.doesNotMatch(kode, /href="\/about"/);
+    });
+
+    it('setiap href internal di Navbar menunjuk rute yang benar-benar ada', () => {
+      const AKAR = path.join(SRC, 'app');
+
+      // Kumpulkan rute nyata dari berkas page.tsx, dengan segmen grup
+      // `(dashboard)` dibuang — grup tidak muncul di URL.
+      const rute = new Set();
+      (function jelajah(dir, prefix) {
+        for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+          if (entri.isDirectory()) {
+            if (entri.name.startsWith('_') || entri.name === 'api') continue;
+            const segmen = /^\(.*\)$/.test(entri.name) ? '' : `/${entri.name}`;
+            jelajah(path.join(dir, entri.name), prefix + segmen);
+          } else if (entri.name === 'page.tsx') {
+            rute.add(prefix === '' ? '/' : prefix);
+          }
+        }
+      })(AKAR, '');
+
+      const href = [...kode.matchAll(/href="(\/[^"{]*)"/g)].map((m) => m[1]);
+      assert.ok(href.length > 0, 'Navbar wajib punya tautan internal');
+
+      for (const tujuan of href) {
+        assert.ok(
+          rute.has(tujuan),
+          `Navbar menautkan ke ${tujuan} tetapi tidak ada src/app${tujuan === '/' ? '' : tujuan}/page.tsx`
+        );
+      }
+    });
+
+    it('tombol "Sewakan Tempat" tanpa tujuan dibuang', () => {
+      // Tidak ada alur pendaftaran pemilik lahan di aplikasi ini. Tombol yang
+      // tidak melakukan apa pun membuat pemilik lahan menyimpulkan situs rusak.
+      assert.doesNotMatch(kode, /Sewakan Tempat/);
+    });
+
+    it('dropdown profil menutup diri: klik luar, Escape, dan setelah navigasi', () => {
+      assert.match(kode, /function klikLuar\(event: MouseEvent\)/);
+      assert.match(kode, /event\.key === 'Escape'/);
+      assert.match(kode, /removeEventListener\('mousedown', klikLuar\)/);
+      assert.match(kode, /removeEventListener\('keydown', tekanEscape\)/);
+      assert.match(kode, /ref=\{profilRef\}/);
+      // Setiap tautan di dalam kedua menu menutup menunya.
+      assert.match(kode, /onClick=\{\(\) => setIsProfileOpen\(false\)\}/);
+      assert.match(kode, /onClick=\{\(\) => setIsOpen\(false\)\}/);
+    });
+
+    it('pemicu menu mengumumkan keadaannya, dan ikon disembunyikan', () => {
+      assert.match(kode, /aria-haspopup="menu"/);
+      assert.match(kode, /aria-expanded=\{isProfileOpen\}/);
+      assert.match(kode, /aria-expanded=\{isOpen\}/);
+      assert.match(kode, /aria-label=\{isOpen \? 'Tutup menu' : 'Buka menu'\}/);
+    });
+  });
+
+  describe('halaman detail billboard tidak lagi menawarkan kontak yang tidak ada', () => {
+    const kode = kodeSaja('app', 'billboard', '[slug]', 'BillboardDetailClient.tsx');
+
+    it('tombol "Hubungi Sales (WA)" dibuang', () => {
+      // Tidak punya onClick, tidak punya href, dan tidak ada satu pun nomor WA
+      // perusahaan di konfigurasi mana pun untuk dituju.
+      assert.doesNotMatch(kode, /Hubungi Sales/);
+    });
+
+    it('tombol lanjut ke pembayaran tetap utuh', () => {
+      // Satu-satunya jalur uang di halaman ini; jangan ikut terbuang.
+      assert.match(kode, /Lanjut ke Pembayaran/);
+      assert.match(kode, /href=\{`\/checkout\?id=\$\{rawData\.id\}/);
+    });
+  });
+
+  describe('inbox CS tidak lagi menampilkan telemetri yang dikarang', () => {
+    const kode = kodeSaja('app', 'admin', '_components', 'cs', 'CS_InboxLayout.tsx');
+
+    it('empat baris data pengunjung palsu dibuang', () => {
+      // "IP Address: 127.0.0.1" adalah alamat mesin itu sendiri, bukan alamat
+      // siapa pun. Keempatnya ditulis tetap di kode, tidak dibaca dari mana pun.
+      assert.doesNotMatch(kode, /127\.0\.0\.1/);
+      assert.doesNotMatch(kode, /Lokasi:<\/span> Indonesia/);
+      assert.doesNotMatch(kode, /Browser:<\/span> Chrome/);
+      assert.doesNotMatch(kode, /OS:<\/span> Windows/);
+    });
+
+    it('panel diganti data kontak yang memang tersimpan', () => {
+      assert.match(kode, /session\.guestPhone/);
+      assert.match(kode, /session\.guestEmail/);
+      assert.match(kode, /session\.createdAt/);
+      // Nilai kosong dinyatakan kosong, bukan dibiarkan jadi baris hampa.
+      assert.match(kode, /Tidak diisi/);
+    });
+
+    it('badge "Online" yang selalu hijau diganti status percakapan', () => {
+      // `isOnline` di schema hanya ditulis dua kali dan tidak pernah mengikuti
+      // koneksi socket, jadi nilainya juga bukan kehadiran.
+      assert.doesNotMatch(kode, />Online</);
+      assert.doesNotMatch(kode, /bg-green-500 rounded-full/);
+      assert.match(kode, /const LABEL_STATUS: Record<string, \{ teks: string; kelas: string \}>/);
+      for (const nilai of ['OPEN', 'AGENT', 'CLOSED']) {
+        assert.match(kode, new RegExp(`${nilai}: \\{ teks:`), `status ${nilai} wajib punya label`);
+      }
+      assert.match(kode, /<BadgeStatus status=\{session\.status\}/);
+    });
+
+    it('tombol ikon tanpa tujuan dibuang, importnya ikut', () => {
+      assert.doesNotMatch(kode, /SlidersHorizontal/);
+    });
+
+    it('pencarian percakapan benar-benar menyaring', () => {
+      assert.match(kode, /const \[cari, setCari\] = useState\(''\)/);
+      assert.match(kode, /onChange=\{\(e\) => setCari\(e\.target\.value\)\}/);
+      assert.match(kode, /value=\{cari\}/);
+      assert.match(kode, /guestName, s\.guestEmail, s\.guestPhone/);
+      // Hasil kosong karena penyaringan dibedakan dari inbox yang memang kosong.
+      assert.match(kode, /Tidak ada percakapan yang cocok/);
+      assert.match(kode, /Tidak ada sesi chat\./);
+    });
+
+    it('baris percakapan adalah tombol, bukan div yang bisa diklik', () => {
+      // `<div onClick>` tidak bisa difokus papan ketik dan tidak diumumkan
+      // sebagai kontrol.
+      assert.doesNotMatch(kode, /<div\s*\n?\s*key=\{session\.id\}/);
+      assert.match(kode, /type="button"\s*\n?\s*key=\{session\.id\}/);
+      assert.match(kode, /aria-current=\{selectedSessionId === session\.id \? 'true' : undefined\}/);
+    });
+
+    it('tombol kirim benar mati saat tidak ada yang bisa dikirim', () => {
+      // Kelas `disabled:bg-gray-300` sudah ada sejak dulu, tapi `disabled`
+      // sendiri tidak pernah dipasang: gaya untuk keadaan yang tak pernah ada.
+      assert.match(kode, /disabled=\{!newMessage\.trim\(\)\}/);
+      assert.match(kode, /aria-label="Kirim balasan"/);
+    });
+  });
+
+  describe('pencarian transaksi admin benar-benar menyaring', () => {
+    const kode = kodeSaja('app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx');
+
+    it('kotak pencarian terhubung ke state dan menyaring daftar', () => {
+      assert.doesNotMatch(kode, /placeholder="Search\.\.\."/);
+      assert.match(kode, /const \[cari, setCari\] = useState\(''\)/);
+      assert.match(kode, /value=\{cari\}/);
+      assert.match(kode, /onChange=\{\(e\) => setCari\(e\.target\.value\)\}/);
+      // Daftar yang dirender adalah hasil saring, bukan daftar penuh.
+      assert.match(kode, /\{terlihat\.map\(\(t\) =>/);
+      assert.doesNotMatch(kode, /\{transactions\.map\(\(t\) =>/);
+    });
+
+    it('dicari lewat nomor pesanan yang dilihat operator, bukan cuid mentah', () => {
+      // Yang tertera di layar dan di invoice adalah hasil `labelPesanan(t.id)`.
+      assert.match(kode, /labelPesanan\(t\.id\),/);
+    });
+
+    it('hasil kosong karena pencarian dibedakan dari belum ada pesanan', () => {
+      assert.match(kode, /Tidak ada pesanan yang cocok/);
+      assert.match(kode, /Belum ada pesanan\./);
+      assert.match(kode, /aria-live="polite"/);
+    });
+  });
+});

@@ -1,7 +1,27 @@
 // src/components/Navbar.tsx
 'use client';
 
-import React, { useState } from 'react';
+// Navigasi publik.
+//
+// Empat kontrol di sini tidak menuju ke mana pun, dan ketiadaannya baru
+// terlihat setelah diklik:
+//
+//   1. `/list` dan `/about` — kedua rute ini TIDAK ADA di `src/app/`. Keduanya
+//      membalas 404. `/list` juga tidak perlu ada: halaman depan sudah berupa
+//      peta + pencarian seluruh billboard yang PUBLISHED, jadi "List Billboard"
+//      dan "Home" menunjuk hal yang sama. Tautan `/list` dibuang dan "Home"
+//      diberi nama yang menjelaskan isinya.
+//   2. Dua tombol "Sewakan Tempat" (desktop dan mobile) tidak punya `onClick`,
+//      tidak punya `href`, dan tidak ada satu pun alur pendaftaran pemilik
+//      lahan di aplikasi ini. Tombol yang tidak melakukan apa pun lebih buruk
+//      daripada tidak ada tombolnya: pemilik lahan mengkliknya, tidak terjadi
+//      apa-apa, dan ia menyimpulkan situsnya rusak lalu pergi.
+//
+// Keempatnya dibuang, bukan ditambal. Menambahkan halaman `/about` dan alur
+// "Sewakan Tempat" adalah fitur, dan fitur tidak boleh diselipkan lewat tautan
+// yang sudah dipasang sebelum halamannya ditulis.
+
+import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Menu, X, User, LogOut, ChevronDown, LayoutDashboard } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
@@ -12,8 +32,34 @@ const Navbar = () => {
   
   const { data: session, status } = useSession();
   
+  const profilRef = useRef<HTMLDivElement>(null);
+
+  // Dropdown profil tidak punya cara menutup diri selain mengklik pemicunya
+  // lagi. Bila pengguna mengklik di tempat lain atau menekan Escape, ia tetap
+  // menggantung di atas halaman — dan navbar ini ber-`z-[9999]`, jadi menu yang
+  // menggantung menutupi apa pun yang ada di bawahnya.
+  useEffect(() => {
+    function klikLuar(event: MouseEvent) {
+      if (profilRef.current && !profilRef.current.contains(event.target as Node)) {
+        setIsProfileOpen(false);
+      }
+    }
+    function tekanEscape(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setIsProfileOpen(false);
+        setIsOpen(false);
+      }
+    }
+    document.addEventListener('mousedown', klikLuar);
+    document.addEventListener('keydown', tekanEscape);
+    return () => {
+      document.removeEventListener('mousedown', klikLuar);
+      document.removeEventListener('keydown', tekanEscape);
+    };
+  }, []);
+
   const handleLogout = () => {
-    signOut({ callbackUrl: '/login' }); 
+    signOut({ callbackUrl: '/login' });
   };
 
   // 'USER_AIDA' dihapus: tidak pernah ada satu pun baris di database dengan
@@ -55,9 +101,10 @@ const Navbar = () => {
 
           {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas) */}
           <div className="hidden md:flex items-center space-x-8">
-              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Home</Link>
-              <Link href="/list" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
-              <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
+              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Cari Billboard</Link>
+              {session && (
+                <Link href="/dashboard" className="text-sm font-medium text-gray-700 hover:text-utero transition">Pesanan Saya</Link>
+              )}
           </div>
 
           {/* 3. USER AREA DESKTOP (Hidden di Mobile) */}
@@ -65,9 +112,12 @@ const Navbar = () => {
             {status === 'loading' ? (
                 <div className="w-20 h-8 bg-gray-100 rounded animate-pulse"></div>
             ) : session ? (
-                <div className="relative">
-                    <button 
+                <div className="relative" ref={profilRef}>
+                    <button
+                        type="button"
                         onClick={() => setIsProfileOpen(!isProfileOpen)}
+                        aria-haspopup="menu"
+                        aria-expanded={isProfileOpen}
                         className="flex items-center gap-2 text-sm font-bold text-gray-700 hover:text-utero px-3 py-2 rounded-full border border-gray-200 hover:bg-gray-50 transition"
                     >
                        <User size={16} />
@@ -83,14 +133,17 @@ const Navbar = () => {
                                 <p className="text-xs font-bold text-gray-800 truncate">{session.user?.email}</p>
                                 {session?.user?.role && <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1.5 ${getRoleClass(session.user.role)}`}>{session.user.role}</span>}
                              </div>
-                             <Link href="/dashboard" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-utero">Dashboard Saya</Link>
-                               <Link href="/dashboard/settings" className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-utero">Pengaturan Akun</Link>
+                             {/* Dropdown ini dulu tetap terbuka setelah tautannya
+                                 diklik — melayang di atas halaman tujuan sampai
+                                 diklik dua kali. */}
+                             <Link href="/dashboard" onClick={() => setIsProfileOpen(false)} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-utero">Dashboard Saya</Link>
+                               <Link href="/dashboard/settings" onClick={() => setIsProfileOpen(false)} className="block px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 hover:text-utero">Pengaturan Akun</Link>
                              {isAdmin && (
-                                <Link href="/admin" className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-gray-800 hover:bg-gray-50 hover:text-utero">
+                                <Link href="/admin" onClick={() => setIsProfileOpen(false)} className="flex items-center gap-2 px-4 py-2 text-sm font-bold text-gray-800 hover:bg-gray-50 hover:text-utero">
                                     <LayoutDashboard size={14}/> Admin Panel
                                 </Link>
                              )}
-                             <button onClick={handleLogout} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
+                             <button type="button" onClick={handleLogout} className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50 flex items-center gap-2">
                                 <LogOut size={14}/> Logout
                              </button>
                         </div>
@@ -99,19 +152,20 @@ const Navbar = () => {
             ) : (
                 <Link href="/login" className="text-sm font-bold text-gray-600 hover:text-utero transition">Masuk / Daftar</Link>
             )}
-
-            <button className="bg-utero text-white px-5 py-2.5 rounded-full text-sm font-bold hover:bg-red-700 transition shadow-lg shadow-red-200">
-               Sewakan Tempat
-            </button>
           </div>
 
           {/* 4. HAMBURGER BUTTON (Hanya muncul di Mobile) */}
           <div className="flex md:hidden">
-            <button 
-                onClick={() => setIsOpen(!isOpen)} 
+            <button
+                type="button"
+                onClick={() => setIsOpen(!isOpen)}
+                aria-expanded={isOpen}
+                aria-label={isOpen ? 'Tutup menu' : 'Buka menu'}
                 className="p-2 rounded-md text-gray-600 hover:text-utero hover:bg-gray-100 transition focus:outline-none"
             >
-              {isOpen ? <X size={24} /> : <Menu size={24} />}
+              {/* Ikon saja tidak punya nama yang terbaca: pembaca layar
+                  mengumumkannya sebagai "tombol" tanpa keterangan apa pun. */}
+              {isOpen ? <X size={24} aria-hidden="true" /> : <Menu size={24} aria-hidden="true" />}
             </button>
           </div>
         </div>
@@ -136,11 +190,18 @@ const Navbar = () => {
                                 {session?.user?.role && <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full inline-block mt-1 ${getRoleClass(session.user.role)}`}>{session.user.role}</span>}
                             </div>
                         </div>
-                        <Link href="/dashboard" className="block text-center w-full bg-white border border-gray-200 py-2 rounded-lg text-xs font-bold text-gray-700 mb-2">
+                        {/* `setIsOpen(false)` pada setiap tautan: tanpa ini menu
+                            mobile tetap terbuka menutupi halaman tujuan setelah
+                            navigasi, dan pengguna menyimpulkan kliknya tidak
+                            berfungsi lalu mengkliknya lagi. */}
+                        <Link href="/dashboard" onClick={() => setIsOpen(false)} className="block text-center w-full bg-white border border-gray-200 py-2 rounded-lg text-xs font-bold text-gray-700 mb-2">
                             Dashboard Saya
                         </Link>
+                        <Link href="/dashboard/settings" onClick={() => setIsOpen(false)} className="block text-center w-full bg-white border border-gray-200 py-2 rounded-lg text-xs font-bold text-gray-700 mb-2">
+                            Pengaturan Akun
+                        </Link>
                         {isAdmin && (
-                            <Link href="/admin" className="block text-center w-full bg-gray-800 text-white py-2 rounded-lg text-xs font-bold mb-2">
+                            <Link href="/admin" onClick={() => setIsOpen(false)} className="block text-center w-full bg-gray-800 text-white py-2 rounded-lg text-xs font-bold mb-2">
                                 Masuk Admin Panel
                             </Link>
                         )}
@@ -149,22 +210,13 @@ const Navbar = () => {
                         </button>
                     </div>
                 ) : (
-                    <Link href="/login" className="flex items-center justify-center gap-2 w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl mb-4">
+                    <Link href="/login" onClick={() => setIsOpen(false)} className="flex items-center justify-center gap-2 w-full bg-gray-100 text-gray-800 font-bold py-3 rounded-xl mb-4">
                         <User size={18}/> Masuk / Daftar Akun
                     </Link>
                 )}
 
                 {/* Link Navigasi Biasa */}
-                <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏠 Home</Link>
-                <Link href="/list" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
-                <Link href="/about" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏢 Tentang Kami</Link>
-                
-                {/* Tombol CTA dipindah kesini untuk mobile */}
-                <div className="pt-4 border-t border-gray-100 mt-2">
-                    <button className="w-full bg-utero text-white py-3.5 rounded-xl font-bold text-sm shadow-lg shadow-red-100">
-                        + Sewakan Tempat Anda
-                    </button>
-                </div>
+                <Link href="/" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
             </div>
         </div>
       )}

@@ -200,6 +200,31 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
   const [selected, setSelected] = useState<TransaksiUntukClient | null>(transactions.length > 0 ? transactions[0] : null);
   const router = useRouter();
 
+  // Kotak `placeholder="Search..."` di kolom kiri dulu tidak punya `value`
+  // maupun `onChange`: ia menerima ketikan lalu membuangnya. Daftar pesanan di
+  // halaman ini juga tidak punya paginasi, jadi setelah beberapa ratus pesanan
+  // satu-satunya cara menemukan satu transaksi adalah menggulir — dan kotak
+  // yang tampak seperti pencarian membuat operator berhenti menggulir, mengetik
+  // nomor pesanan, lalu menyimpulkan pesanannya tidak ada.
+  const [cari, setCari] = useState('');
+
+  const kunci = cari.trim().toLowerCase();
+  const terlihat = !kunci
+    ? transactions
+    : transactions.filter((t) =>
+        [
+          // Nomor pesanan sebagaimana YANG DILIHAT operator, bukan cuid mentah:
+          // yang tertera di layar dan di invoice adalah hasil `labelPesanan`.
+          labelPesanan(t.id),
+          t.billboard.title,
+          t.user.name,
+          t.user.email,
+          t.user.whatsapp,
+        ]
+          .filter((nilai): nilai is string => typeof nilai === 'string' && nilai !== '')
+          .some((nilai) => nilai.toLowerCase().includes(kunci))
+      );
+
   const handleDesignStatusUpdate = async (status: 'APPROVED' | 'REJECTED') => {
     if (!selected) return;
 
@@ -277,9 +302,28 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       
       {/* Kolom Kiri: Daftar Transaksi */}
       <div className="lg:col-span-4 bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col">
-        <input type="search" placeholder="Search..." className="w-full px-3 py-2 rounded-md border text-sm mb-4" />
+        <input
+          type="search"
+          value={cari}
+          onChange={(e) => setCari(e.target.value)}
+          aria-label="Cari pesanan berdasarkan nomor, billboard, nama, email, atau telepon"
+          placeholder="Cari nomor pesanan, billboard, penyewa..."
+          className="w-full px-3 py-2 rounded-md border text-sm mb-4"
+        />
+        {kunci !== '' && (
+          <p className="text-xs text-gray-500 mb-2" aria-live="polite">
+            {terlihat.length} dari {transactions.length} pesanan cocok.
+          </p>
+        )}
         <div className="flex-1 overflow-y-auto">
-          {transactions.map((t) => (
+          {terlihat.length === 0 && (
+            <p className="p-4 text-center text-sm text-gray-400">
+              {kunci
+                ? `Tidak ada pesanan yang cocok dengan "${cari.trim()}".`
+                : 'Belum ada pesanan.'}
+            </p>
+          )}
+          {terlihat.map((t) => (
             <button
               key={t.id}
               onClick={() => setSelected(t)}
