@@ -17721,3 +17721,157 @@ describe('header keamanan: lima header dan satu kebijakan konten', () => {
     }
   });
 });
+
+// Tiga temuan yang bentuknya sama: sesuatu MENUNJUK ke sesuatu yang tidak ada,
+// dan tidak satu pun dari ketiganya melempar galat saat dikompilasi.
+describe('tidak ada penunjuk yang menunjuk ke ruang kosong', () => {
+  const akar = path.join(__dirname, '..');
+
+  function berkasSumber(d, out = []) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) berkasSumber(p, out);
+      else if (/\.(ts|tsx)$/.test(e.name)) out.push(p);
+    }
+    return out;
+  }
+
+  const SEMUA_SUMBER = berkasSumber(path.join(akar, 'src'));
+
+  // Kumpulan rute yang SUNGGUH ada, diturunkan dari berkas `page.tsx` dan
+  // `route.ts` di `src/app`. Grup `(dashboard)` dibuang karena ia tidak muncul
+  // di URL, dan segmen `[id]` menjadi pola.
+  function ruteYangAda() {
+    const rute = new Set(['/']);
+    for (const f of SEMUA_SUMBER) {
+      const norm = f.replace(/\\/g, '/');
+      const m = norm.match(/\/src\/app\/(.*)\/(page|route)\.tsx?$/);
+      if (!m) continue;
+      const r = ('/' + m[1]).replace(/\/\([^)]*\)/g, '');
+      rute.add(r === '' ? '/' : r);
+    }
+    return rute;
+  }
+
+  const RUTE = ruteYangAda();
+
+  function adaRutenya(tautan) {
+    const bersih = tautan.split('?')[0].split('#')[0].replace(/\/$/, '') || '/';
+    if (RUTE.has(bersih)) return true;
+    for (const r of RUTE) {
+      const pola =
+        '^' +
+        r
+          .replace(/\[\[?\.\.\.[^\]]+\]\]?/g, '.*')
+          .replace(/\[[^\]]+\]/g, '[^/]+') +
+        '$';
+      if (new RegExp(pola).test(bersih)) return true;
+    }
+    return false;
+  }
+
+  it('setiap tautan internal punya halaman atau route-nya', () => {
+    // MENU "Reporting" DI SIDEBAR CS MENAUT KE `/admin/reporting`, DAN RUTE ITU
+    // TIDAK PERNAH ADA.
+    //
+    // Satu dari empat ikon di rel sidebar CS adalah 404 — bukan halaman kosong
+    // yang bisa dimaklumi, tapi layar galat Next yang membuat CS mengira
+    // panelnya rusak. Tidak ada TODO dan tidak ada rancangannya, jadi ia juga
+    // bukan pekerjaan yang tertunda; ia hanya salah sejak ditulis.
+    //
+    // Tautan mati tidak bisa ditangkap `tsc`: `href` menerima string apa pun.
+    // Pemeriksaan ini yang menggantikannya.
+    const pola = [
+      /href=["'](\/[^"'{}\s]*)["']/g,
+      /href=\{["'`](\/[^"'`{}\s]*)["'`]\}/g,
+      /link:\s*["'](\/[^"'\s]*)["']/g,
+      /redirect\(["'](\/[^"'\s]*)["']\)/g,
+      /router\.push\(["'](\/[^"'\s]*)["']\)/g,
+      /callbackUrl:\s*["'](\/[^"'\s]*)["']/g,
+    ];
+
+    const mati = [];
+    for (const f of SEMUA_SUMBER) {
+      const isi = fs.readFileSync(f, 'utf8');
+      for (const p of pola) {
+        for (const m of isi.matchAll(p)) {
+          const t = m[1];
+          // `/uploads/...` dilayani dari `public`, bukan dari App Router.
+          if (t.startsWith('/uploads') || t.startsWith('//')) continue;
+          if (!adaRutenya(t)) {
+            mati.push(`${t}  ←  ${path.relative(akar, f).replace(/\\/g, '/')}`);
+          }
+        }
+      }
+    }
+
+    assert.deepEqual(mati, [], `tautan tanpa rute:\n${mati.join('\n')}`);
+  });
+
+  it('sidebar CS tidak lagi memuat menu Reporting', () => {
+    const kode = fs.readFileSync(
+      path.join(akar, 'src', 'app', 'admin', '_components', 'cs', 'CS_Sidebar.tsx'),
+      'utf8'
+    );
+    assert.doesNotMatch(kode, /link:\s*["']\/admin\/reporting["']/);
+    // Ikonnya ikut dibuang dari import — import yang tidak dipakai adalah
+    // peringatan lint berikutnya.
+    assert.doesNotMatch(kode, /^import.*\bBarChart3\b/m);
+    // Tiga menu yang tersisa memang punya halamannya.
+    for (const t of ['/admin', '/admin/live-chat', '/admin/users']) {
+      assert.ok(adaRutenya(t), `${t} seharusnya ada`);
+    }
+  });
+
+  it('setiap arahan eslint-disable-next-line menempel pada baris yang dilaporkan', () => {
+    // ARAHAN YANG SALAH POSISI MEMBUNGKAM BARIS YANG SALAH.
+    //
+    // Di `OrderActions.tsx` arahan `@next/next/no-img-element` berada tiga baris
+    // di atas `<img>`-nya, tepat di atas `{mengunggah` — baris pembuka ternary
+    // yang tidak pernah dilaporkan apa pun. Hasilnya dua peringatan sekaligus:
+    // satu untuk `<img>` yang tidak tertutup, satu untuk arahan yang tidak
+    // menutup apa-apa. Keduanya lolos `tsc` karena komentar bukan kode.
+    //
+    // Yang diperiksa di sini khusus `no-img-element`: aturan itu selalu
+    // dilaporkan pada baris `<img`, jadi posisi yang benar bisa ditentukan.
+    const jalur = path.join(akar, 'src', 'components', 'admin', 'OrderActions.tsx');
+    const baris = fs.readFileSync(jalur, 'utf8').split(/\r?\n/);
+
+    let arahan = 0;
+    for (let i = 0; i < baris.length; i++) {
+      if (!/eslint-disable-next-line\s+@next\/next\/no-img-element/.test(baris[i])) continue;
+      arahan++;
+      const berikut = baris[i + 1] ?? '';
+      assert.match(
+        berikut,
+        /<img\b/,
+        `arahan di baris ${i + 1} tidak menempel pada <img>, melainkan pada: ${berikut.trim()}`
+      );
+    }
+
+    // Kedua `<img>` di berkas ini memang butuh arahannya; kalau jumlahnya
+    // berubah, yang di atas perlu ditinjau ulang.
+    assert.equal(arahan, 2);
+  });
+
+  it('prisma.config-ts yang mati sudah tidak ada, dan tsconfig tidak lagi menyebutnya', () => {
+    // BERKAS ITU TIDAK PERNAH DIBACA SIAPA PUN.
+    //
+    // Namanya `prisma.config-ts` — tanda hubung, bukan titik — jadi bukan
+    // berkas TypeScript dan bukan nama yang dicari Prisma. Bahkan bila namanya
+    // benar: repo ini memakai Prisma 5.22, yang belum mengenal
+    // `prisma.config.ts` sama sekali, `prisma/config` tidak ada di
+    // `node_modules`, dan `dotenv` yang diimpornya tidak terpasang. Empat
+    // alasan berbeda untuk satu berkas yang sama.
+    //
+    // Entri `"prisma.config"` di `include` tsconfig juga tidak cocok apa pun:
+    // tanpa ekstensi, TypeScript mencari `prisma.config.ts`, yang tidak ada.
+    assert.equal(
+      fs.existsSync(path.join(akar, 'prisma.config-ts')),
+      false,
+      'prisma.config-ts masih ada'
+    );
+    const tsconfig = fs.readFileSync(path.join(akar, 'tsconfig.json'), 'utf8');
+    assert.doesNotMatch(tsconfig, /prisma\.config/);
+  });
+});

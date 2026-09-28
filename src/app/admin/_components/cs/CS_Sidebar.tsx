@@ -2,14 +2,27 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, MessageSquare, Users, BarChart3, LogOut } from 'lucide-react';
+import { LayoutDashboard, MessageSquare, Users, LogOut } from 'lucide-react';
 import { signOut } from 'next-auth/react';
 
+// Setiap tautan di sini WAJIB punya halamannya.
+//
+// Menu "Reporting" dulu menaut ke `/admin/reporting`, dan rute itu tidak ada:
+// tidak ada `src/app/admin/(dashboard)/reporting/`, dan tidak ada satu pun
+// berkas lain di `src/` yang menyebutnya. Satu dari empat ikon di rel sidebar
+// CS karena itu adalah 404 — bukan halaman kosong yang bisa dimaklumi, tapi
+// layar galat Next yang membuat CS mengira panelnya rusak. Ia juga tidak
+// pernah menjadi tugas yang tertunda: tidak ada TODO, tidak ada rancangan
+// halamannya.
+//
+// Dibuang, bukan ditambahi halaman kosong. Menu yang tidak menuju ke mana pun
+// lebih buruk daripada menu yang tidak ada, dan laporan untuk CS belum
+// diputuskan bentuknya. Kalau nanti dibuat, barisnya kembali bersama
+// halamannya — bukan sebelumnya.
 const csMenus = [
   { name: "Dashboard", icon: LayoutDashboard, link: "/admin" },
   { name: "Inbox", icon: MessageSquare, link: "/admin/live-chat" },
   { name: "Contacts", icon: Users, link: "/admin/users" },
-  { name: "Reporting", icon: BarChart3, link: "/admin/reporting" }, 
 ];
 
 /**

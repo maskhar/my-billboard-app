@@ -660,12 +660,22 @@ export default function OrderActions({
                                  (`/uploads/...`) atau `secure_url` Cloudinary, dan host
                                  Cloudinary tidak seluruhnya terdaftar di `remotePatterns`.
                                  `next/image` MELEMPAR pada sumber di luar daftar itu, yang
-                                 akan menjatuhkan seluruh panel aksi admin. */}
-                             {/* eslint-disable-next-line @next/next/no-img-element */}
+                                 akan menjatuhkan seluruh panel aksi admin.
+
+                                 Arahan `disable-next-line` di bawah HARUS menempel langsung
+                                 di atas `<img>`-nya. Sebelumnya ia berada di atas `{mengunggah`,
+                                 tiga baris lebih tinggi, jadi yang dibungkamnya adalah baris
+                                 pembuka ternary yang tidak pernah dilaporkan apa pun —
+                                 sementara `<img>`-nya sendiri tetap memicu peringatan. Dua
+                                 peringatan sekaligus: satu untuk `<img>` yang tidak tertutup,
+                                 satu untuk arahan yang tidak menutup apa-apa. */}
                              {mengunggah
                                 ? <p className="text-xs text-gray-500">Mengunggah…</p>
                                 : installData
-                                    ? <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/>
+                                    ? (
+                                        // eslint-disable-next-line @next/next/no-img-element
+                                        <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/>
+                                      )
                                     : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
                         </div>
                         {/* Dimatikan sampai ada bukti yang benar-benar terunggah. Tanpa ini
