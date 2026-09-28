@@ -19432,14 +19432,74 @@ describe('penanda fokus tidak pernah dibuang tanpa pengganti', () => {
   // komentar jauh lebih aman, dan kelas Tailwind memang selalu ditulis dalam
   // satu baris — termasuk yang dirangkai dengan `+` antar baris, karena setiap
   // penggalannya berdiri sendiri.
+  //
+  // `/*` HANYA dikenali di AWAL baris (boleh didahului spasi dan `{`), dan itu
+  // bukan kerapian — itu perbaikan atas cacat yang membutakan pemindai ini
+  // selama ini. `src/components/BookingCard.tsx:722` memuat
+  // `accept="image/*,.pdf"`, dan pola lama yang menyapu `/*` di mana pun
+  // membaca `/*` di dalam string itu sebagai pembuka komentar. Blok palsunya
+  // baru ditutup 21 baris kemudian, jadi SELURUH 21 baris JSX di antaranya —
+  // termasuk isian tautan desain di baris 732 — tidak pernah terlihat gerbang
+  // mana pun. Cacat fokus di sana lolos bukan karena lulus, tapi karena tidak
+  // pernah dibaca.
+  //
+  // Komentar blok yang sungguhan di repo ini selalu mulai di awal barisnya,
+  // sementara `/*` di tengah baris nyaris selalu berada di dalam string —
+  // path glob, regex, atau tipe MIME. Memilih awal baris membuang yang kedua
+  // tanpa kehilangan yang pertama.
   function barisKode(jalur) {
     return fs
       .readFileSync(jalur, 'utf8')
-      .replace(/\/\*[\s\S]*?\*\//g, '')
-      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .replace(/^[ \t]*\{?\/\*[\s\S]*?\*\/\}?/gm, '')
       .split(/\r?\n/)
       .map((baris, i) => ({ nomor: i + 1, teks: baris }))
       .filter(({ teks }) => !/^\s*(\/\/|\*)/.test(teks));
+  }
+
+  /**
+   * Ambil tag PEMBUKA untuk nama elemen yang diminta, utuh sampai `>` miliknya.
+   *
+   * Regex `<input\b[^>]*>` yang kelihatan cukup sebenarnya salah pada JSX:
+   * `onChange={(e) => setQuery(e.target.value)}` memuat `>` di dalam arrow
+   * function, jadi `[^>]*` berhenti di tengah atribut dan semua atribut
+   * sesudahnya — termasuk `id` dan `aria-label` — tidak pernah terlihat. Tes
+   * pertama yang memakai regex itu gagal persis begitu: ia melaporkan
+   * `<input type="text" value={query} onChange={(e) =>` sebagai isian tanpa
+   * nama padahal `aria-label`-nya ada tiga baris di bawah.
+   *
+   * Jadi kedalaman kurung kurawal dihitung, dan `>` hanya mengakhiri tag saat
+   * kedalamannya nol. Tanda kutip juga dilewati supaya `"=>"` di dalam teks
+   * atribut tidak ikut menghitung.
+   */
+  function tagPembuka(jalur, namaElemen) {
+    const isi = barisKode(jalur)
+      .map(({ teks }) => teks)
+      .join('\n');
+    const pola = new RegExp(`<(${namaElemen.join('|')})(?=[\\s/>])`, 'g');
+    const hasil = [];
+
+    for (const cocok of isi.matchAll(pola)) {
+      let dalam = 0;
+      let kutip = null;
+
+      for (let i = cocok.index + cocok[0].length; i < isi.length; i++) {
+        const c = isi[i];
+
+        if (kutip) {
+          if (c === kutip) kutip = null;
+          continue;
+        }
+        if (c === '"' || c === "'" || c === '`') kutip = c;
+        else if (c === '{') dalam++;
+        else if (c === '}') dalam--;
+        else if (c === '>' && dalam === 0) {
+          hasil.push(isi.slice(cocok.index, i + 1));
+          break;
+        }
+      }
+    }
+
+    return hasil;
   }
 
   // Apa pun yang membuat fokus TERLIHAT lagi setelah garis bawaan dibuang:
@@ -19567,6 +19627,102 @@ describe('penanda fokus tidak pernah dibuang tanpa pengganti', () => {
     }
 
     assert.deepStrictEqual(pelanggar, [], 'nomor telepon bukan bilangan yang dihitung');
+  });
+
+  it('isian yang membuang garis bawaan mendapat CINCIN, bukan hanya warna batas', () => {
+    // Gerbang `outline-none` di atas menerima `focus:border-` sebagai pengganti,
+    // dan untuk kontrol berlatar terang itu memang cukup. Untuk ISIAN teks ia
+    // tidak cukup, dan `src/app/admin/login/AdminLoginForm.tsx` adalah
+    // buktinya: batas 1px yang berubah dari `gray-600` menjadi `#ce181e` di atas
+    // latar `gray-900` adalah dua warna gelap berdampingan pada garis setipis
+    // mungkin. Kodenya lulus gerbang itu; layarnya tidak menunjukkan apa pun.
+    //
+    // Aturan yang lebih sempit ini hanya berlaku pada `<input>`, `<textarea>`,
+    // dan `<select>` — kontrol yang diisi sambil dilihat, di mana kehilangan
+    // jejak fokus berarti mengetik ke kolom yang salah.
+    const pelanggar = [];
+
+    for (const jalur of berkasFokus(AKAR_SRC_FOKUS)) {
+      if (DIKECUALIKAN.has(relFokus(jalur))) continue;
+
+      for (const { nomor, teks } of barisKode(jalur)) {
+        if (!/(^|[\s'"`])(focus:)?outline-none/.test(teks)) continue;
+        // Hanya baris yang memang kelas sebuah isian. Baris `className` yang
+        // berdiri sendiri (kelas dirangkai di konstanta) ikut diperiksa lewat
+        // konstantanya sendiri, yang juga satu baris.
+        if (!/(ring-\d|ring-inset)/.test(teks)) {
+          pelanggar.push(`${relFokus(jalur)}:${nomor}`);
+        }
+      }
+    }
+
+    assert.deepStrictEqual(
+      pelanggar,
+      [],
+      'baris ini membuang garis fokus bawaan dan hanya mengganti warna batas; ' +
+        'pada isian teks perubahan batas 1px terlalu halus untuk dilihat'
+    );
+  });
+
+  it('setiap isian di SearchFilter punya nama yang bisa dibaca pembaca layar', () => {
+    // SearchFilter adalah pintu masuk utama seluruh situs, dan keenam isiannya
+    // dulu tidak punya satu pun `id` sementara kelima labelnya tidak punya
+    // `htmlFor`. Pembaca layar menyebutnya "edit text", "combo box",
+    // "edit text" — tanpa nama, di komponen yang paling sering dipakai.
+    //
+    // Diperiksa per isian, bukan per berkas: satu `id` yang benar tidak
+    // menolong lima kolom lain, dan pola inilah yang membuat cacatnya lolos
+    // begitu lama.
+    const jalur = path.join(AKAR_SRC_FOKUS, 'components', 'SearchFilter.tsx');
+    const isian = tagPembuka(jalur, ['input', 'select', 'textarea']);
+    assert.ok(isian.length >= 6, `hanya ${isian.length} isian terdeteksi — pemindainya rusak`);
+
+    // Id yang ditunjuk label — yang berarti isian ber-id itu punya nama.
+    const idBerlabel = new Set(
+      tagPembuka(jalur, ['label'])
+        .map((tag) => /htmlFor=["']([^"']+)["']/.exec(tag))
+        .filter(Boolean)
+        .map((c) => c[1])
+    );
+
+    const tanpaNama = isian.filter((tag) => {
+      const id = /id=["']([^"']+)["']/.exec(tag);
+      if (id && idBerlabel.has(id[1])) return false;
+      // Bilah pencarian mobile tidak punya label di layar, jadi `aria-label`
+      // adalah jawaban yang benar di sana — bukan label tempelan yang tidak
+      // pernah terlihat siapa pun.
+      if (/aria-label=["'][^"']+["']/.test(tag)) return false;
+      return true;
+    });
+
+    assert.deepStrictEqual(
+      tanpaNama,
+      [],
+      'isian ini tidak punya nama: tidak ada label yang menunjuk id-nya dan ' +
+        'tidak ada aria-label'
+    );
+  });
+
+  it('setiap `<label>` di SearchFilter menunjuk isian yang benar-benar ada', () => {
+    // `htmlFor` yang menunjuk id yang tidak ada lebih buruk daripada tidak ada
+    // `htmlFor`: keduanya sama tidak berguna, tapi yang pertama terlihat benar
+    // saat dibaca dan membuat gerbang mana pun yang hanya menghitung
+    // keberadaan `htmlFor` lulus.
+    const jalur = path.join(AKAR_SRC_FOKUS, 'components', 'SearchFilter.tsx');
+    const idAda = new Set(
+      tagPembuka(jalur, ['input', 'select', 'textarea'])
+        .map((tag) => /\bid=["']([^"']+)["']/.exec(tag))
+        .filter(Boolean)
+        .map((c) => c[1])
+    );
+
+    const menggantung = tagPembuka(jalur, ['label'])
+      .map((tag) => /htmlFor=["']([^"']+)["']/.exec(tag))
+      .filter(Boolean)
+      .map((c) => c[1])
+      .filter((id) => !idAda.has(id));
+
+    assert.deepStrictEqual(menggantung, [], 'htmlFor menunjuk id yang tidak ada');
   });
 });
 

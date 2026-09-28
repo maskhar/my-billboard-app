@@ -13,6 +13,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // Penggantinya cincin di dalam (`ring-inset`), bukan cincin di luar seperti
 // pada formulir: isian di sini duduk rapat di dalam satu pil putih tanpa
 // batas masing-masing, dan cincin luar akan menembus tepi pil itu.
+// Label di berkas ini semuanya tanpa `htmlFor`, dan tidak satu pun isiannya
+// punya `id`. Akibatnya: label tidak bisa diklik untuk memfokuskan isiannya,
+// dan pembaca layar menyebut keenam kolom ini tanpa nama — "edit text",
+// "combo box", "edit text" — di komponen yang justru pintu masuk utama
+// seluruh situs. Bilah pencarian versi mobile tidak punya label sama sekali,
+// jadi yang dipakai di sana `aria-label`, bukan label yang ditempelkan
+// sekadar untuk memenuhi aturan.
 const KELAS_FOKUS = 'outline-none focus:ring-2 focus:ring-inset focus:ring-utero rounded-lg';
 
 const SearchFilter = () => {
@@ -52,7 +59,8 @@ const SearchFilter = () => {
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                        placeholder="Cari titik di kota / wilayah ..." 
+                        placeholder="Cari titik di kota / wilayah ..."
+                        aria-label="Cari titik billboard di kota atau wilayah"
                         className={`w-full text-sm font-semibold text-gray-700 placeholder-gray-500 bg-transparent ${KELAS_FOKUS}`}
                     />
                 </div>
@@ -76,11 +84,12 @@ const SearchFilter = () => {
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Tipe Media</label>
+                        <label htmlFor="filter-tipe-mobile" className="text-xs font-bold text-gray-500 uppercase mb-2 block">Tipe Media</label>
                         <select 
+                            id="filter-tipe-mobile"
                             value={type} 
                             onChange={(e) => setType(e.target.value)} 
-                            className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 focus:outline-none focus:border-utero"
+                            className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-utero focus:border-utero"
                         >
                             <option>Semua</option>
                             <option>Videotron</option>
@@ -90,12 +99,13 @@ const SearchFilter = () => {
                     </div>
 
                     <div>
-                        <label className="text-xs font-bold text-gray-500 uppercase mb-2 block">Mulai Tayang</label>
+                        <label htmlFor="filter-tanggal-mobile" className="text-xs font-bold text-gray-500 uppercase mb-2 block">Mulai Tayang</label>
                         <input 
+                            id="filter-tanggal-mobile"
                             type="date" 
                             value={date} 
                             onChange={(e) => setDate(e.target.value)} 
-                            className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 focus:outline-none focus:border-utero" 
+                            className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-utero focus:border-utero"
                         />
                     </div>
 
@@ -116,8 +126,9 @@ const SearchFilter = () => {
             {/* Input Lokasi */}
             <div className="flex-1 px-6 py-3 hover:bg-gray-50/50 rounded-l-full cursor-pointer transition group">
                 <div className="flex flex-col">
-                    <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><MapPin size={10} /> Lokasi</label>
+                    <label htmlFor="filter-lokasi" className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><MapPin size={10} /> Lokasi</label>
                     <input 
+                        id="filter-lokasi"
                         type="text" 
                         value={query} 
                         onChange={(e) => setQuery(e.target.value)} 
@@ -131,8 +142,9 @@ const SearchFilter = () => {
             {/* Input Tipe */}
             <div className="w-[180px] px-6 py-3 hover:bg-gray-50/50 cursor-pointer transition group">
                 <div className="flex flex-col">
-                    <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><MonitorPlay size={10} /> Tipe Media</label>
+                    <label htmlFor="filter-tipe" className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><MonitorPlay size={10} /> Tipe Media</label>
                     <select 
+                        id="filter-tipe"
                         value={type} 
                         onChange={(e) => setType(e.target.value)} 
                         className={`text-sm text-gray-800 font-bold bg-transparent w-full -ml-1 cursor-pointer truncate ${KELAS_FOKUS}`}
@@ -148,8 +160,8 @@ const SearchFilter = () => {
             {/* Input Tanggal */}
             <div className="w-[180px] px-6 py-3 hover:bg-gray-50/50 cursor-pointer transition group">
                 <div className="flex flex-col">
-                    <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><Calendar size={10} /> Mulai Tayang</label>
-                    <input type="text" placeholder="Kapan?" className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`} onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} onChange={(e) => setDate(e.target.value)} />
+                    <label htmlFor="filter-tanggal" className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><Calendar size={10} /> Mulai Tayang</label>
+                    <input id="filter-tanggal" type="text" placeholder="Kapan?" className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`} onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} onChange={(e) => setDate(e.target.value)} />
                 </div>
             </div>
 

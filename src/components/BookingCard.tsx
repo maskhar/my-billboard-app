@@ -729,7 +729,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                     ) : (
                         <div className='space-y-4'>
                             <label className='text-xs font-bold text-gray-500 uppercase'>Link Google Drive / Canva</label>
-                            <input value={linkInput} onChange={e=>setLinkInput(e.target.value)} className='w-full border rounded-lg p-3 text-sm focus:border-blue-500 focus:outline-none' placeholder='https://drive.google.com/...'/>
+                            <input value={linkInput} onChange={e=>setLinkInput(e.target.value)} className='w-full border rounded-lg p-3 text-sm outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500' placeholder='https://drive.google.com/...'/>
                             <button onClick={handleLinkSubmit} disabled={loading} className='w-full bg-blue-600 text-white font-bold py-3 rounded-lg shadow-lg hover:bg-blue-700 transition'>
                                 {loading ? 'Menyimpan...' : 'Kirim Link'}
                             </button>
@@ -772,7 +772,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                             </>
                         )}
                     </div>
-                    <textarea name="reason" placeholder="Jelaskan alasan..." className="w-full border rounded-lg p-3 text-sm mt-1 h-24 focus:outline-none focus:border-utero" required></textarea>
+                    <textarea name="reason" placeholder="Jelaskan alasan..." className="w-full border rounded-lg p-3 text-sm mt-1 h-24 outline-none focus:ring-2 focus:ring-utero focus:border-utero" required></textarea>
                     <button disabled={loading} type="submit" className="w-full bg-utero text-white py-3 rounded-lg font-bold hover:bg-red-700 transition">{loading ? 'Mengirim...' : 'Ajukan Pembatalan'}</button>
                 </form>
             </div>

@@ -12,6 +12,13 @@ import { useState } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 
+// Kedua isian di bawah memakai `outline-none focus:ring-2 focus:ring-utero`,
+// bukan `focus:outline-none focus:border-utero` seperti sebelumnya. Border 1px
+// yang berubah dari abu-abu `gray-600` menjadi merah `#ce181e` di atas latar
+// `gray-900` adalah perubahan yang hampir tidak terlihat — dua warna gelap
+// berdampingan pada garis setipis itu. Penanda fokus bawaan peramban sudah
+// dibuang `focus:outline-none`, jadi pengguna papan tombol tidak punya cara
+// tahu kolom mana yang aktif saat mengetik sandi administratornya.
 export default function AdminLoginForm() {
   const router = useRouter();
   const [error, setError] = useState('');
@@ -66,7 +73,7 @@ export default function AdminLoginForm() {
           type="email"
           name="email"
           autoComplete="username"
-          className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-utero transition"
+          className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-600 outline-none focus:ring-2 focus:ring-utero focus:border-utero transition"
           placeholder="admin@utero.com"
           required
         />
@@ -81,7 +88,7 @@ export default function AdminLoginForm() {
           type="password"
           name="password"
           autoComplete="current-password"
-          className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-600 focus:outline-none focus:border-utero transition"
+          className="w-full bg-gray-900 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-600 outline-none focus:ring-2 focus:ring-utero focus:border-utero transition"
           placeholder="••••••••"
           required
         />

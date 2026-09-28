@@ -393,7 +393,7 @@ export default function ChatWidget() {
                 <div ref={messagesEndRef} />
               </div>
               <form onSubmit={handleSend} className="p-3 bg-white border-t flex gap-2">
-                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ketik pesan..." className="flex-1 border bg-gray-50 rounded-full px-4 py-2.5 text-xs focus:outline-none focus:border-utero"/>
+                <input value={input} onChange={(e) => setInput(e.target.value)} placeholder="Ketik pesan..." className="flex-1 border bg-gray-50 rounded-full px-4 py-2.5 text-xs outline-none focus:ring-2 focus:ring-utero focus:border-utero"/>
                 <button disabled={loading} className="bg-utero p-2.5 rounded-full text-white hover:scale-105 transition shadow-md"><Send size={16}/></button>
               </form>
             </div>
