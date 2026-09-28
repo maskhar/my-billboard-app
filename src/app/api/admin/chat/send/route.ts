@@ -58,11 +58,18 @@ export async function POST(req: Request) {
             }
         }),
         // B. Update Sesi (Status & Waktu Terakhir)
+        //
+        // `isOnline: true` DIHAPUS dari sini. Komentarnya dulu berbunyi "anggap
+        // user online lagi", dan "anggap" adalah kata yang tepat: itu dugaan,
+        // bukan pengukuran. Kehadiran sekarang diukur dari koneksi socket yang
+        // sesungguhnya oleh `chat-server/kehadiran.js` — satu-satunya proses
+        // yang memegang socket tamu dan karena itu satu-satunya yang tahu
+        // jawabannya. Menulis `true` di sini akan menimpa pengukuran itu dengan
+        // dugaan, dan tanda hijaunya tidak punya jalan untuk padam.
         prisma.chatSession.update({
             where: { id: sessionId },
             data: {
                 status: newStatus,
-                isOnline: true, // Anggap user online lagi
                 updatedAt: new Date() // Biar naik ke atas di list admin
             }
         })

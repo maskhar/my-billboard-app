@@ -6,6 +6,7 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const { PrismaClient } = require("@prisma/client");
 const { rateLimit } = require("./rate-limit");
+const { buatPelacakKehadiran, ROOM_PETUGAS } = require("./kehadiran");
 
 // [SECURITY] Daftar origin yang boleh mengakses chat server.
 // Diisi lewat env CHAT_CORS_ORIGINS (dipisah koma). Fallback aman untuk dev lokal.
@@ -242,6 +243,26 @@ function tolakanBalasanAI(sessionId) {
   return null;
 }
 
+// ---------------------------------------------------------------------------
+// Kehadiran tamu: diukur dari socket, bukan dikira-kira
+// ---------------------------------------------------------------------------
+//
+// Proses inilah satu-satunya yang memegang socket tamu, jadi ia satu-satunya
+// yang bisa menjawab "orangnya masih di sana?". Hasilnya ditulis ke
+// `ChatSession.isOnline` supaya aplikasi Next — yang tidak punya socket apa pun —
+// bisa membacanya, dan disiarkan ke room agar panel petugas yang sedang terbuka
+// berubah tanpa perlu memuat ulang halaman.
+const kehadiran = buatPelacakKehadiran({
+  prisma,
+  onUbah: ({ sessionId, isOnline }) => {
+    // Dua tujuan: room percakapannya (petugas yang sedang membukanya) dan room
+    // petugas (daftar kotak masuk, yang tidak ikut room percakapan mana pun
+    // selain yang sedang terbuka).
+    io.to(sessionId).to(ROOM_PETUGAS).emit("presenceChanged", { sessionId, isOnline });
+    console.log(`👤 Kehadiran sesi berubah (online=${isOnline})`);
+  },
+});
+
 // Apakah identitas socket berhak atas room/sesi ini?
 function canAccessSession(identity, sessionId) {
   if (!identity || !sessionId) return false;
@@ -415,6 +436,25 @@ io.on("connection", (socket) => {
   const identity = socket.data.identity;
   console.log(`✅ A ${identity.type} connected:`, socket.id);
 
+  // Kehadiran hanya dihitung untuk TAMU. Petugas yang membuka kotak masuk juga
+  // masuk ke room, dan menghitungnya di sini akan membuat setiap percakapan
+  // tampak "online" justru ketika yang hadir adalah petugasnya sendiri.
+  //
+  // `sessionId` bisa sudah terisi dari `guestToken` di handshake (tamu yang
+  // kembali), atau baru terisi lewat `claimGuestSession` di bawah (tamu baru).
+  // Yang dicatat di sini hanya kasus pertama.
+  if (identity.type === "guest" && identity.sessionId) {
+    kehadiran.tandaiHadir(identity.sessionId);
+  }
+
+  // Petugas ikut satu room bersama supaya perubahan kehadiran sesi MANA PUN
+  // sampai ke daftar kotak masuknya. Room ini hanya menerima siaran kehadiran —
+  // tidak ada isi percakapan yang lewat di sini — dan hanya socket yang lolos
+  // verifikasi handshake sebagai staf yang dimasukkan.
+  if (identity.type === "staff") {
+    socket.join(ROOM_PETUGAS);
+  }
+
   // Tamu yang baru mendaftar lewat /api/chat/start bisa menukar guestToken
   // tanpa harus menyambung ulang. sessionId tetap berasal dari token, bukan client.
   socket.on("claimGuestSession", (guestToken) => {
@@ -424,7 +464,18 @@ io.on("connection", (socket) => {
       socket.emit("authError", { event: "claimGuestSession", message: "Token tamu tidak valid." });
       return;
     }
+
+    // Satu socket tidak boleh terhitung dua kali, dan tidak boleh meninggalkan
+    // hitungan sesi lamanya menggantung: token yang menunjuk sesi lain berarti
+    // socket ini berpindah, bukan bertambah.
+    if (identity.sessionId === payload.sid) {
+      socket.emit("guestSessionClaimed", { sessionId: payload.sid });
+      return;
+    }
+    if (identity.sessionId) kehadiran.tandaiPergi(identity.sessionId);
+
     identity.sessionId = payload.sid;
+    kehadiran.tandaiHadir(payload.sid);
     socket.emit("guestSessionClaimed", { sessionId: payload.sid });
   });
 
@@ -503,9 +554,21 @@ io.on("connection", (socket) => {
 
   socket.on("disconnect", () => {
     console.log("❌ User disconnected:", socket.id);
+    if (identity.type === "guest" && identity.sessionId) {
+      kehadiran.tandaiPergi(identity.sessionId);
+    }
   });
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, async () => {
   console.log(`🚀 Chat server listening on *:${PORT}`);
+
+  // Kehadiran yang tertinggal dari proses sebelumnya dibersihkan sekali di sini.
+  // Tanpa ini, satu restart meninggalkan setiap sesi yang saat itu terhubung
+  // bertanda `true` selamanya: `disconnect`-nya tidak pernah sampai ke kode mana
+  // pun, dan tanda hijau yang salah itu tidak punya jalan untuk padam.
+  const dibereskan = await kehadiran.setelUlangKehadiran();
+  if (dibereskan > 0) {
+    console.log(`🧹 ${dibereskan} sesi yang tertinggal "online" disetel ulang.`);
+  }
 });

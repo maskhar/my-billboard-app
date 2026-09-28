@@ -28,9 +28,16 @@ export async function POST(req: Request) {
     // akan pernah datang, dan pesan penutup tanpa penutupan sesi membuat
     // percakapan tampak selesai padahal masih terbuka di panel admin.
     await prisma.$transaction(async (tx) => {
+        // `isOnline: false` DIHAPUS dari sini. Petugas yang menutup percakapan
+        // tidak memberi tahu apa pun tentang tamunya: orang itu bisa saja masih
+        // menatap widget-nya, dan menandainya pergi membuat petugas berikutnya
+        // yang membuka percakapan ini melihat keterangan yang salah. Kehadiran
+        // diukur dari koneksi socket oleh `chat-server/kehadiran.js`; status
+        // percakapan dan kehadiran tamu adalah dua hal berbeda, dan hanya yang
+        // pertama yang diputuskan di sini.
         await tx.chatSession.update({
             where: { id: sessionId },
-            data: { status: 'CLOSED', isOnline: false }
+            data: { status: 'CLOSED' }
         });
 
         // PENGHALUSAN BAHASA DI SINI:

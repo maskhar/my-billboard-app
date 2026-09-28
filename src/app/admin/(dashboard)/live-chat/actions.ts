@@ -42,6 +42,10 @@ const PILIH_SESI = {
   guestEmail: true,
   guestPhone: true,
   status: true,
+  // Kehadiran tamu, diukur dari koneksi socket oleh `chat-server/kehadiran.js`.
+  // Nilai ini adalah potret saat halaman dirender; perubahan setelahnya tiba
+  // lewat peristiwa socket `presenceChanged` di kotak masuk.
+  isOnline: true,
   createdAt: true,
 } as const;
 

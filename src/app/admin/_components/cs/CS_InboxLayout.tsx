@@ -26,6 +26,32 @@ const BadgeStatus = ({ status }: { status?: string }) => {
     );
 };
 
+// Kehadiran tamu, sekarang benar-benar dibaca.
+//
+// Badge hijau "Online" di panel ini dulu DITULIS TETAP di kode: setiap
+// percakapan, selamanya, tanpa membaca apa pun. Kolom `ChatSession.isOnline`
+// memang ada tapi tidak pernah mengikuti koneksi socket, jadi sekadar
+// membacanya pun belum cukup. `chat-server/kehadiran.js` kini mengukurnya dari
+// socket yang sesungguhnya, dan inilah yang menampilkannya.
+//
+// Kata "Sedang online" dan "Sedang tidak online" dipilih apa adanya. Petugas
+// memakai tanda ini untuk memutuskan antara membalas di chat atau mengirim
+// email, jadi yang perlu ia tahu bukan lencana berwarna, tapi apakah orangnya
+// akan membaca jawabannya sekarang.
+const BadgeKehadiran = ({ isOnline }: { isOnline: boolean }) => (
+    <span
+        className={`inline-flex items-center gap-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full whitespace-nowrap ${
+            isOnline ? 'bg-green-100 text-green-800' : 'bg-gray-100 text-gray-600'
+        }`}
+    >
+        <span
+            aria-hidden="true"
+            className={`h-1.5 w-1.5 rounded-full ${isOnline ? 'bg-green-500' : 'bg-gray-400'}`}
+        />
+        {isOnline ? 'Sedang online' : 'Sedang tidak online'}
+    </span>
+);
+
 // [DIPERBARUI] ChatList sekarang menerima data sesi
 //
 // Kotak pencarian di sini dulu tidak punya `value` maupun `onChange`: sebuah
@@ -81,7 +107,16 @@ const ChatList = ({
                         {/* `<span>`, bukan `<p>`: paragraf tidak sah di dalam
                             tombol, dan peramban akan memindahkannya keluar. */}
                         <span className="flex items-start justify-between gap-2">
-                            <span className="font-bold text-sm text-gray-900 truncate">{session.guestName}</span>
+                            <span className="flex items-center gap-1.5 min-w-0">
+                                {/* Titik kehadiran, dengan namanya terbaca pembaca
+                                    layar — warna saja bukan keterangan. */}
+                                <span
+                                    className={`h-2 w-2 shrink-0 rounded-full ${session.isOnline ? 'bg-green-500' : 'bg-gray-300'}`}
+                                    role="img"
+                                    aria-label={session.isOnline ? 'Sedang online' : 'Sedang tidak online'}
+                                />
+                                <span className="font-bold text-sm text-gray-900 truncate">{session.guestName}</span>
+                            </span>
                             <BadgeStatus status={session.status} />
                         </span>
                         <span className="block text-xs text-gray-600 truncate mt-1">{session.messages?.[0]?.message || 'Tidak ada pesan'}</span>
@@ -168,16 +203,13 @@ const ChatRoom = ({
             <div className="p-4 border-b border-gray-200 bg-white flex justify-between items-center sticky top-0 z-10">
                 <div>
                     <h3 className="font-bold text-gray-800">{session.guestName}</h3>
-                    {/* Badge hijau "Online" di sini DITULIS TETAP di kode: setiap
-                        percakapan, selamanya, tanpa membaca apa pun. Kolom
-                        `ChatSession.isOnline` memang ada, tapi hanya ditulis di
-                        dua tempat (dibuat `true`, lalu `false` saat ditutup) dan
-                        tidak pernah mengikuti koneksi socket yang sesungguhnya —
-                        jadi nilainya juga bukan kehadiran. CS melihat "Online",
-                        menyangka tamunya sedang menatap layar, dan menulis
-                        jawaban panjang untuk orang yang sudah pergi sejak pagi.
-                        Diganti status percakapan yang benar-benar dicatat. */}
-                    <BadgeStatus status={session.status} />
+                    {/* Dua keterangan, karena keduanya menjawab hal berbeda:
+                        status percakapan (sudah dipegang siapa) dan kehadiran
+                        tamu (jawabannya akan dibaca sekarang atau tidak). */}
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5">
+                        <BadgeStatus status={session.status} />
+                        <BadgeKehadiran isOnline={session.isOnline} />
+                    </div>
                 </div>
                 {/* Tombol ikon `SlidersHorizontal` DIBUANG: tidak punya
                     `onClick`, tidak punya nama yang terbaca, dan tidak ada satu
@@ -290,6 +322,10 @@ const VisitorDetails = ({ session }: { session: SesiChat | null }) => {
                         <dd><BadgeStatus status={session.status} /></dd>
                     </div>
                     <div className="flex gap-2">
+                        <dt className="font-semibold w-24 shrink-0">Kehadiran</dt>
+                        <dd><BadgeKehadiran isOnline={session.isOnline} /></dd>
+                    </div>
+                    <div className="flex gap-2">
                         <dt className="font-semibold w-24 shrink-0">Mulai</dt>
                         <dd>
                             {session.createdAt
@@ -317,6 +353,25 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [galatChat, setGalatChat] = useState('');
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
+
+  // Kehadiran yang datang lewat socket, menimpa potret dari server.
+  //
+  // Disimpan terpisah dari `sessions` karena prop itu milik server: ia diganti
+  // utuh setiap kali halaman dirender ulang, dan menulis ke dalamnya berarti
+  // perubahan yang tiba lewat socket lenyap pada `router.refresh()` berikutnya.
+  // Peta ini hanya memuat sesi yang kehadirannya BERUBAH sejak halaman dimuat,
+  // jadi sesi yang tidak ada di sini memakai nilai dari server apa adanya.
+  const [kehadiran, setKehadiran] = useState<Record<string, boolean>>({});
+
+  // Id percakapan yang sedang dibuka, dibaca DARI DALAM listener socket.
+  //
+  // Efek koneksi di bawah dulu bergantung pada `selectedSession`, jadi setiap
+  // kali petugas berpindah percakapan seluruh socket diputus lalu dibangun
+  // ulang — dan peristiwa yang tiba dalam jeda itu hilang. Yang sebenarnya
+  // dibutuhkan listener hanyalah id yang sedang terbuka, bukan koneksi baru;
+  // ref inilah yang menyediakannya, sehingga socketnya dibuat sekali saja.
+  const idTerpilihRef = useRef<string | null>(null);
+  idTerpilihRef.current = selectedSession?.id ?? null;
 
   // Efek untuk koneksi Socket.IO
   useEffect(() => {
@@ -357,7 +412,7 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
       if (masuk === null || typeof masuk !== 'object') return;
       const m = masuk as Partial<PesanChat>;
       if (typeof m.id !== 'string' || typeof m.message !== 'string') return;
-      if (m.sessionId !== selectedSession?.id) return;
+      if (m.sessionId !== idTerpilihRef.current) return;
 
       setMessages((sebelumnya) => [
         ...sebelumnya,
@@ -372,10 +427,38 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
       ]);
     });
 
+    // Kehadiran tamu, disiarkan chat-server saat kolomnya BENAR-BENAR berubah.
+    //
+    // Tanpa listener ini titik hijau di daftar hanya potret saat halaman dimuat,
+    // dan potret yang membeku adalah persis cacat yang sedang dibereskan —
+    // petugas menatap tanda hijau milik tamu yang sudah pergi setengah jam lalu.
+    //
+    // Bentuknya diperiksa sebelum dipakai, alasannya sama seperti `newMessage`:
+    // ini jalur di luar pemeriksaan tipe apa pun. `isOnline` yang bukan boolean
+    // akan dirender sebagai warna hijau untuk nilai apa pun yang truthy.
+    socket.on('presenceChanged', (masuk: unknown) => {
+      if (masuk === null || typeof masuk !== 'object') return;
+      const p = masuk as { sessionId?: unknown; isOnline?: unknown };
+      if (typeof p.sessionId !== 'string' || typeof p.isOnline !== 'boolean') return;
+
+      const sessionId = p.sessionId;
+      const isOnline = p.isOnline;
+      setKehadiran((sebelumnya) =>
+        sebelumnya[sessionId] === isOnline
+          ? sebelumnya
+          : { ...sebelumnya, [sessionId]: isOnline }
+      );
+    });
+
     return () => {
       socket.disconnect();
     };
-  }, [selectedSession]);
+    // Sengaja dibangun SEKALI, dan daftar dependensinya memang kosong: yang
+    // dipakai di dalam hanyalah penyetel state (stabil) dan `idTerpilihRef`
+    // (ref, juga stabil). Percakapan yang terbuka dibaca lewat ref itu, bukan
+    // lewat closure — itulah yang membuat berpindah percakapan tidak lagi
+    // memutus koneksinya.
+  }, []);
 
   const handleSelectSession = async (session: SesiChat) => {
     // `socketRef.current` bisa `null`: efek koneksi keluar lebih awal saat
@@ -457,6 +540,24 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
     }
   };
 
+  // Kehadiran terbaru ditempelkan SATU KALI di sini, bukan di tiga tempat
+  // render.
+  //
+  // Titik di daftar, lencana di kepala percakapan, dan baris di panel pengunjung
+  // semuanya membaca `session.isOnline`. Kalau masing-masing yang menggabungkan
+  // sendiri, ketiganya bisa menyimpang — dan `selectedSession` khususnya adalah
+  // salinan state yang dibuat saat percakapan dipilih, jadi ia tidak akan pernah
+  // ikut berubah tanpa penggabungan ini.
+  const denganKehadiran = (sesi: SesiChat): SesiChat => {
+    const terbaru = kehadiran[sesi.id];
+    return terbaru === undefined || terbaru === sesi.isOnline
+      ? sesi
+      : { ...sesi, isOnline: terbaru };
+  };
+
+  const sesiTampil = sessions.map(denganKehadiran);
+  const sesiTerpilihTampil = selectedSession ? denganKehadiran(selectedSession) : null;
+
   return (
     <div className="grid grid-cols-12 h-screen w-full overflow-hidden">
         {/* Judul "Chat tidak tersambung." yang DITULIS TETAP di sini dibuang:
@@ -471,15 +572,15 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
             </div>
         )}
         <div className="col-span-12 md:col-span-3 h-screen overflow-y-auto">
-            <ChatList 
-                sessions={sessions} 
+            <ChatList
+                sessions={sesiTampil}
                 onSelectSession={handleSelectSession}
                 selectedSessionId={selectedSession?.id}
             />
         </div>
         <div className="col-span-12 md:col-span-6 h-screen overflow-y-auto">
-            <ChatRoom 
-                session={selectedSession} 
+            <ChatRoom
+                session={sesiTerpilihTampil}
                 messages={messages}
                 isLoading={isLoadingMessages}
                 adaRiwayatLebihLama={adaRiwayatLebihLama}
@@ -487,7 +588,7 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
             />
         </div>
         <div className="hidden md:block md:col-span-3 h-screen overflow-y-auto">
-            <VisitorDetails session={selectedSession} />
+            <VisitorDetails session={sesiTerpilihTampil} />
         </div>
     </div>
   );

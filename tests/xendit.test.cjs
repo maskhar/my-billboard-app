@@ -11421,11 +11421,27 @@ describe('kotak masuk CS membatasi kueri dan memilih kolomnya', () => {
     const q = dicatat.find((d) => d.jenis === 'findMany').args;
     assert.ok(q.select, 'kolomnya tidak dipilih — seluruh baris menyeberang');
     assert.strictEqual(q.include, undefined, '`include` mengambil semua kolom');
-    // Yang dipilih tepat kolom yang dipakai layar. `isOnline` dan `updatedAt`
-    // sengaja TIDAK ada: keduanya tidak dibaca di mana pun di kotak masuk.
+    // Yang dipilih tepat kolom yang dipakai layar. `updatedAt` sengaja TIDAK
+    // ada: ia hanya dipakai untuk mengurutkan, tidak dibaca di kotak masuk.
+    //
+    // `isOnline` ditambahkan dengan sadar. Ia dulu memang tidak dibaca — nilainya
+    // pun tidak pernah mengikuti koneksi socket, jadi memilihnya berarti
+    // menyeberangkan angka yang salah. Sejak `chat-server/kehadiran.js`
+    // mengukurnya dari socket yang sesungguhnya, kolom ini yang memberi tahu
+    // petugas apakah jawabannya akan dibaca sekarang atau perlu dikirim lewat
+    // email.
     assert.deepStrictEqual(
       Object.keys(q.select).sort(),
-      ['createdAt', 'guestEmail', 'guestName', 'guestPhone', 'id', 'messages', 'status']
+      [
+        'createdAt',
+        'guestEmail',
+        'guestName',
+        'guestPhone',
+        'id',
+        'isOnline',
+        'messages',
+        'status',
+      ]
     );
     assert.strictEqual(q.select.messages.take, 1, 'pratinjau harus satu pesan');
     assert.ok(q.select.messages.select, 'kolom pesan pratinjau juga harus dipilih');
@@ -11749,5 +11765,455 @@ describe('pemakai nama situs berhenti menulisnya di kode', () => {
     // Dibaca berbarengan dengan agregat lain, bukan menambah satu perjalanan
     // bolak-balik ke database secara berurutan.
     assert.match(kode, /identitasPromise/);
+  });
+});
+
+// ============================================================================
+// Kehadiran tamu benar-benar diukur dari koneksi socket
+// ============================================================================
+//
+// Kolom `ChatSession.isOnline` ada sejak awal dengan nilai bawaan `true`, tapi
+// tidak pernah punya pengukur. Dua penulisnya adalah dugaan: petugas menutup
+// percakapan (`close/route.ts`) dan petugas mengirim balasan (`send/route.ts`,
+// dengan komentar "anggap user online lagi"). Akibatnya tamu yang menutup
+// tab-nya pagi hari tetap bertanda hijau selamanya, dan petugas menulis jawaban
+// panjang untuk kursi yang kosong alih-alih mengirim email.
+describe('pelacak kehadiran chat-server', () => {
+  const {
+    buatPelacakKehadiran,
+    TENGGANG_OFFLINE_MS,
+    ROOM_PETUGAS,
+  } = require('../chat-server/kehadiran.js');
+
+  // Prisma tiruan yang HANYA mencatat, plus penjadwal yang dijalankan manual.
+  // Tanpa penjadwal yang bisa dikendalikan, setiap test tenggang harus menunggu
+  // 15 detik nyata — dan test yang lambat adalah test yang dimatikan orang.
+  function buatUji({ melempar = false } = {}) {
+    const tulisan = [];
+    const perubahan = [];
+    const galat = [];
+    /** Timer yang menunggu: { id, fn }. */
+    const timer = [];
+    let idBerikutnya = 1;
+
+    const pelacak = buatPelacakKehadiran({
+      prisma: {
+        chatSession: {
+          updateMany: async (args) => {
+            tulisan.push(args);
+            if (melempar) throw new Error('database mati');
+            // Setiap penulisan dianggap menyentuh satu baris, kecuali test
+            // menimpanya lewat `hasilBerikutnya`.
+            const count = uji.hasilBerikutnya.length > 0 ? uji.hasilBerikutnya.shift() : 1;
+            return { count };
+          },
+        },
+      },
+      onUbah: (ubah) => perubahan.push(ubah),
+      jadwalkan: (fn, ms) => {
+        const id = idBerikutnya++;
+        timer.push({ id, fn, ms });
+        return id;
+      },
+      batalkan: (id) => {
+        const posisi = timer.findIndex((t) => t.id === id);
+        if (posisi !== -1) timer.splice(posisi, 1);
+      },
+      catatGalat: (pesan, e) => galat.push({ pesan, e }),
+    });
+
+    const uji = {
+      pelacak,
+      tulisan,
+      perubahan,
+      galat,
+      timer,
+      hasilBerikutnya: [],
+      /** Jalankan semua timer yang menunggu, seperti waktu yang berlalu. */
+      async majuWaktu() {
+        const menunggu = timer.splice(0, timer.length);
+        for (const t of menunggu) t.fn();
+        // Penulisannya `void tulis(...)` — tidak di-`await` oleh pemanggilnya,
+        // jadi microtask-nya perlu diberi kesempatan selesai.
+        await new Promise((r) => setImmediate(r));
+      },
+      /** Beri kesempatan `void tulis(...)` selesai tanpa menjalankan timer. */
+      async tunggu() {
+        await new Promise((r) => setImmediate(r));
+      },
+    };
+    return uji;
+  }
+
+  it('socket tamu pertama menandai hadir, dan hanya sekali', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+
+    assert.strictEqual(uji.tulisan.length, 1);
+    assert.deepStrictEqual(uji.tulisan[0], {
+      where: { id: 'sesi-1', isOnline: false },
+      data: { isOnline: true },
+    });
+    assert.deepStrictEqual(uji.perubahan, [{ sessionId: 'sesi-1', isOnline: true }]);
+
+    // Tab kedua tamu yang sama: tidak ada penulisan baru. Kehadiran adalah
+    // "ada atau tidak", bukan hitungan tab.
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+    assert.strictEqual(uji.tulisan.length, 1);
+    assert.strictEqual(uji.pelacak.jumlahSocketAktif('sesi-1'), 2);
+  });
+
+  it('`where` memakai nilai kebalikannya, sehingga penulisan berulang tidak menyentuh database', async () => {
+    const uji = buatUji();
+    // `count: 0` = barisnya sudah bernilai sama, jadi tidak ada yang berubah.
+    uji.hasilBerikutnya.push(0);
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+
+    assert.strictEqual(uji.tulisan.length, 1);
+    // Syarat `isOnline: !isOnline` itulah yang membuat penulisan ulang menjadi
+    // tanpa efek — dan `count` menjadi jawaban "apakah ada yang berubah".
+    assert.strictEqual(uji.tulisan[0].where.isOnline, false);
+    // Tidak ada yang berubah, jadi tidak ada siaran. Tanpa gerbang ini setiap
+    // penyambungan ulang socket mengirim satu siaran ke seluruh petugas.
+    assert.deepStrictEqual(uji.perubahan, []);
+  });
+
+  it('satu dari dua socket tertutup tidak menandai pergi', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+    uji.tulisan.length = 0;
+
+    uji.pelacak.tandaiPergi('sesi-1');
+    await uji.majuWaktu();
+
+    assert.strictEqual(uji.tulisan.length, 0);
+    assert.strictEqual(uji.pelacak.jumlahSocketAktif('sesi-1'), 1);
+    // Tidak ada timer yang menunggu: masih ada tab lain yang terbuka.
+    assert.strictEqual(uji.timer.length, 0);
+  });
+
+  it('socket terakhir tertutup TIDAK langsung menulis, hanya setelah tenggang lewat', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+    uji.tulisan.length = 0;
+    uji.perubahan.length = 0;
+
+    uji.pelacak.tandaiPergi('sesi-1');
+    await uji.tunggu();
+
+    // Socket.IO memutus lalu menyambung sendiri (transport naik dari polling ke
+    // websocket, sinyal ponsel berkedip). Menulis langsung berarti kolomnya
+    // berkedip beberapa kali per menit untuk tamu yang tidak beranjak.
+    assert.strictEqual(uji.tulisan.length, 0);
+    assert.strictEqual(uji.timer.length, 1);
+    assert.strictEqual(uji.timer[0].ms, TENGGANG_OFFLINE_MS);
+
+    await uji.majuWaktu();
+    assert.strictEqual(uji.tulisan.length, 1);
+    assert.deepStrictEqual(uji.tulisan[0], {
+      where: { id: 'sesi-1', isOnline: true },
+      data: { isOnline: false },
+    });
+    assert.deepStrictEqual(uji.perubahan, [{ sessionId: 'sesi-1', isOnline: false }]);
+  });
+
+  it('menyambung ulang sebelum tenggang lewat membatalkan timernya, tanpa penulisan apa pun', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+    uji.tulisan.length = 0;
+
+    uji.pelacak.tandaiPergi('sesi-1');
+    assert.strictEqual(uji.timer.length, 1);
+
+    // Tamu kembali. Timernya dibatalkan, dan karena hitungannya naik dari 0,
+    // `tulis(true)` dipanggil — tapi barisnya masih `true`, jadi `count` nol di
+    // database nyata. Yang penting di sini: tidak ada penulisan `false`.
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.majuWaktu();
+
+    assert.strictEqual(uji.timer.length, 0);
+    assert.strictEqual(
+      uji.tulisan.filter((t) => t.data.isOnline === false).length,
+      0
+    );
+  });
+
+  it('timer yang sudah berjalan tetap memeriksa ulang: tamu yang sudah kembali tidak dinyatakan pergi', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    await uji.tunggu();
+    uji.pelacak.tandaiPergi('sesi-1');
+
+    const timerTertunda = uji.timer.splice(0, 1)[0];
+    // Sambungan baru datang setelah timer dijadwalkan tapi sebelum ia berjalan —
+    // di produksi itu berarti `clearTimeout` datang terlambat sepersekian detik.
+    uji.pelacak.tandaiHadir('sesi-1');
+    uji.tulisan.length = 0;
+
+    timerTertunda.fn();
+    await uji.tunggu();
+
+    assert.strictEqual(uji.tulisan.length, 0);
+  });
+
+  it('sessionId yang bukan teks atau kosong diabaikan, tidak menulis apa pun', async () => {
+    const uji = buatUji();
+    for (const buruk of [undefined, null, '', 0, {}, []]) {
+      uji.pelacak.tandaiHadir(buruk);
+      uji.pelacak.tandaiPergi(buruk);
+    }
+    await uji.majuWaktu();
+    assert.strictEqual(uji.tulisan.length, 0);
+  });
+
+  it('database yang bermasalah dicatat, bukan dilempar', async () => {
+    const uji = buatUji({ melempar: true });
+
+    // Kehadiran adalah hiasan yang berguna, bukan syarat percakapan berjalan.
+    // Penulisannya `void tulis(...)` di dalam penangan `connection` dan
+    // `disconnect`; Promise yang ditolak di sana akan menjadi
+    // unhandledRejection dan menjatuhkan seluruh chat-server.
+    await assert.doesNotReject(async () => {
+      uji.pelacak.tandaiHadir('sesi-1');
+      await uji.tunggu();
+    });
+
+    assert.strictEqual(uji.galat.length, 1);
+    assert.match(uji.galat[0].pesan, /\[kehadiran\]/);
+    assert.deepStrictEqual(uji.perubahan, []);
+  });
+
+  it('`setelUlangKehadiran` memadamkan seluruh kehadiran yang tertinggal', async () => {
+    const uji = buatUji();
+    uji.hasilBerikutnya.push(7);
+    const jumlah = await uji.pelacak.setelUlangKehadiran();
+
+    // Satu restart — atau satu crash — meninggalkan setiap sesi yang saat itu
+    // terhubung bertanda `true` selamanya: `disconnect`-nya tidak pernah sampai
+    // ke kode mana pun. Tanpa sapuan ini tanda hijau yang salah tidak punya
+    // jalan untuk mati.
+    assert.deepStrictEqual(uji.tulisan, [
+      { where: { isOnline: true }, data: { isOnline: false } },
+    ]);
+    assert.strictEqual(jumlah, 7);
+  });
+
+  it('`setelUlangKehadiran` yang gagal mengembalikan 0, tidak menghalangi server naik', async () => {
+    const uji = buatUji({ melempar: true });
+    const jumlah = await uji.pelacak.setelUlangKehadiran();
+    assert.strictEqual(jumlah, 0);
+    assert.strictEqual(uji.galat.length, 1);
+  });
+
+  it('`hentikanSemua` membuang timer yang menunggu', async () => {
+    const uji = buatUji();
+    uji.pelacak.tandaiHadir('sesi-1');
+    uji.pelacak.tandaiHadir('sesi-2');
+    await uji.tunggu();
+    uji.pelacak.tandaiPergi('sesi-1');
+    uji.pelacak.tandaiPergi('sesi-2');
+    assert.strictEqual(uji.timer.length, 2);
+
+    uji.pelacak.hentikanSemua();
+    assert.strictEqual(uji.timer.length, 0);
+    assert.strictEqual(uji.pelacak.jumlahSocketAktif('sesi-1'), 0);
+  });
+
+  it('room petugas punya nama yang tidak bisa bentrok dengan id sesi', () => {
+    // Siaran dikirim ke `io.to(sessionId).to(ROOM_PETUGAS)`. Room di Socket.IO
+    // beralamat teks, dan setiap socket otomatis berada di room bernama
+    // `socket.id`-nya sendiri — jadi nama room petugas harus mustahil sama
+    // dengan id sesi (cuid) atau id socket.
+    assert.strictEqual(ROOM_PETUGAS, 'staf:kehadiran');
+    assert.match(ROOM_PETUGAS, /:/);
+  });
+});
+
+// ============================================================================
+// Pemasangan kehadiran di chat-server dan di sisi Next.js
+// ============================================================================
+//
+// `chat-server/index.js` tidak bisa di-`require`: ia memanggil `server.listen`
+// dan `new PrismaClient()` saat dimuat. Jadi pemasangannya diperiksa dari
+// sumbernya — yang tetap menangkap kesalahan yang paling mungkin terjadi di
+// sini, yaitu memanggilnya pada socket yang salah.
+describe('pemasangan kehadiran', () => {
+  function kodeSajaKehadiran(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*|\/\*)/.test(baris))
+      .join('\n');
+  }
+
+  const JALUR_CHAT_SERVER = path.join(__dirname, '..', 'chat-server', 'index.js');
+  const JALUR_RUTE_KIRIM = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'api',
+    'admin',
+    'chat',
+    'send',
+    'route.ts'
+  );
+  const JALUR_RUTE_TUTUP = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'api',
+    'admin',
+    'chat',
+    'close',
+    'route.ts'
+  );
+  const JALUR_KOTAK_MASUK = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'admin',
+    '_components',
+    'cs',
+    'CS_InboxLayout.tsx'
+  );
+  const JALUR_AKSI_CHAT = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'admin',
+    '(dashboard)',
+    'live-chat',
+    'actions.ts'
+  );
+
+  it('kehadiran hanya dihitung untuk tamu, bukan untuk petugas', () => {
+    const kode = kodeSajaKehadiran(JALUR_CHAT_SERVER);
+
+    // Petugas yang membuka kotak masuk juga memegang socket. Menghitungnya akan
+    // membuat percakapan tampak "online" justru ketika yang hadir adalah
+    // petugasnya sendiri — tanda hijau yang menunjuk ke cermin.
+    assert.match(
+      kode,
+      /identity\.type === "guest" && identity\.sessionId\s*\)\s*\{\s*kehadiran\.tandaiHadir/
+    );
+  });
+
+  it('hanya socket petugas yang masuk room siaran kehadiran', () => {
+    const kode = kodeSajaKehadiran(JALUR_CHAT_SERVER);
+
+    // Room ini menerima setiap perubahan kehadiran SELURUH sesi. Socket tamu
+    // yang masuk ke sini akan tahu siapa saja yang sedang online di seluruh
+    // sistem.
+    assert.match(kode, /identity\.type === "staff"\s*\)\s*\{\s*socket\.join\(ROOM_PETUGAS\)/);
+  });
+
+  it('siaran kehadiran dikirim ke room percakapan DAN room petugas', () => {
+    const kode = kodeSajaKehadiran(JALUR_CHAT_SERVER);
+
+    // Hanya room percakapan tidak cukup: petugas hanya ikut room percakapan yang
+    // sedang ia buka, jadi 49 baris lain di daftarnya akan membeku pada keadaan
+    // saat halaman dimuat — cacat yang sama, hanya lebih pelan.
+    assert.match(
+      kode,
+      /io\.to\(sessionId\)\.to\(ROOM_PETUGAS\)\.emit\("presenceChanged"/
+    );
+  });
+
+  it('socket tamu yang terputus menandai pergi', () => {
+    const kode = kodeSajaKehadiran(JALUR_CHAT_SERVER);
+    const disconnect = kode.slice(kode.indexOf('socket.on("disconnect"'));
+    assert.match(disconnect, /kehadiran\.tandaiPergi\(identity\.sessionId\)/);
+  });
+
+  it('server yang baru naik menyapu kehadiran yang tertinggal', () => {
+    const kode = kodeSajaKehadiran(JALUR_CHAT_SERVER);
+    const listen = kode.slice(kode.indexOf('server.listen('));
+    assert.match(listen, /await kehadiran\.setelUlangKehadiran\(\)/);
+  });
+
+  it('rute kirim balasan tidak lagi menebak kehadiran', () => {
+    const kode = kodeSajaKehadiran(JALUR_RUTE_KIRIM);
+
+    // Penulis lama: `isOnline: true` dengan komentar "anggap user online lagi".
+    // "Anggap" adalah kata yang tepat — itu dugaan. Menulisnya di sini menimpa
+    // hasil pengukuran, dan membuat tanda hijau tidak punya jalan untuk mati.
+    assert.doesNotMatch(kode, /isOnline/);
+  });
+
+  it('rute tutup percakapan tidak lagi menyatakan tamunya pergi', () => {
+    const kode = kodeSajaKehadiran(JALUR_RUTE_TUTUP);
+
+    // Petugas yang menutup percakapan tidak memberi tahu apa pun tentang
+    // tamunya: orang itu bisa saja masih menatap widget-nya.
+    assert.doesNotMatch(kode, /isOnline/);
+    assert.match(kode, /data:\s*\{\s*status:\s*'CLOSED'\s*\}/);
+  });
+
+  it('kolom kehadiran dipilih eksplisit, tanpa memperluas kolom lain', () => {
+    const kode = kodeSajaKehadiran(JALUR_AKSI_CHAT);
+    assert.match(kode, /isOnline:\s*true/);
+    // `include` mengambil SELURUH kolom, dan hasil action ini menyeberang ke
+    // komponen client — artinya tertanam di HTML halaman.
+    assert.doesNotMatch(kode, /include:/);
+  });
+
+  it('kotak masuk mendengarkan perubahan kehadiran dan memeriksa bentuknya', () => {
+    const kode = kodeSajaKehadiran(JALUR_KOTAK_MASUK);
+
+    assert.match(kode, /socket\.on\('presenceChanged'/);
+    // Payload socket adalah jalur di luar pemeriksaan tipe apa pun. `isOnline`
+    // yang bukan boolean dirender hijau untuk nilai apa pun yang truthy.
+    assert.match(kode, /typeof p\.sessionId !== 'string' \|\| typeof p\.isOnline !== 'boolean'/);
+  });
+
+  it('socket kotak masuk dibangun sekali, tidak diputus setiap pindah percakapan', () => {
+    const kode = kodeSajaKehadiran(JALUR_KOTAK_MASUK);
+
+    // Dulu efek koneksinya bergantung pada `selectedSession`: setiap perpindahan
+    // percakapan memutus lalu membangun ulang socket, dan peristiwa yang tiba
+    // dalam jeda itu — termasuk pesan baru — hilang tanpa jejak.
+    assert.match(kode, /idTerpilihRef/);
+    assert.match(kode, /if \(m\.sessionId !== idTerpilihRef\.current\) return;/);
+    assert.doesNotMatch(kode, /\}, \[selectedSession\]\);/);
+  });
+
+  it('kehadiran dari socket digabungkan sekali, dipakai ketiga tempat render', () => {
+    const kode = kodeSajaKehadiran(JALUR_KOTAK_MASUK);
+
+    // `sessions` adalah prop milik server: ia diganti utuh setiap render ulang,
+    // jadi perubahan yang ditulis ke dalamnya lenyap pada `router.refresh()`.
+    assert.match(kode, /const sesiTampil = sessions\.map\(denganKehadiran\)/);
+    assert.match(kode, /sessions=\{sesiTampil\}/);
+    // `selectedSession` khususnya adalah salinan state saat percakapan dipilih:
+    // tanpa penggabungan ini ia tidak akan pernah ikut berubah.
+    assert.match(kode, /session=\{sesiTerpilihTampil\}/);
+    assert.match(kode, /<VisitorDetails session=\{sesiTerpilihTampil\} \/>/);
+  });
+
+  it('tanda kehadiran punya nama yang terbaca pembaca layar', () => {
+    const kode = kodeSajaKehadiran(JALUR_KOTAK_MASUK);
+
+    // Titik berwarna tanpa nama adalah keterangan yang hanya ada untuk yang bisa
+    // melihat warnanya.
+    assert.match(kode, /aria-label=\{session\.isOnline \? 'Sedang online' : 'Sedang tidak online'\}/);
+  });
+
+  it('tipe sesi chat menyatakan kolom kehadiran', () => {
+    const kode = kodeSajaKehadiran(
+      path.join(__dirname, '..', 'src', 'lib', 'tipe-chat.ts')
+    );
+    assert.match(kode, /isOnline:\s*boolean;/);
   });
 });

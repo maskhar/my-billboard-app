@@ -36,6 +36,16 @@ export type SesiChat = {
   guestEmail: string;
   guestPhone: string;
   status: string;
+  /**
+   * Tamu sedang terhubung ke chat-server.
+   *
+   * Diukur dari koneksi socket oleh `chat-server/kehadiran.js`, bukan
+   * diturunkan dari status percakapan. Keduanya hal berbeda: percakapan yang
+   * masih `OPEN` bisa dimiliki tamu yang sudah menutup tab-nya sejak pagi, dan
+   * percakapan yang sudah `CLOSED` bisa dibuka kembali oleh tamu yang masih di
+   * sana.
+   */
+  isOnline: boolean;
   createdAt: string;
   /** Hanya pesan TERAKHIR, untuk pratinjau di daftar. */
   messages: PesanChat[];
