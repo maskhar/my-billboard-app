@@ -82,7 +82,10 @@ const STAFF_ROLES = ["ADMIN", "SUPER_ADMIN", "OPERATOR", "CS"];
 let decodeNextAuthToken = null;
 try {
   decodeNextAuthToken = require("next-auth/jwt").decode;
-} catch (error) {
+} catch {
+  // Tanpa pengikat: satu-satunya galat yang mungkin di sini adalah
+  // MODULE_NOT_FOUND, dan pesan di bawah sudah menyebutnya dengan kalimat yang
+  // lebih berguna daripada jejak tumpukan `require`.
   console.warn(
     "⚠️  Paket 'next-auth' tidak ditemukan. Login admin/user via socket akan ditolak, tamu tetap bisa chat."
   );
@@ -127,7 +130,10 @@ function verifyGuestToken(token) {
     const payload = JSON.parse(Buffer.from(payloadB64, "base64url").toString("utf8"));
     if (!payload.sid || typeof payload.exp !== "number" || Date.now() > payload.exp) return null;
     return payload;
-  } catch (error) {
+  } catch {
+    // Token cacat dan token kedaluwarsa dijawab sama: `null`. Isi galatnya
+    // sengaja tidak dicatat — ia memuat potongan token yang dikirim client, dan
+    // log server bukan tempat menyimpan bahan tebakan token orang lain.
     return null;
   }
 }
@@ -172,7 +178,9 @@ io.use(async (socket, next) => {
         sessionId: null,
       };
       return next();
-    } catch (error) {
+    } catch {
+      // Isi galatnya sengaja tidak dicatat: `decode` melemparkan pesan yang
+      // memuat potongan JWT yang dikirim client.
       console.warn("Handshake ditolak: token NextAuth tidak valid.");
       return next(new Error("unauthorized"));
     }
@@ -350,7 +358,17 @@ async function getGeminiResponse(message) {
     "${message}"
   `;
   
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+  // Kunci dikirim lewat header `x-goog-api-key`, BUKAN query string `?key=`.
+  //
+  // URL permintaan adalah bagian paling banyak disalin dari sebuah request:
+  // ia masuk ke access log setiap proxy di jalur keluar, ke jejak tumpukan
+  // `fetch` saat DNS/TLS gagal, dan ke metrik apa pun yang mengelompokkan
+  // per-endpoint. Kunci yang ditaruh di sana ikut tersalin ke semuanya, dan
+  // tidak ada satu pun tempat itu yang bisa dibersihkan belakangan.
+  //
+  // Route Next di `src/app/api/admin/chat/suggest/route.ts` sudah memakai
+  // header; file ini tertinggal dan membocorkan kunci yang SAMA.
+  const url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
   const payload = {
     contents: [{ parts: [{ text: superPrompt }] }]
   };
@@ -358,18 +376,31 @@ async function getGeminiResponse(message) {
   try {
     const response = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': GEMINI_API_KEY,
+      },
       body: JSON.stringify(payload),
     });
-    const data = await response.json();
+    const data = await response.json().catch(() => null);
 
-    if (!response.ok || !data.candidates || data.candidates.length === 0) {
-        console.error("Gemini API returned an error or no candidates:", JSON.stringify(data, null, 2));
-        const errorMessage = data?.error?.message || "Gagal memproses permintaan AI.";
-        return `Maaf, terjadi kesalahan pada AI: ${errorMessage}`;
+    if (!response.ok || !data?.candidates || data.candidates.length === 0) {
+        // Hanya KODE statusnya yang dicatat.
+        //
+        // `JSON.stringify(data)` dulu ada di sini dan itu menuangkan seluruh
+        // badan jawaban Gemini ke log server. Pada penolakan karena prompt
+        // diblokir, badan itu MEMANTULKAN kembali prompt yang dikirim — yaitu
+        // seluruh katalog billboard plus pertanyaan pengunjung apa adanya.
+        // Log chat-server bukan tempat menyimpan salinan percakapan tamu.
+        console.error("Gemini menolak permintaan chat:", response.status);
+        // Pesan galat Google TIDAK diteruskan ke pengunjung. Isinya ditulis
+        // untuk pemilik kunci ("API key expired", "quota exceeded for project
+        // ...") dan menyebut nama proyek serta sebab internal — pengunjung
+        // tidak bisa menindaklanjutinya, dan tidak berhak tahu.
+        return "Maaf, layanan AI sedang tidak dapat menjawab. Tim kami akan membalas secara langsung.";
     }
 
-    return data.candidates[0]?.content?.parts[0]?.text || "Saya tidak yakin bagaimana harus merespon, coba tanyakan hal lain.";
+    return data.candidates[0]?.content?.parts?.[0]?.text || "Saya tidak yakin bagaimana harus merespon, coba tanyakan hal lain.";
   } catch (error) {
     console.error("Error calling Gemini API:", error);
     return "Terjadi kesalahan saat mencoba menghubungi AI.";

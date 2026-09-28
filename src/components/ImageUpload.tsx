@@ -2,12 +2,24 @@
 
 import { useState, useEffect } from 'react';
 import { CldUploadWidget, type CloudinaryUploadWidgetResults } from 'next-cloudinary';
-import { Image as ImageIcon, Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
+// `Image as ImageIcon` dibuang dari impor: ia tidak dirender di satu tempat pun
+// di berkas ini.
+import { Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 
 interface ImageUploadProps {
     value: string;
     onChange: (src: string) => void;
+    /**
+     * Apa yang sedang diunggah — "Cover Image", "Foto Lokasi".
+     *
+     * Prop ini DITERIMA tapi tidak dirender di satu tempat pun, dan dua
+     * pemanggil sudah mengirimnya (`billboards/form` dan `orders/[id]`).
+     * Artinya dua admin memberi nama dua kotak unggah yang berbeda dan
+     * keduanya tampil tanpa nama: kotak di halaman pesanan hanya berbunyi
+     * "Klik atau seret file ke sini", tanpa satu pun tanda bahwa yang diminta
+     * adalah FOTO LOKASI PEMASANGAN. Sekarang dipakai di kedua cabang render.
+     */
     label?: string;
 }
 
@@ -112,6 +124,7 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
     if (!value) {
         return (
             <div className="w-full p-4 bg-white rounded-2xl border border-gray-200 shadow-sm">
+                <p className="text-xs font-bold text-gray-500 uppercase mb-2">{label}</p>
                 {/* A. SWITCHER MODE (TAB) */}
                 <div className="flex bg-gray-100 p-1 rounded-lg mb-3">
                     <button 
@@ -184,11 +197,24 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
                 type="button" 
                 onClick={() => onChange("")} 
                 className="absolute top-2 right-2 z-10 bg-red-600/80 backdrop-blur-sm text-white p-2 rounded-full shadow-lg opacity-0 group-hover:opacity-100 hover:scale-110 transition-all duration-200"
-                aria-label="Remove image"
+                aria-label={`Hapus ${label}`}
             >
                 <Trash size={16}/>
             </button>
-            <img src={value} alt="Preview" className="h-full w-full object-contain" />
+            {/*
+              `<img>` biasa, bukan `next/image`: `value` di sini bisa berupa
+              path lokal (`/uploads/...`), URL Cloudinary, atau URL yang
+              ditempel admin sendiri — host mana pun. `remotePatterns` di
+              next.config.ts hanya memuat tiga, dan `next/image` melempar saat
+              dijalankan untuk sumber di luar daftar itu: pratinjau yang gagal
+              akan menjatuhkan seluruh form.
+
+              `alt="Preview"` dulu tertulis di sini — kata yang tidak
+              memberi tahu apa pun. Sekarang menyebut apa yang diunggah,
+              dan `label` pula yang dipakai tombol hapus di atasnya.
+            */}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={value} alt={`Pratinjau ${label}`} className="h-full w-full object-contain" />
         </div>
     );
 }

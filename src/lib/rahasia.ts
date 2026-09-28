@@ -110,7 +110,12 @@ export function dekripsi(tersimpan: string | null | undefined): string | null {
     const decipher = crypto.createDecipheriv('aes-256-gcm', kunci, iv);
     decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(badan), decipher.final()]).toString('utf8');
-  } catch (error) {
+  } catch {
+    // Isi galatnya sengaja tidak ikut dicatat. Lemparan dari
+    // `decipher.final()` pada AES-GCM hanya berbunyi "Unsupported state or
+    // unable to authenticate data" — tidak menambah apa pun di atas kalimat di
+    // bawah — sementara jejak tumpukannya bisa memuat potongan buffer yang
+    // sedang dibuka, dan yang sedang dibuka di sini adalah API key.
     console.error('[rahasia] Gagal membuka nilai terenkripsi. Kunci berubah, atau data diubah.');
     return null;
   }

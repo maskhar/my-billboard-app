@@ -186,7 +186,23 @@ export default function PaymentClient({ bookingId, tagihan }: Props) {
   }, [bookingId, permintaanKe]);
 
   useEffect(() => {
-    if (!sesi || !pickerRef.current || !aksiRef.current || !instruksiRef.current) return;
+    if (!sesi) return;
+
+    // Ketiga elemen ditahan di variabel lokal SEKARANG, di awal effect, bukan
+    // dibaca ulang lewat `.current` di dalam fungsi pembersih.
+    //
+    // Fungsi pembersih berjalan SETELAH React melepas elemen-elemen itu, jadi
+    // `pickerRef.current` di sana bisa sudah `null` (halaman berpindah) atau —
+    // yang lebih buruk — menunjuk ke elemen BARU milik render berikutnya.
+    // Pada kasus kedua, pembersihan sesi lama mengosongkan wadah yang sudah
+    // berisi komponen SDK sesi baru: pembeli melihat pilihan pembayaran lenyap
+    // beberapa milidetik setelah muncul, tanpa satu pun galat. Yang harus
+    // dibersihkan adalah elemen yang effect ini sendiri isi, dan itulah yang
+    // ditahan di bawah.
+    const wadahPicker = pickerRef.current;
+    const wadahAksiEl = aksiRef.current;
+    const wadahInstruksiEl = instruksiRef.current;
+    if (!wadahPicker || !wadahAksiEl || !wadahInstruksiEl) return;
 
     let aktif = true;
     let instance: XenditComponents | null = null;
@@ -285,7 +301,7 @@ export default function PaymentClient({ bookingId, tagihan }: Props) {
 
     void import('xendit-components-web')
       .then(({ XenditComponents: Components }) => {
-        if (!aktif || !pickerRef.current || !aksiRef.current || !instruksiRef.current) return;
+        if (!aktif) return;
 
         instance = new Components({ componentsSdkKey: sesi.componentsSdkKey });
         komponenRef.current = instance;
@@ -311,9 +327,9 @@ export default function PaymentClient({ bookingId, tagihan }: Props) {
         wadahAksi = instance.createActionContainerComponent({ withCard: false });
         wadahInstruksi = instance.createActionInstructionsComponent();
 
-        pickerRef.current.replaceChildren(picker);
-        aksiRef.current.replaceChildren(wadahAksi);
-        instruksiRef.current.replaceChildren(wadahInstruksi);
+        wadahPicker.replaceChildren(picker);
+        wadahAksiEl.replaceChildren(wadahAksi);
+        wadahInstruksiEl.replaceChildren(wadahInstruksi);
       })
       .catch(() => {
         if (!aktif) return;
@@ -351,9 +367,9 @@ export default function PaymentClient({ bookingId, tagihan }: Props) {
         }
       }
       if (komponenRef.current === komponen) komponenRef.current = null;
-      pickerRef.current?.replaceChildren();
-      aksiRef.current?.replaceChildren();
-      instruksiRef.current?.replaceChildren();
+      wadahPicker.replaceChildren();
+      wadahAksiEl.replaceChildren();
+      wadahInstruksiEl.replaceChildren();
     };
   }, [router, sesi]);
 

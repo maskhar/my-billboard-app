@@ -20,6 +20,40 @@ const eslintConfig = defineConfig([
     ".claude/**",
   ]),
   {
+    // `no-unused-vars` dikonfigurasi, bukan dimatikan. Aturan defaultnya tidak
+    // punya satu pun pengecualian, sehingga DUA idiom yang memang dibutuhkan
+    // kode ini terbaca sebagai cacat — dan satu-satunya cara "membersihkan"
+    // laporannya adalah membuang kode yang benar:
+    //
+    //   1. `ignoreRestSiblings` — `orders/page.tsx` membuang `dpAmount` dengan
+    //      `({ dpAmount: _dpAmount, ...trx })`. Pencabutan itu WAJIB: `...trx`
+    //      menyalin seluruh kolom pesanan, dan kolom `Decimal` yang lolos ke
+    //      Client Component mematikan halamannya saat dirender. Binding itu
+    //      memang tidak dipakai — tidak dipakai adalah seluruh maksudnya.
+    //   2. `argsIgnorePattern` — `PaymentClient.tsx` menerima
+    //      `(_event: XenditFatalErrorEvent)` dan sengaja TIDAK membacanya:
+    //      isi event SDK bisa memuat data channel, dan aturan di repo ini
+    //      adalah tidak menampilkan maupun mencatatnya. Tipe parameternya tetap
+    //      ditulis supaya pembaca berikutnya tahu apa yang tersedia dan bahwa
+    //      mengabaikannya adalah keputusan.
+    //
+    // Awalan `_` tetap wajib. Binding tak terpakai TANPA awalan itu tetap
+    // dilaporkan, jadi impor mati dan variabel yang benar-benar terlupakan
+    // masih tertangkap.
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          varsIgnorePattern: "^_",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+        },
+      ],
+    },
+  },
+  {
     // `no-require-imports` ditujukan ke sumber TypeScript/ESM yang di-bundle.
     // Ketiga kelompok di bawah adalah skrip Node CommonJS asli yang dijalankan
     // langsung, bukan di-bundle: `require` di situ BUKAN cacat, itu satu-satunya

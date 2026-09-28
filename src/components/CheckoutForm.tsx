@@ -1,9 +1,14 @@
 // src/components/CheckoutForm.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { ArrowLeft, Upload, AlertCircle, Calendar, FileText } from 'lucide-react';
-import { useRouter, useSearchParams } from 'next/navigation'; // TAMBAH useSearchParams
+// `useEffect` dan `useSearchParams` dibuang dari impor: keduanya sudah tidak
+// dipakai sejak `startDate` dan `duration` menjadi props yang dihitung server.
+// Impor menganggur bukan sekadar berkas yang lebih panjang — `useSearchParams`
+// yang masih terimpor membuat pembaca berikutnya menyimpulkan komponen ini
+// masih membaca query string, lalu mencari-cari di mana.
+import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { bacaBadan } from '@/lib/baca-jawaban';
 
@@ -434,7 +439,21 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                 
                 <div className="bg-white p-6 rounded-2xl shadow-lg border border-gray-100">
                     <div className="flex gap-4 mb-4 pb-4 border-b">
-                         <img src={billboard.mainImage} className="w-16 h-16 rounded object-cover" />
+                         {/*
+                           `<img>` biasa, bukan `next/image`: `mainImage` diisi
+                           admin dan hostnya belum tentu ada di `remotePatterns`
+                           next.config.ts — `next/image` melempar saat dijalankan
+                           untuk sumber di luar daftar itu, dan halaman inilah
+                           tempat uang masuk.
+
+                           `alt` dikosongkan dengan sengaja: judul dan tipe
+                           billboard tertulis tepat di sebelah gambar ini, jadi
+                           foto kecil ini tidak membawa informasi baru.
+                           `alt=""` memberi tahu pembaca layar untuk
+                           melewatinya, bukan membacakan URL berkasnya.
+                         */}
+                         {/* eslint-disable-next-line @next/next/no-img-element */}
+                         <img src={billboard.mainImage} alt="" className="w-16 h-16 rounded object-cover" />
                          <div>
                             <h4 className="font-bold text-sm text-gray-800 line-clamp-2">{billboard.title}</h4>
                             <p className="text-xs text-gray-500">{billboard.type}</p>

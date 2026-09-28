@@ -77,6 +77,15 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
 
       {/* Hero Banner */}
       <div className="relative mt-16 w-full h-[50vh] lg:h-[60vh] bg-gray-900 group overflow-hidden">
+        {/*
+          `<img>` biasa, bukan `next/image`: `mainImage` diisi admin dan boleh
+          menunjuk ke penyimpanan mana pun, sedangkan `remotePatterns` di
+          next.config.ts hanya memuat tiga host. `next/image` MELEMPAR saat
+          dijalankan untuk sumber di luar daftar itu — satu billboard dengan URL
+          host baru membuat SELURUH halaman produknya gagal terbuka, dan halaman
+          inilah yang dituju iklan dan hasil pencarian.
+        */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src={rawData.mainImage} className="w-full h-full object-cover opacity-90 group-hover:scale-105 transition duration-1000" alt={rawData.title} />
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/20"></div>
         <div className="absolute top-6 left-6 z-10">
@@ -110,7 +119,16 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
                     <h3 className="text-xl font-bold mb-6 text-gray-800">📸 Galeri Foto</h3>
                     <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                         {gallery.map((url, idx) => (
-                             <img key={idx} src={url} className="w-full aspect-video object-cover rounded-lg hover:scale-[1.02] transition cursor-pointer bg-gray-100 shadow-sm border" />
+                             /* eslint-disable-next-line @next/next/no-img-element --
+                                alasan sama dengan gambar hero di atas: URL galeri
+                                diisi admin dan hostnya tidak terdaftar.
+                                `alt` dulu TIDAK ADA di sini, dan ini galeri —
+                                pembaca layar membacakan sembilan URL berkas
+                                berturut-turut. Nomornya disebut karena itulah
+                                satu-satunya pembeda yang benar-benar diketahui
+                                kode ini; isi tiap foto tidak pernah dideskripsikan
+                                admin di mana pun. */
+                             <img key={idx} src={url} alt={`Foto ${rawData.title} nomor ${idx + 1}`} className="w-full aspect-video object-cover rounded-lg hover:scale-[1.02] transition cursor-pointer bg-gray-100 shadow-sm border" />
                         ))}
                     </div>
                 </div>

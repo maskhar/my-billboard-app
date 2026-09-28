@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import dynamic from 'next/dynamic';
+import Image from 'next/image';
 import { Map, Eye, Layers } from 'lucide-react';
 // HAPUS import L from 'leaflet' di sini agar server tidak error!
 import 'leaflet/dist/leaflet.css';
@@ -111,7 +112,29 @@ export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat:
             ) : (
                 <div className="w-full h-full bg-slate-900 flex flex-col items-center justify-center text-white relative">
                     <div className="absolute inset-0 opacity-40 grayscale">
-                        <img src="https://images.unsplash.com/photo-1449824913935-59a10b8d2000?q=80&w=800" className="w-full h-full object-cover" />
+                        {/*
+                          Satu-satunya `<img>` di repo ini yang BENAR-BENAR bisa
+                          menjadi `next/image`, dan karena itu jadi: alamatnya
+                          tetap, ditulis di kode ini, dan `images.unsplash.com`
+                          memang terdaftar di `remotePatterns` next.config.ts.
+                          Tidak ada admin yang bisa menggantinya dengan host
+                          yang tidak terdaftar, jadi tidak ada risiko lempar
+                          saat dijalankan — sisa `<img>` di repo semuanya
+                          menerima URL dari database.
+
+                          `alt=""`, bukan deskripsi: ini latar dekoratif di
+                          balik kartu "Street View belum dikonfigurasi", dan
+                          pesannya sudah tertulis sebagai teks di atasnya.
+                          Mendeskripsikan foto jalan raya acak di sini hanya
+                          menambah kebisingan bagi pembaca layar.
+                        */}
+                        <Image
+                            src="https://images.unsplash.com/photo-1449824913935-59a10b8d2000?q=80&w=800"
+                            alt=""
+                            fill
+                            sizes="100vw"
+                            className="object-cover"
+                        />
                     </div>
                     <div className="relative z-10 text-center p-6 bg-black/50 rounded-xl backdrop-blur-md border border-white/20">
                         <Layers size={48} className="mx-auto mb-4 text-yellow-400"/>

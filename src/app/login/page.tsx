@@ -6,8 +6,10 @@ import { signIn, signOut, getSession } from 'next-auth/react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-// Tambahkan Icon Google (Chrome logo-ish)
-import { Chrome } from 'lucide-react'; 
+// `Chrome` dari lucide dibuang: tombol Google di bawah memakai SVG logo
+// Google empat warna yang ditulis langsung di JSX, bukan ikon ini. Logo
+// Chrome bukan logo Google, dan mengimpornya membuat pembaca menyangka
+// tombolnya masih memakai ikon yang salah.
 
 export default function LoginPage() {
   const router = useRouter();

@@ -1,7 +1,10 @@
 // src/components/admin/RevenueSection.tsx
 'use client';
 
-import { useState, useEffect, useTransition } from 'react';
+// `useEffect` dibuang dari impor: data awal datang sebagai prop dari server dan
+// setiap pemuatan berikutnya dipicu klik filter, jadi tidak ada satu pun effect
+// di berkas ini.
+import { useState, useTransition } from 'react';
 import { getRevenueData, type ChartData } from '@/app/admin/(dashboard)/actions';
 import RevenueChart from './RevenueChart'; // Komponen Chart yang sudah ada
 import { Loader2 } from 'lucide-react';

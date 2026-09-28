@@ -1,6 +1,6 @@
 import { prisma } from '@/lib/prisma';
 import Link from 'next/link';
-import { Plus, MapPin, Tag, Edit, Eye, User, Clock } from 'lucide-react';
+import { Plus, MapPin, Edit, Eye, Clock } from 'lucide-react';
 import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn';
 import StatusChanger from '@/components/admin/StatusChanger';
 import { Billboard } from '@prisma/client';
@@ -95,7 +95,26 @@ export default async function AdminBillboardsPage({
                             
                             <td className="px-6 py-3 w-24">
                                 <Link href={`/billboard/${item.slug}`} target="_blank">
-                                    <img src={item.mainImage} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
+                                    {/*
+                                      `<img>` biasa, bukan `next/image`:
+                                      `mainImage` diisi admin dan boleh menunjuk
+                                      ke penyimpanan mana pun, sedangkan
+                                      `remotePatterns` di next.config.ts hanya
+                                      memuat tiga host. `next/image` MELEMPAR
+                                      saat dijalankan untuk sumber di luar
+                                      daftar itu, jadi satu billboard dengan
+                                      host baru akan menjatuhkan seluruh daftar
+                                      inventori admin.
+
+                                      `alt` dulu tidak ada. Sel ini adalah
+                                      TAUTAN ke halaman produk, dan tautan yang
+                                      isinya hanya gambar tanpa alt dibacakan
+                                      pembaca layar sebagai URL berkasnya —
+                                      operator yang memakainya tidak punya cara
+                                      tahu baris mana yang sedang dibukanya.
+                                    */}
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={item.mainImage} alt={`Foto ${item.title}`} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
                                 </Link>
                             </td>
                             

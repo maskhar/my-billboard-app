@@ -87,7 +87,35 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                                             <div className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-white shadow-sm relative overflow-hidden" 
                                                  style={{background: 'linear-gradient(135deg, #1f2937 0%, #111827 100%)'}}>
                                                 {user.image ? (
-                                                    <img src={user.image} className="w-full h-full object-cover"/>
+                                                    <>
+                                                        {/*
+                                                          `<img>` biasa, bukan
+                                                          `next/image`: `user.image`
+                                                          berasal dari profil Google
+                                                          (`lh3.googleusercontent.com`)
+                                                          dan host itu TIDAK ada di
+                                                          `remotePatterns`
+                                                          next.config.ts, jadi
+                                                          `next/image` melempar saat
+                                                          dijalankan dan seluruh
+                                                          daftar pengguna hilang.
+
+                                                          `alt` dulu tidak ada. Nama
+                                                          pengguna tertulis tepat di
+                                                          sebelah avatar ini, jadi
+                                                          `alt=""` sudah benar
+                                                          secara semantik — foto
+                                                          profil di sini tidak
+                                                          membawa satu pun informasi
+                                                          yang belum tertulis, dan
+                                                          `alt=""` yang eksplisit
+                                                          memberi tahu pembaca layar
+                                                          untuk MELEWATINYA alih-alih
+                                                          membacakan URL berkasnya.
+                                                        */}
+                                                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                        <img src={user.image} alt="" className="w-full h-full object-cover"/>
+                                                    </>
                                                 ) : (
                                                     <span>{user.name ? user.name.charAt(0).toUpperCase() : '?'}</span>
                                                 )}
@@ -111,7 +139,18 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                                          <div className="flex items-center gap-2 text-xs font-bold text-gray-600">
                                              {user.authProvider === 'GOOGLE' ? (
                                                  <>
-                                                    <img src={GOOGLE_ICON} width={16} height={16} alt="G"/> 
+                                                    {/*
+                                                      `<img>` biasa: host CDN
+                                                      ikonnya tidak ada di
+                                                      `remotePatterns`. `alt`
+                                                      dikosongkan — kata "Google"
+                                                      tertulis tepat di sebelahnya,
+                                                      jadi `alt="G"` yang dulu ada
+                                                      membuat pembaca layar berbunyi
+                                                      "G Google".
+                                                    */}
+                                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                                    <img src={GOOGLE_ICON} width={16} height={16} alt=""/>
                                                     <span>Google</span>
                                                  </>
                                              ) : (

@@ -111,7 +111,16 @@ export default function ChatWidget() {
     return () => {
       socketRef.current?.disconnect();
     };
-  }, []);
+    // `chatUrl` masuk ke daftar dependensi. Nilainya memang tidak pernah
+    // berubah — `useState(alamatChat)` menghitungnya sekali seumur komponen —
+    // jadi effect ini tetap berjalan tepat satu kali, sama seperti sebelumnya.
+    // Yang berubah adalah daftar `[]` tidak lagi BERBOHONG: daftar kosong
+    // menyatakan effect tidak bergantung pada nilai apa pun dari render,
+    // padahal baris 56 dan 60 keduanya membaca `chatUrl`. Kebohongan itu yang
+    // berbahaya, bukan nilainya: begitu seseorang menjadikan alamat chat bisa
+    // berubah (misalnya membacanya dari `SystemSetting`), socket tetap
+    // tersambung ke alamat lama tanpa satu pun peringatan.
+  }, [chatUrl]);
 
   useEffect(() => {
       if (messages.length > lastMsgCount.current) {

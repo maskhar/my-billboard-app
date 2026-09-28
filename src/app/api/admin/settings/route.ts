@@ -14,7 +14,11 @@ function maskApiKey(key: string | null): string | null {
   return `••••${key.slice(-4)}`;
 }
 
-export async function GET(req: Request) {
+// Tanpa parameter: handler ini tidak membaca badan, query, maupun header
+// permintaan sama sekali — identitas pemanggil datang dari `getServerSession`.
+// `req: Request` yang dulu tertulis di sini membuat pembaca berikutnya mencari
+// pemakaian yang tidak pernah ada.
+export async function GET() {
   // Sebelumnya handler GET tidak punya gate sama sekali, sehingga Gemini API
   // key dan Google Maps API key terkirim utuh ke siapa pun yang memanggilnya.
   // Gate disamakan dengan handler POST di bawah.

@@ -12,6 +12,8 @@ import { rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { ALAMAT_PENJUAL, NAMA_PENJUAL } from '@/lib/penjual';
 import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
+import { pesanGalat } from '@/lib/pesan-galat';
 
 /**
  * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
@@ -94,16 +96,30 @@ const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ orderId, designUrl: url }),
             });
-            const data = await res.json();
+            // Dulu `await res.json()` tanpa penjaga, lalu `data.message`
+            // dibaca langsung. Dua akibatnya: balasan 500 dari Next.js
+            // berbadan HTML membuat `res.json()` MELEMPAR, lemparannya
+            // mendarat di `catch` di bawah, dan admin membaca "Terjadi
+            // kesalahan pada server" untuk setiap kegagalan — termasuk yang
+            // sebenarnya menjelaskan diri sendiri ("Pesanan tidak ditemukan",
+            // "Anda tidak berhak"). `bacaJawaban` memeriksa bentuknya lebih
+            // dulu dan `alasanPenolakan` menyebut kode status bila badannya
+            // kosong, supaya 403 tidak lagi terlihat sama dengan 500.
+            const jawaban = await bacaJawaban(res);
             if (res.ok) {
-                alert(data.message);
+                alert(jawaban.pesan ?? 'Desain terkirim ke pengguna.');
                 setLinkInput("");
                 router.refresh();
             } else {
-                alert('Gagal: ' + data.message);
+                alert('Gagal: ' + alasanPenolakan(res, jawaban));
             }
-        } catch (error) {
-            alert('Terjadi kesalahan pada server.');
+        } catch (galat) {
+            // Galatnya dulu ditangkap lalu dibuang tanpa dibaca sama sekali.
+            // Yang tersisa hanya satu kalimat seragam, sementara penyebab
+            // sebenarnya (jaringan mati, CORS, URL salah) tidak pernah
+            // tercatat di mana pun — bukan di layar, bukan di konsol.
+            console.error('Gagal mengirim desain internal:', galat);
+            alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
         } finally {
             setLoading(false);
         }
@@ -149,17 +165,24 @@ const AddChargeForm = ({ orderId }: { orderId: string }) => {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ orderId, description, amount }),
             });
-            const data = await res.json();
+            // Route ini adalah yang paling perlu pesannya terbaca utuh:
+            // `add-charge` menolak 409 dengan alasan yang menentukan tindakan
+            // admin ("pembeli sedang membayar biaya tambahan, coba lagi
+            // setelah itu selesai"). Dengan `res.json()` tanpa penjaga, alasan
+            // itu hilang di setiap balasan yang tidak berbadan JSON dan admin
+            // mencatat biaya yang sama berulang kali.
+            const jawaban = await bacaJawaban(res);
             if (res.ok) {
-                alert(data.message);
+                alert(jawaban.pesan ?? 'Biaya tambahan tercatat.');
                 setDescription("");
                 setAmount("");
                 router.refresh();
             } else {
-                alert('Gagal: ' + data.message);
+                alert('Gagal: ' + alasanPenolakan(res, jawaban));
             }
-        } catch (error) {
-            alert('Terjadi kesalahan pada server.');
+        } catch (galat) {
+            console.error('Gagal mencatat biaya tambahan:', galat);
+            alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
         } finally {
             setLoading(false);
         }
@@ -272,15 +295,16 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
         body: JSON.stringify({ orderId: selected.id, status, reason }),
       });
       
-      const data = await res.json();
+      const jawaban = await bacaJawaban(res);
       if (res.ok) {
-        alert(data.message);
+        alert(jawaban.pesan ?? (status === 'APPROVED' ? 'Desain disetujui.' : 'Desain ditolak.'));
         router.refresh();
       } else {
-        alert('Gagal: ' + data.message);
+        alert('Gagal: ' + alasanPenolakan(res, jawaban));
       }
-    } catch (error) {
-      alert('Terjadi kesalahan pada server.');
+    } catch (galat) {
+      console.error('Gagal memperbarui status desain:', galat);
+      alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
     }
   };
 

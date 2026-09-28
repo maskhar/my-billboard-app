@@ -118,7 +118,13 @@ export async function POST(req: Request) {
     }
 
     return NextResponse.json({ message: "Pesanan dibatalkan" });
-  } catch (error) {
+  } catch (galat) {
+    // Galatnya dulu ditangkap lalu dibuang. Pembatalan menyentuh `Booking`,
+    // `Billboard.status`, dan pengiriman email dalam satu jalur, jadi 500 di
+    // sini bisa berarti transaksinya gagal (pesanan MASIH aktif dan billboard
+    // masih terkunci) atau hanya SMTP yang mati setelah semuanya tersimpan.
+    // Tanpa satu baris log, tidak ada cara membedakannya setelah kejadian.
+    console.error('Gagal membatalkan pesanan:', galat);
     return NextResponse.json({ message: "Gagal membatalkan" }, { status: 500 });
   }
 }

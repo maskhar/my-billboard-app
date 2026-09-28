@@ -97,8 +97,14 @@ function runTask(choice) {
 
   // 3. Saat Proses Selesai (Server mati atau Perintah kelar)
   child.on('close', (code) => {
+    // `code` dulu diterima lalu tidak dipakai, dan itu bukan sekadar binding
+    // menganggur: layarnya berbunyi "Proses Berhenti." baik saat server
+    // dimatikan dengan Ctrl+C (code 0) maupun saat `next build` GAGAL (code 1).
+    // Keduanya lalu langsung tertimpa menu utama setelah satu detik, jadi
+    // kegagalan build terlihat persis sama dengan penghentian yang disengaja.
+    const gagal = typeof code === 'number' && code !== 0;
     console.log(cyan + "\n--------------------------------------------");
-    console.log("🛑 Proses Berhenti.");
+    console.log(gagal ? `🛑 Proses Berhenti — GAGAL (exit code ${code}).` : "🛑 Proses Berhenti.");
     console.log("--------------------------------------------" + reset);
     
     // Trik Windows: Kadang ada sisa buffer "Terminate batch job?", kita kasih jeda.

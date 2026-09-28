@@ -93,14 +93,49 @@ export async function POST(req: Request) {
             },
             body: JSON.stringify(payload)
         });
-        const aiData = await aiRes.json();
+        // Balasan Gemini diperiksa dua kali, dan keduanya menutup cacat nyata:
+        //
+        //   1. `aiRes.ok` dulu tidak diperiksa. Key kedaluwarsa (403), kuota
+        //      habis (429), dan prompt yang diblokir filter keamanan semuanya
+        //      memulangkan badan JSON TANPA `candidates`, jadi rantai `?.` di
+        //      bawah bernilai `undefined` dan admin menerima 200 berisi
+        //      `{ reply: undefined }` — kotak draft terbuka kosong tanpa satu
+        //      pun tanda bahwa AI-nya menolak. Sebabnya dicatat di log server
+        //      (status saja, bukan badan balasan: badan itu memuat kembali
+        //      prompt beserta isi percakapan pelanggan).
+        //   2. `await aiRes.json()` tanpa penjaga. Balasan 502 dari perantara
+        //      berbadan HTML membuatnya melempar, dan lemparannya dulu mendarat
+        //      di `catch` yang membuang galatnya.
+        if (!aiRes.ok) {
+            console.error('Gemini menolak permintaan draft:', aiRes.status);
+            return NextResponse.json(
+                { reply: "Maaf, AI sedang sibuk." },
+                { headers: rateLimitHeaders(AI_LIMIT, limitResult) }
+            );
+        }
+
+        const aiData = await aiRes.json().catch((galat: unknown) => {
+            console.error('Balasan Gemini bukan JSON:', galat);
+            return null;
+        });
+
+        const draft = aiData?.candidates?.[0]?.content?.parts?.[0]?.text;
 
         return NextResponse.json(
-            { reply: aiData.candidates?.[0]?.content?.parts?.[0]?.text },
+            {
+                reply: typeof draft === 'string' && draft.trim() !== ''
+                    ? draft
+                    : "AI tidak menghasilkan draft kali ini. Coba ulangi.",
+            },
             { headers: rateLimitHeaders(AI_LIMIT, limitResult) }
         );
 
-    } catch (e) {
+    } catch (galat) {
+        // `catch (e)` dulu membuang galatnya tanpa sepatah pun di log, jadi
+        // kegagalan `req.json()`, `dekripsi()` yang menolak kunci rusak, dan
+        // jaringan yang mati semuanya terbaca sama bagi admin DAN sama bagi
+        // siapa pun yang membaca log server.
+        console.error('Gagal menyusun draft balasan AI:', galat);
         return NextResponse.json({ reply: "Maaf, AI sedang sibuk." });
     }
 }

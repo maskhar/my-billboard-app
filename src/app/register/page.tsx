@@ -5,6 +5,8 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { pesanGalat } from '@/lib/pesan-galat';
 
 export default function RegisterPage() {
   const router = useRouter();
@@ -23,23 +25,43 @@ export default function RegisterPage() {
     const phone = formData.get('phone');
     const password = formData.get('password');
 
+    // Tiga cacat ditambal sekaligus di sini:
+    //
+    //   1. Tidak ada `try` sama sekali. `fetch` melempar saat jaringan mati atau
+    //      permintaannya dibatalkan, lemparannya tidak ditangani siapa pun, dan
+    //      `setLoading(false)` di bawahnya TIDAK PERNAH dijalankan: tombol
+    //      tertinggal berbunyi "Mendaftar..." selamanya dan calon pengguna
+    //      pergi tanpa akun.
+    //   2. `await res.json()` tanpa penjaga. Balasan 500 berbadan HTML
+    //      membuatnya melempar — di jalur yang sama, tanpa penangkap.
+    //   3. `setLoading(false)` di akhir badan fungsi, bukan di `finally`.
+    //
     // Dialihkan dari backend NestJS (`/api/users/register`) ke route Next.
     // Endpoint lama membalas "Sukses mendaftar" tanpa pernah membuat user,
     // karena method `create()` di sisi sana tidak pernah diimplementasikan.
-    const res = await fetch('/api/register', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, phone, password })
-    });
+    try {
+        const res = await fetch('/api/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, email, phone, password })
+        });
 
-    if (res.ok) {
-        alert("Pendaftaran Berhasil! Silakan Login.");
-        router.push('/login'); // Arahkan ke login
-    } else {
-        const data = await res.json();
-        setError(data.message || "Gagal mendaftar");
+        const jawaban = await bacaJawaban(res);
+
+        if (res.ok) {
+            alert(jawaban.pesan ?? "Pendaftaran Berhasil! Silakan Login.");
+            router.push('/login'); // Arahkan ke login
+        } else {
+            // "Email sudah terpakai" dan "Password terlalu pendek" menuntut
+            // tindakan berbeda; keduanya dulu bisa terbaca "Gagal mendaftar".
+            setError(alasanPenolakan(res, jawaban));
+        }
+    } catch (galat) {
+        console.error('Gagal mendaftar:', galat);
+        setError(pesanGalat(galat, "Gagal menghubungi server. Coba lagi."));
+    } finally {
+        setLoading(false);
     }
-    setLoading(false);
   };
 
   return (

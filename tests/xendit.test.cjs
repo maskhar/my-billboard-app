@@ -32,7 +32,13 @@ require('ts-node').register({
   },
 });
 
-const { test, describe, it, beforeEach, afterEach } = require('node:test');
+// `test` dibuang dari destructuring: seluruh suite di berkas ini ditulis dengan
+// `describe`/`it`, dan nol pemanggilan `test(...)` ada. Membiarkannya terimpor
+// membuat penulis berikutnya menyangka kedua gaya dipakai berdampingan, lalu
+// menambah `test()` tingkat atas yang berjalan di luar `beforeEach`/`afterEach`
+// milik suite mana pun — dan `afterEach` di sinilah yang membersihkan cache
+// modul palsu.
+const { describe, it, beforeEach, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const Module = require('node:module');
@@ -9730,11 +9736,14 @@ describe('identitas penjual satu sumber, bukan tiga isi berbeda', () => {
           continue;
         }
         if (!/\.(ts|tsx)$/.test(entri.name)) continue;
-        const isi = fs.readFileSync(penuh, 'utf8');
+        // `const isi = fs.readFileSync(...)` dulu ada di sini dan tidak pernah
+        // dibaca: `kodeSaja` membaca berkasnya sendiri. Pemanggilan `kodeSaja`
+        // juga dulu berada DI DALAM loop `salah`, jadi setiap berkas di `src/`
+        // dibaca dan dilucuti komentarnya dua kali.
+        // Komentar dikecualikan: catatan perbaikan memang menyebut nilai
+        // lamanya supaya alasannya tidak hilang.
+        const kode = kodeSaja(penuh, /\.tsx$/.test(entri.name));
         for (const salah of ['Iklan Jaya', 'Jl. Melati']) {
-          // Komentar dikecualikan: catatan perbaikan memang menyebut nilai
-          // lamanya supaya alasannya tidak hilang.
-          const kode = kodeSaja(penuh, /\.tsx$/.test(entri.name));
           if (kode.includes(salah)) temuan.push(`${penuh}: ${salah}`);
         }
       }
@@ -13722,5 +13731,471 @@ describe('tipe menggantikan `any` di batas server-client', () => {
     assert.match(kode, /Record<string, unknown>/);
     assert.ok(!/from '@prisma\/client'/.test(kode));
     assert.ok(!/server-only/.test(kode));
+  });
+});
+
+// ============================================================================
+// A2 — peringatan lint habis, dan cacat yang disembunyikannya ikut tertutup
+// ============================================================================
+describe('A2: gambar, binding mati, dan dependensi effect', () => {
+  const AKAR_SRC = path.join(__dirname, '..', 'src');
+
+  function kodeSajaA2(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  function semuaBerkas(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) {
+        semuaBerkas(penuh, hasil);
+        continue;
+      }
+      if (/\.(ts|tsx)$/.test(entri.name)) hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  // --- Gambar ---------------------------------------------------------------
+
+  it('setiap <img> di src/ punya atribut alt', () => {
+    const tanpaAlt = [];
+
+    for (const jalur of semuaBerkas(AKAR_SRC)) {
+      const kode = kodeSajaA2(jalur);
+      // Setiap tag <img ...> dengan atributnya, termasuk yang menyeberang baris.
+      for (const cocok of kode.matchAll(/<img\b[\s\S]*?\/>/g)) {
+        if (!/\balt=/.test(cocok[0])) tanpaAlt.push(jalur);
+      }
+    }
+
+    assert.deepEqual(
+      tanpaAlt,
+      [],
+      'gambar tanpa `alt` membuat pembaca layar membacakan URL berkasnya'
+    );
+  });
+
+  it('setiap eslint-disable no-img-element disertai alasan tertulis', () => {
+    // Pengecualian tanpa alasan akan dicontek pemelihara berikutnya tanpa tahu
+    // kenapa. Yang menjaga keputusan ini tetap benar adalah kalimatnya, bukan
+    // komentar pematiannya.
+    const tanpaAlasan = [];
+
+    for (const jalur of semuaBerkas(AKAR_SRC)) {
+      const mentah = fs.readFileSync(jalur, 'utf8');
+      if (!mentah.includes('no-img-element')) continue;
+
+      // Alasannya boleh berada di komentar blok di atasnya atau menempel di
+      // baris disable-nya sendiri (`-- alasan`).
+      const adaAlasan =
+        /next\/image/.test(mentah) && /remotePatterns|next\.config/.test(mentah);
+      if (!adaAlasan) tanpaAlasan.push(jalur);
+    }
+
+    assert.deepEqual(tanpaAlasan, []);
+  });
+
+  it('LocationVisualizer memakai next/image, dan hostnya terdaftar di remotePatterns', () => {
+    const jalur = path.join(AKAR_SRC, 'components', 'LocationVisualizer.tsx');
+    const kode = kodeSajaA2(jalur);
+
+    assert.match(kode, /from 'next\/image'/, 'harus mengimpor next/image');
+    assert.match(kode, /<Image\b/, 'harus merender <Image>');
+    assert.ok(!/<img\b/.test(kode), 'tidak boleh ada <img> biasa lagi di sini');
+
+    // Ini separuh yang paling penting: `next/image` MELEMPAR saat dijalankan
+    // untuk host di luar daftar. Konversi tanpa pemeriksaan ini adalah cacat
+    // yang lebih besar daripada peringatan lint yang dibereskannya.
+    // Dibaca dari isi MENTAH, bukan dari `kodeSajaA2`. Penghapus komentarnya
+    // memotong dari `//` sampai akhir baris, dan `https://` memuat `//` — jadi
+    // setiap alamat di dalam kode ikut terpotong menjadi `src="https:`. Untuk
+    // memeriksa host, mentah adalah satu-satunya yang benar.
+    const alamat = fs.readFileSync(jalur, 'utf8').match(/src="(https:\/\/[^"]+)"/);
+    assert.ok(alamat, 'alamat gambar harus literal, bukan dari database');
+    const host = new URL(alamat[1]).hostname;
+
+    const konfigurasi = fs.readFileSync(
+      path.join(__dirname, '..', 'next.config.ts'),
+      'utf8'
+    );
+    assert.ok(
+      konfigurasi.includes(host),
+      `${host} tidak ada di remotePatterns — next/image akan melempar saat dijalankan`
+    );
+  });
+
+  it('galeri BillboardDetailClient menyebut nomor foto, bukan alt kosong', () => {
+    // Ini galeri publik dengan sembilan gambar. `alt=""` di sini menyembunyikan
+    // seluruh galeri dari pembaca layar; tanpa `alt` sama sekali (keadaan
+    // sebelumnya) ia membacakan sembilan URL berkas berturut-turut.
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'billboard', '[slug]', 'BillboardDetailClient.tsx')
+    );
+    const galeri = kode.slice(kode.indexOf('gallery.map'));
+    assert.match(galeri, /alt=\{`Foto \$\{rawData\.title\} nomor \$\{idx \+ 1\}`\}/);
+  });
+
+  // --- ImageUpload: prop yang diterima tapi tidak dirender -------------------
+
+  it('ImageUpload merender `label` di kedua cabang, bukan hanya menerimanya', () => {
+    const kode = kodeSajaA2(path.join(AKAR_SRC, 'components', 'ImageUpload.tsx'));
+
+    // Cabang kosong (kotak unggah) harus menyebut apa yang diminta. Tanpa ini,
+    // kotak bukti pasang di halaman pesanan hanya berbunyi "Klik atau seret
+    // file ke sini" — tanpa satu pun tanda bahwa yang diminta FOTO LOKASI.
+    assert.match(kode, /\{label\}/, 'label tidak dirender di cabang kosong');
+    assert.match(kode, /alt=\{`Pratinjau \$\{label\}`\}/);
+    assert.match(kode, /aria-label=\{`Hapus \$\{label\}`\}/);
+    assert.ok(!/alt="Preview"/.test(kode));
+  });
+
+  it('dua pemanggil ImageUpload memang mengirim label', () => {
+    // Kalau tidak ada pemanggil yang mengirimnya, prop itu seharusnya dihapus,
+    // bukan dirender. Test ini yang membedakan kedua keputusan.
+    const pemanggil = [
+      path.join(AKAR_SRC, 'app', 'admin', '(dashboard)', 'billboards', 'form', 'page.tsx'),
+      path.join(AKAR_SRC, 'app', 'admin', '(dashboard)', 'orders', '[id]', 'page.tsx'),
+    ];
+    for (const jalur of pemanggil) {
+      const kode = kodeSajaA2(jalur);
+      assert.match(kode, /label=/, `${jalur} tidak mengirim label`);
+    }
+  });
+
+  // --- Handler admin: pesan server tidak boleh hilang -----------------------
+
+  it('ketiga handler TransactionClient memakai bacaJawaban, bukan res.json() mentah', () => {
+    const jalur = path.join(
+      AKAR_SRC, 'app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx'
+    );
+    const kode = kodeSajaA2(jalur);
+
+    assert.match(kode, /from '@\/lib\/baca-jawaban'/);
+    assert.match(kode, /from '@\/lib\/pesan-galat'/);
+
+    // `await res.json()` tanpa penjaga melempar pada balasan 500 berbadan HTML,
+    // dan lemparannya menelan pesan penolakan server yang sebenarnya.
+    assert.ok(
+      !/await res\.json\(\)/.test(kode),
+      'masih ada res.json() tanpa penjaga'
+    );
+
+    // Tiga handler, tiga pembacaan jawaban, tiga penyebutan alasan.
+    const jumlahBaca = (kode.match(/bacaJawaban\(res\)/g) || []).length;
+    assert.equal(jumlahBaca, 3, 'harus tiga: upload desain, biaya tambahan, status desain');
+    assert.equal((kode.match(/alasanPenolakan\(res, jawaban\)/g) || []).length, 3);
+    assert.equal((kode.match(/pesanGalat\(galat,/g) || []).length, 3);
+    assert.equal((kode.match(/console\.error\(/g) || []).length, 3);
+  });
+
+  it('alasan 409 add-charge disebut di komentar handler biaya tambahan', () => {
+    // Route `add-charge` menolak dengan 409 ketika pembeli SEDANG membayar biaya
+    // tambahan. Kehilangan pesan itu membuat admin mencatat biaya yang sama
+    // berulang kali, dan setiap catatan ganda adalah tagihan yang salah.
+    const mentah = fs.readFileSync(
+      path.join(AKAR_SRC, 'app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx'),
+      'utf8'
+    );
+    assert.match(mentah, /409/);
+  });
+
+  it('DeleteBillboardBtn dan register memakai bacaJawaban', () => {
+    for (const jalur of [
+      path.join(AKAR_SRC, 'components', 'admin', 'DeleteBillboardBtn.tsx'),
+      path.join(AKAR_SRC, 'app', 'register', 'page.tsx'),
+    ]) {
+      const kode = kodeSajaA2(jalur);
+      assert.match(kode, /bacaJawaban\(res\)/, `${jalur}`);
+      assert.match(kode, /alasanPenolakan\(res, jawaban\)/, `${jalur}`);
+      assert.ok(!/await res\.json\(\)/.test(kode), `${jalur} masih res.json() mentah`);
+    }
+  });
+
+  it('register membungkus fetch dengan try dan melepas loading di finally', () => {
+    // Tanpa `try`, `fetch` yang melempar (jaringan mati) melewati
+    // `setLoading(false)` sama sekali: tombol tertinggal "Mendaftar..."
+    // selamanya dan calon pengguna pergi tanpa akun.
+    const kode = kodeSajaA2(path.join(AKAR_SRC, 'app', 'register', 'page.tsx'));
+    const handler = kode.slice(kode.indexOf('handleRegister'), kode.indexOf('return ('));
+
+    assert.match(handler, /try \{/);
+    assert.match(handler, /catch \(galat\)/);
+    assert.match(handler, /finally \{\s*setLoading\(false\);/);
+
+    // Dan `setLoading(false)` TIDAK boleh lagi tergantung di badan utama.
+    const setelahFinally = handler.slice(handler.indexOf('finally'));
+    assert.equal((handler.match(/setLoading\(false\)/g) || []).length, 1);
+    assert.ok(setelahFinally.includes('setLoading(false)'));
+  });
+
+  // --- Route: galat tidak boleh dibuang tanpa jejak -------------------------
+
+  it('catch di route chat/suggest, booking/cancel mencatat galatnya', () => {
+    for (const bagian of [
+      ['app', 'api', 'admin', 'chat', 'suggest', 'route.ts'],
+      ['app', 'api', 'booking', 'cancel', 'route.ts'],
+    ]) {
+      const jalur = path.join(AKAR_SRC, ...bagian);
+      const kode = kodeSajaA2(jalur);
+      assert.match(kode, /catch \(galat\)/, jalur);
+      assert.match(kode, /console\.error\(/, jalur);
+    }
+  });
+
+  it('chat/suggest memeriksa aiRes.ok dan tidak pernah membalas reply kosong', () => {
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'api', 'admin', 'chat', 'suggest', 'route.ts')
+    );
+
+    // Key kedaluwarsa (403), kuota habis (429), dan prompt yang diblokir filter
+    // semuanya memulangkan JSON TANPA `candidates`. Tanpa gerbang ini admin
+    // menerima 200 berisi `{ reply: undefined }` — kotak draft terbuka kosong
+    // tanpa satu pun tanda bahwa AI-nya menolak.
+    assert.match(kode, /if \(!aiRes\.ok\)/);
+    assert.match(kode, /typeof draft === 'string'/);
+    assert.ok(!/reply: aiData\.candidates/.test(kode));
+  });
+
+  it('log chat/suggest tidak pernah memuat badan balasan Gemini maupun kuncinya', () => {
+    // Badan balasan memuat KEMBALI prompt beserta isi percakapan pelanggan, dan
+    // prompt itu dibangun dari sepuluh pesan terakhir. Statusnya saja yang
+    // dicatat.
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'api', 'admin', 'chat', 'suggest', 'route.ts')
+    );
+    for (const baris of kode.split('\n')) {
+      if (!baris.includes('console.')) continue;
+      assert.ok(!/geminiApiKey/.test(baris), `kunci tercatat: ${baris.trim()}`);
+      assert.ok(!/aiData/.test(baris), `badan balasan tercatat: ${baris.trim()}`);
+      assert.ok(!/\bprompt\b/.test(baris), `prompt tercatat: ${baris.trim()}`);
+      assert.ok(!/conversation/.test(baris), `percakapan tercatat: ${baris.trim()}`);
+    }
+  });
+
+  it('catch dekripsi di rahasia.ts tidak mencatat isi galatnya', () => {
+    // Jejak tumpukan dari `decipher.final()` bisa memuat potongan buffer yang
+    // sedang dibuka, dan yang sedang dibuka adalah API key.
+    const kode = kodeSajaA2(path.join(AKAR_SRC, 'lib', 'rahasia.ts'));
+    // Yang diperiksa adalah BENTUK catch-nya, bukan kata-kata di pesan log.
+    //
+    // Versi pertama tes ini memindai kata terlarang di baris `console.error`
+    // setelah membuang teks ber-kutip, dan pesan Indonesia yang sah
+    // ("Gagal membuka rahasia") menjatuhkannya — tes yang gagal karena
+    // bahasanya, bukan karena kodenya. Pengikat yang tidak ada tidak bisa
+    // dicatat; itulah jaminan yang sebenarnya dibutuhkan.
+    assert.ok(
+      !/catch \((?:error|err|e|galat)\)/.test(kode),
+      'catch bernama: isi galat dekripsi bisa memuat potongan kunci'
+    );
+    assert.match(kode, /\} catch \{/);
+  });
+
+  // --- chat-server: token tidak boleh sampai ke log -------------------------
+
+  it('chat-server tidak pernah mencatat isi galat verifikasi token', () => {
+    const kode = fs
+      .readFileSync(path.join(__dirname, '..', 'chat-server', 'index.js'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+
+    // Yang diperiksa hanya WILAYAH verifikasi token: dari `verifyGuestToken`
+    // sampai sebelum `tolakanBalasanAI` — di dalamnya ada pembacaan guest token
+    // dan handshake `decodeNextAuthToken`. Di luar wilayah itu ada empat catch
+    // bernama yang sah (galat query billboard, galat Gemini, galat kirim pesan);
+    // versi pertama tes ini melarang catch bernama di SELURUH berkas dan karena
+    // itu gagal atas kode yang benar.
+    //
+    // Di dalam wilayah ini larangannya mutlak: isi galat `decode` dan
+    // `JSON.parse` memuat potongan token yang dikirim client, dan log server
+    // bukan tempat menyimpan bahan tebakan token orang lain.
+    const mulai = kode.indexOf('function verifyGuestToken');
+    const habis = kode.indexOf('function tolakanBalasanAI');
+    assert.ok(mulai > 0 && habis > mulai, 'wilayah verifikasi token tidak ditemukan');
+    const wilayah = kode.slice(mulai, habis);
+
+    assert.ok(
+      !/catch \((?:error|err|e|galat)\)/.test(wilayah),
+      'catch bernama di jalur verifikasi token: isi galatnya bisa memuat token'
+    );
+    // Dan wilayah itu memang punya catch — kalau tidak, larangan di atas lulus
+    // hanya karena tidak ada apa-apa untuk dilanggar.
+    assert.match(wilayah, /\} catch \{/);
+  });
+
+  it('kunci Gemini di chat-server dikirim lewat header, bukan query string', () => {
+    // Komentar dibuang lebih dulu: komentar yang MENJELASKAN cacat lama menyebut
+    // bentuk cacat itu kata per kata, dan pemindai yang membacanya menuduh kode
+    // yang sudah benar.
+    const kode = fs
+      .readFileSync(path.join(__dirname, '..', 'chat-server', 'index.js'), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+
+    // `?key=${GEMINI_API_KEY}` menaruh kunci di URL, dan URL adalah bagian
+    // request yang paling banyak disalin: access log setiap proxy, jejak
+    // tumpukan `fetch` saat TLS gagal, metrik per-endpoint. Tidak satu pun bisa
+    // dibersihkan belakangan. Route Next sudah memakai header; berkas ini
+    // tertinggal dan membocorkan kunci yang sama.
+    assert.ok(
+      !/\?key=\$\{GEMINI_API_KEY\}/.test(kode),
+      'kunci Gemini masih di query string'
+    );
+    assert.match(kode, /'x-goog-api-key': GEMINI_API_KEY/);
+
+    // Badan jawaban Gemini MEMANTULKAN prompt saat permintaan diblokir, dan
+    // prompt itu memuat katalog billboard plus pertanyaan pengunjung apa adanya.
+    assert.ok(
+      !/JSON\.stringify\(data/.test(kode),
+      'badan jawaban Gemini masih dituangkan ke log'
+    );
+    // Pesan galat Google menyebut nama proyek dan sebab internal; pengunjung
+    // tidak bisa menindaklanjutinya dan tidak berhak tahu.
+    assert.ok(
+      !/kesalahan pada AI: \$\{errorMessage\}/.test(kode),
+      'pesan galat Google masih diteruskan ke pengunjung'
+    );
+  });
+
+  // --- manager.js: build gagal harus terlihat berbeda -----------------------
+
+  it('manager.js membedakan proses berhenti gagal dari berhenti biasa', () => {
+    // `next build` yang gagal dulu tampil identik dengan Ctrl+C yang disengaja,
+    // lalu tertutup menu satu detik kemudian.
+    const kode = fs
+      .readFileSync(path.join(__dirname, '..', 'manager.js'), 'utf8')
+      .replace(/\/\/.*$/gm, '');
+    assert.match(kode, /typeof code === 'number' && code !== 0/);
+    assert.match(kode, /exit code \$\{code\}/);
+  });
+
+  // --- exhaustive-deps: pembersihan effect --------------------------------
+
+  it('PaymentClient menahan ketiga elemen wadah di variabel lokal', () => {
+    // Fungsi pembersih berjalan SETELAH React melepas elemen-elemennya, jadi
+    // `pickerRef.current` di sana bisa menunjuk elemen BARU milik render
+    // berikutnya: pembersihan sesi lama lalu mengosongkan wadah yang sudah
+    // berisi komponen SDK sesi baru, dan pembeli melihat pilihan pembayaran
+    // lenyap beberapa milidetik setelah muncul.
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'dashboard', 'order', '[id]', 'payment', 'PaymentClient.tsx')
+    );
+    const effect = kode.slice(kode.indexOf('if (!sesi) return;'), kode.indexOf('}, [router, sesi]'));
+
+    assert.match(effect, /const wadahPicker = pickerRef\.current;/);
+    assert.match(effect, /const wadahAksiEl = aksiRef\.current;/);
+    assert.match(effect, /const wadahInstruksiEl = instruksiRef\.current;/);
+
+    const pembersih = effect.slice(effect.lastIndexOf('return () => {'));
+    assert.ok(
+      !/\.current/.test(pembersih.replace(/komponenRef\.current/g, '')),
+      'pembersih masih membaca .current, bukan variabel yang ditahan'
+    );
+  });
+
+  it('effect socket ChatWidget mencantumkan chatUrl di dependensinya', () => {
+    // Nilainya memang tidak pernah berubah, jadi effect tetap berjalan sekali.
+    // Yang diperbaiki adalah daftar `[]` yang BERBOHONG: ia menyatakan effect
+    // tidak membaca nilai render apa pun, padahal ia membaca `chatUrl` dua kali.
+    const kode = kodeSajaA2(path.join(AKAR_SRC, 'components', 'ChatWidget.tsx'));
+    assert.match(kode, /\}, \[chatUrl\]\);/);
+  });
+
+  // --- Binding mati --------------------------------------------------------
+
+  it('impor yang tidak dirender sudah dibuang', () => {
+    const kasus = [
+      [['app', 'login', 'page.tsx'], /\bChrome\b/],
+      [['components', 'admin', 'RevenueSection.tsx'], /useEffect/],
+      [['components', 'ImageUpload.tsx'], /ImageIcon/],
+      [['components', 'CheckoutForm.tsx'], /useSearchParams/],
+      [['app', 'admin', '(dashboard)', 'billboards', 'page.tsx'], /\bTag\b/],
+    ];
+
+    for (const [bagian, pola] of kasus) {
+      const jalur = path.join(AKAR_SRC, ...bagian);
+      const kode = kodeSajaA2(jalur);
+      const imporSaja = kode
+        .split('\n')
+        .filter((baris) => baris.trimStart().startsWith('import'))
+        .join('\n');
+      assert.ok(!pola.test(imporSaja), `${jalur} masih mengimpor ${pola}`);
+    }
+  });
+
+  it('handler GET settings tidak lagi menerima parameter yang tak dibaca', () => {
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'api', 'admin', 'settings', 'route.ts')
+    );
+    assert.match(kode, /export async function GET\(\) \{/);
+  });
+
+  it('callback jwt hanya menerima token dan user', () => {
+    // `account` dan `profile` selalu `undefined` pada pemanggilan refresh token.
+    // Menuliskannya memberi kesan callback ini membedakan provider, dan penulis
+    // yang percaya itu akan bercabang pada `account.provider` yang tidak ada.
+    const kode = kodeSajaA2(path.join(AKAR_SRC, 'lib', 'auth.ts'));
+    assert.match(kode, /async jwt\(\{ token, user \}\)/);
+  });
+
+  // --- Konfigurasi lint ----------------------------------------------------
+
+  it('eslint mengizinkan awalan _ dan rest sibling, tapi tidak lebih', () => {
+    const kode = fs.readFileSync(path.join(__dirname, '..', 'eslint.config.mjs'), 'utf8');
+
+    // `ignoreRestSiblings` menjaga pencabutan `Decimal` sebelum menyeberang ke
+    // Client Component; `argsIgnorePattern` menjaga parameter event SDK yang
+    // sengaja tidak dibaca. Keduanya kode yang benar.
+    assert.match(kode, /argsIgnorePattern: "\^_"/);
+    assert.match(kode, /ignoreRestSiblings: true/);
+
+    // Aturannya tetap "warn", tidak pernah "off": binding mati TANPA awalan `_`
+    // harus tetap dilaporkan.
+    assert.match(kode, /"@typescript-eslint\/no-unused-vars":\s*\[\s*\n\s*"warn",/);
+    assert.ok(!/"@typescript-eslint\/no-unused-vars":\s*"off"/.test(kode));
+  });
+
+  it('pencabutan Decimal di orders/page.tsx masih ada', () => {
+    // Inilah yang dilindungi `ignoreRestSiblings`. Membuangnya membuat kolom
+    // Decimal menyeberang ke Client Component, dan halaman transaksi mati saat
+    // dirender — seluruh pesanan tidak bisa dikelola.
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'admin', '(dashboard)', 'orders', 'page.tsx')
+    );
+    assert.match(kode, /\{ dpAmount: _dpAmount, \.\.\.trx \}/);
+  });
+
+  it('onFatal tetap mengabaikan isi event SDK', () => {
+    const kode = kodeSajaA2(
+      path.join(AKAR_SRC, 'app', 'dashboard', 'order', '[id]', 'payment', 'PaymentClient.tsx')
+    );
+    const fatal = kode.slice(kode.indexOf('const onFatal'), kode.indexOf('void import('));
+
+    // Detail event bisa memuat data channel. Tipe parameternya tetap ditulis
+    // supaya pembaca tahu apa yang tersedia dan bahwa mengabaikannya keputusan.
+    assert.match(fatal, /_event: XenditFatalErrorEvent/);
+    assert.ok(!/console\./.test(fatal), 'detail SDK tidak boleh masuk console');
+    assert.ok(!/_event\./.test(fatal), 'isi event tidak boleh dibaca');
+  });
+
+  // --- Berkas tes sendiri --------------------------------------------------
+
+  it('suite ini tidak mengimpor `test` yang tak pernah dipanggil', () => {
+    const kode = fs.readFileSync(path.join(__dirname, 'xendit.test.cjs'), 'utf8');
+    const baris = kode.split(/\r?\n/).find((b) => b.includes("require('node:test')"));
+    assert.ok(baris, 'baris require node:test tidak ditemukan');
+    assert.ok(!/\btest\b/.test(baris.slice(0, baris.indexOf('require'))));
+    assert.match(baris, /describe, it, beforeEach, afterEach/);
   });
 });

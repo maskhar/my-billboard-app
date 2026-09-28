@@ -156,6 +156,16 @@ export default async function OrderDetailPage(props: Props) {
               {buktiPasang && (
                   <div className="bg-green-50/50 border border-green-200 rounded-xl p-6 mb-8 flex gap-6 items-center animate-in fade-in slide-in-from-bottom-2">
                       <div className="w-24 h-24 bg-white rounded-lg p-1 shadow-sm shrink-0">
+                           {/*
+                             `<img>` biasa, bukan `next/image`: bukti pemasangan
+                             diunggah admin dan tersimpan di penyimpanan yang
+                             hostnya tidak ada di `remotePatterns`
+                             next.config.ts. `next/image` melempar saat
+                             dijalankan untuk sumber di luar daftar itu, dan
+                             halaman ini adalah satu-satunya tempat pembeli
+                             melihat pesanannya.
+                           */}
+                           {/* eslint-disable-next-line @next/next/no-img-element */}
                            <img src={buktiPasang} alt="Bukti pemasangan iklan di lokasi" className="w-full h-full object-cover rounded border border-gray-100 cursor-pointer hover:opacity-80"/>
                       </div>
                       <div className="flex-1">
@@ -171,6 +181,8 @@ export default async function OrderDetailPage(props: Props) {
 
               {/* INFO DETAIL BAWAH */}
               <div className="bg-gray-50 rounded-2xl p-6 flex flex-col md:flex-row gap-6 items-center md:items-start border border-gray-200">
+                  {/* Alasan sama: `mainImage` diisi admin, hostnya tidak terdaftar. */}
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src={order.billboard.mainImage} alt={order.billboard.title} className="w-24 h-24 rounded-xl object-cover border border-gray-300" />
                   <div className="flex-1 text-center md:text-left">
                       <h4 className="font-bold text-gray-800 text-lg">{order.billboard.title}</h4>

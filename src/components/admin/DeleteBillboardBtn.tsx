@@ -4,6 +4,8 @@
 import { Trash2, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { pesanGalat } from '@/lib/pesan-galat';
 
 export default function DeleteBillboardBtn({ id, title }: { id: string, title: string }) {
   const router = useRouter();
@@ -28,15 +30,27 @@ export default function DeleteBillboardBtn({ id, title }: { id: string, title: s
               body: JSON.stringify({ id }),
           });
 
+          // Tiga cacat ditambal bersamaan di sini:
+          //
+          //   1. `await res.json()` tanpa penjaga. Balasan 500 berbadan HTML
+          //      membuatnya melempar, lemparannya mendarat di `catch` di bawah,
+          //      dan pesan server yang sebenarnya hilang.
+          //   2. `data.message` dibacakan apa adanya. Bila route memulangkan
+          //      penolakan tanpa `message`, admin membaca "Gagal: undefined".
+          //   3. `catch (err)` membuang galatnya tanpa satu baris log. Route ini
+          //      MENOLAK penghapusan billboard yang masih punya booking aktif —
+          //      alasan yang menuntut tindakan sama sekali berbeda dari "server
+          //      mati" — dan itulah justru pesan yang paling sering hilang.
+          const jawaban = await bacaJawaban(res);
           if (res.ok) {
-              alert("✅ Data berhasil dihapus.");
-              router.refresh(); 
+              alert(jawaban.pesan ?? "✅ Data berhasil dihapus.");
+              router.refresh();
           } else {
-              const data = await res.json();
-              alert("❌ Gagal: " + data.message);
+              alert("❌ Gagal: " + alasanPenolakan(res, jawaban));
           }
-      } catch (err) {
-          alert("Terjadi kesalahan sistem.");
+      } catch (galat) {
+          console.error('Gagal menghapus billboard:', galat);
+          alert(pesanGalat(galat, "Terjadi kesalahan sistem."));
       } finally {
           setLoading(false);
       }

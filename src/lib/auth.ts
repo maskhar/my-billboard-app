@@ -228,7 +228,13 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
     
-    async jwt({ token, user, account, profile }) {
+    // `account` dan `profile` dibuang dari daftar parameter: keduanya tidak
+    // dibaca, dan seluruh isi token diambil ulang dari database lewat `user.email`
+    // di bawah. Menuliskannya memberi kesan callback ini membedakan provider
+    // (Google vs kredensial) padahal tidak — dan penulis berikutnya yang percaya
+    // itu akan menambahkan cabang berdasarkan `account.provider` yang selalu
+    // `undefined` pada pemanggilan refresh token.
+    async jwt({ token, user }) {
       if (user) {
         // Ambil data lengkap dari DB saat login
         const dbUser = await prisma.user.findUnique({

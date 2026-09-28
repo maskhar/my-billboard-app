@@ -381,7 +381,20 @@ export default function BillboardFormPage() {
                              <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 gap-4">
                                  {form.gallery.map((url, i) => (
                                      <div key={i} className="relative aspect-square rounded-lg border-2 border-gray-200 overflow-hidden group">
-                                         <img src={url} alt={`Gallery image ${i + 1}`} className="w-full h-full object-cover"/>
+                                         {/*
+                                           `<img>` biasa, bukan `next/image`:
+                                           URL galeri diisi admin — hasil widget
+                                           Cloudinary atau ditempel manual — dan
+                                           `remotePatterns` di next.config.ts
+                                           hanya memuat tiga host. `next/image`
+                                           melempar saat dijalankan untuk sumber
+                                           di luar daftar itu, jadi satu URL host
+                                           baru akan menjatuhkan seluruh form
+                                           yang sedang diisi admin, beserta
+                                           isinya.
+                                         */}
+                                         {/* eslint-disable-next-line @next/next/no-img-element */}
+                                         <img src={url} alt={`Gambar galeri ${i + 1}`} className="w-full h-full object-cover"/>
                                          <button 
                                             type='button' 
                                             onClick={() => removeGallery(i)} 
