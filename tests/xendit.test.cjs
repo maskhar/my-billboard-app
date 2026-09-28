@@ -18580,3 +18580,90 @@ describe('robots.txt dan sitemap.xml dirender per permintaan', () => {
     assert.doesNotMatch(kode, /export const revalidate/);
   });
 });
+
+describe('README menjelaskan repo ini, bukan templat', () => {
+  // README sebelumnya adalah keluaran `create-next-app` apa adanya. Yang paling
+  // merugikan bukan basa-basinya, melainkan yang TIDAK disebutkan: aplikasi ini
+  // tidak bisa dijalankan tanpa PostgreSQL dan tanpa belasan variabel
+  // environment, sementara templat itu menyuruh orang menjalankan `npm run dev`
+  // lalu berharap. Test ini menjaga agar isinya tidak diam-diam kembali ke sana.
+  const README = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+
+  it('tidak lagi memuat kalimat templat create-next-app', () => {
+    for (const kalimat of [
+      'bootstrapped with',
+      'Learn Next.js',
+      'the Next.js GitHub repository',
+      'Deploy on Vercel',
+      'Geist',
+    ]) {
+      assert.ok(
+        !README.includes(kalimat),
+        'README masih memuat kalimat templat: ' + kalimat
+      );
+    }
+  });
+
+  it('menyebut syarat yang membuat aplikasi tidak bisa jalan tanpanya', () => {
+    // Ketiganya adalah penyebab kegagalan pertama orang baru, berurutan.
+    for (const wajib of ['PostgreSQL', 'DATABASE_URL', 'NEXTAUTH_SECRET']) {
+      assert.match(README, new RegExp(wajib), 'README tidak menyebut ' + wajib);
+    }
+  });
+
+  it('menyebut porta 4000, bukan 3000', () => {
+    // `npm run dev` menyetel `-p 4000`. README yang menyebut 3000 mengirim orang
+    // ke alamat yang tidak menjawab.
+    const kode = fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8');
+    const porta = JSON.parse(kode).scripts.dev.match(/-p (\d+)/);
+    assert.ok(porta, 'skrip dev tidak lagi menyetel porta');
+    assert.match(README, new RegExp(porta[1]), 'README tidak menyebut porta ' + porta[1]);
+    assert.ok(
+      !/localhost:3000/.test(README),
+      'README masih menunjuk localhost:3000'
+    );
+  });
+
+  it('memperingatkan migrate deploy, bukan db push', () => {
+    // `db push` menyamakan schema tanpa menjalankan migrasi, sehingga constraint
+    // GIST pencegah tumpang-tindih dan indeks unik bersyarat milik `Payment`
+    // tidak pernah terbuat — keduanya hanya ada di berkas migrasinya.
+    assert.match(README, /migrate deploy/);
+    assert.match(README, /db push/, 'README tidak memperingatkan tentang db push');
+  });
+
+  it('tidak memuat satu pun nilai rahasia', () => {
+    // README adalah berkas publik. Menyebut NAMA variabel aman; menyebut
+    // nilainya tidak.
+    const jalurEnv = path.join(__dirname, '..', '.env');
+    if (!fs.existsSync(jalurEnv)) return;
+
+    const bocor = [];
+    for (const baris of fs.readFileSync(jalurEnv, 'utf8').split('\n')) {
+      const cocok = baris.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*)"?\s*$/);
+      if (!cocok) continue;
+      const [, nama, nilai] = cocok;
+      const bersih = nilai.trim();
+      if (bersih.length < 12) continue;
+      if (/localhost|127\.0\.0\.1/.test(bersih)) continue;
+      if (README.includes(bersih)) bocor.push(nama);
+    }
+    // Hanya NAMA variabelnya yang dilaporkan, bukan nilainya.
+    assert.deepStrictEqual(bocor, [], 'nilai variabel ini muncul di README: ' + bocor.join(', '));
+  });
+
+  it('menyebut perintah test yang benar-benar ada', () => {
+    const skrip = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')
+    ).scripts;
+    const disebut = README.match(/npm run [a-z:]+/g) ?? [];
+    for (const perintah of new Set(disebut)) {
+      const nama = perintah.replace('npm run ', '');
+      assert.ok(
+        Object.hasOwn(skrip, nama),
+        'README menyebut `' + perintah + '` yang tidak ada di package.json'
+      );
+    }
+    assert.ok(disebut.includes('npm run test:xendit'), 'README tidak menyebut cara menjalankan test');
+  });
+});
