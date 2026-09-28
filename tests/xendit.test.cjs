@@ -17875,3 +17875,354 @@ describe('tidak ada penunjuk yang menunjuk ke ruang kosong', () => {
     assert.doesNotMatch(tsconfig, /prisma\.config/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Konfigurasi yang salah harus terlihat saat boot, bukan saat pembeli membayar
+// ---------------------------------------------------------------------------
+describe('pemeriksaan environment saat boot', () => {
+  const akar = (...bagian) => path.join(__dirname, '..', ...bagian);
+  const JALUR_ENV = akar('src', 'lib', 'env.ts');
+  const JALUR_HOOK = akar('src', 'instrumentation.ts');
+
+  // `src/lib/env.ts` sengaja tidak mengimpor apa pun, jadi ia bisa dimuat lewat
+  // harness yang sama dengan modul lain tanpa satu pun mock.
+  function muat() {
+    return muatDenganModulPalsu('../src/lib/env.ts', {});
+  }
+
+  /** Environment lengkap yang lulus semua pemeriksaan mode produksi. */
+  function envLengkap(timpa = {}) {
+    return {
+      NODE_ENV: 'production',
+      DATABASE_URL: 'postgresql://a:b@h:5432/d',
+      NEXTAUTH_SECRET: 'x'.repeat(32),
+      NEXTAUTH_URL: 'https://contoh.test',
+      XENDIT_SECRET_KEY: 'xnd_kunci',
+      XENDIT_CALLBACK_TOKEN: 'token',
+      APP_ORIGIN: 'https://contoh.test',
+      SETTINGS_ENCRYPTION_KEY: 'a'.repeat(64),
+      SMTP_HOST: 'smtp.test',
+      SMTP_USER: 'u',
+      SMTP_PASS: 'p',
+      MAIL_FROM: 'no-reply@contoh.test',
+      ADMIN_EMAIL: 'admin@contoh.test',
+      CRON_SECRET: 'rahasia-cron',
+      NEXT_PUBLIC_CHAT_URL: 'https://chat.contoh.test',
+      ...timpa,
+    };
+  }
+
+  const nama = (daftar) => daftar.map((t) => t.nama);
+
+  it('environment lengkap tidak menghasilkan temuan apa pun', () => {
+    const { periksaEnv } = muat();
+    const hasil = periksaEnv(envLengkap(), true);
+    assert.deepStrictEqual(hasil.fatal, []);
+    assert.deepStrictEqual(hasil.peringatan, []);
+  });
+
+  // INI TEMUAN INTINYA. `NEXTAUTH_SECRET` adalah satu-satunya variabel di repo
+  // ini yang gagal-TERBUKA: NextAuth v4 menurunkan secret-nya sendiri dari hash
+  // config, jadi kekosongannya tidak melempar apa pun di mana pun. Tanpa
+  // gerbang ini tidak ada satu pun sinyal bahwa sesi ditandatangani kunci yang
+  // bisa disusun ulang dari sumber terbuka.
+  it('NEXTAUTH_SECRET kosong selalu fatal, termasuk di mode pengembangan', () => {
+    const { periksaEnv } = muat();
+
+    for (const produksi of [true, false]) {
+      const env = envLengkap({ NEXTAUTH_SECRET: '', NODE_ENV: produksi ? 'production' : 'development' });
+      const hasil = periksaEnv(env, produksi);
+      assert.ok(
+        nama(hasil.fatal).includes('NEXTAUTH_SECRET'),
+        `NEXTAUTH_SECRET kosong harus fatal saat produksi=${produksi}`
+      );
+    }
+  });
+
+  it('NEXTAUTH_SECRET yang hanya spasi diperlakukan sama dengan kosong', () => {
+    const { periksaEnv } = muat();
+    const hasil = periksaEnv(envLengkap({ NEXTAUTH_SECRET: '   ' }), true);
+    assert.ok(nama(hasil.fatal).includes('NEXTAUTH_SECRET'));
+  });
+
+  it('DATABASE_URL kosong fatal di kedua mode', () => {
+    const { periksaEnv } = muat();
+    for (const produksi of [true, false]) {
+      const hasil = periksaEnv(envLengkap({ DATABASE_URL: undefined }), produksi);
+      assert.ok(nama(hasil.fatal).includes('DATABASE_URL'));
+    }
+  });
+
+  it('variabel Xendit hanya fatal di produksi', () => {
+    const { periksaEnv } = muat();
+
+    const dev = periksaEnv(
+      envLengkap({
+        NODE_ENV: 'development',
+        XENDIT_SECRET_KEY: '',
+        XENDIT_CALLBACK_TOKEN: '',
+        APP_ORIGIN: '',
+      }),
+      false
+    );
+    assert.deepStrictEqual(dev.fatal, [], 'pengembangan tidak boleh ditahan variabel Xendit');
+
+    const prod = periksaEnv(
+      envLengkap({ XENDIT_SECRET_KEY: '', XENDIT_CALLBACK_TOKEN: '', APP_ORIGIN: '' }),
+      true
+    );
+    for (const n of ['XENDIT_SECRET_KEY', 'XENDIT_CALLBACK_TOKEN', 'APP_ORIGIN']) {
+      assert.ok(nama(prod.fatal).includes(n), `${n} harus fatal di produksi`);
+    }
+  });
+
+  // Bentuknya, bukan hanya keberadaannya: `ambilKunci()` di `src/lib/rahasia.ts`
+  // menolak apa pun selain 64 heksadesimal, dan nilai yang salah bentuk tanpa
+  // gerbang ini hanya terlihat saat admin menekan Simpan di halaman setelan.
+  it('SETTINGS_ENCRYPTION_KEY yang bukan 64 heksadesimal ditolak, bukan hanya yang kosong', () => {
+    const { periksaEnv } = muat();
+
+    const pendek = periksaEnv(envLengkap({ SETTINGS_ENCRYPTION_KEY: 'abc123' }), true);
+    assert.ok(nama(pendek.fatal).includes('SETTINGS_ENCRYPTION_KEY'));
+
+    const bukanHex = periksaEnv(envLengkap({ SETTINGS_ENCRYPTION_KEY: 'z'.repeat(64) }), true);
+    assert.ok(nama(bukanHex.fatal).includes('SETTINGS_ENCRYPTION_KEY'));
+
+    const spasiDiUjung = periksaEnv(
+      envLengkap({ SETTINGS_ENCRYPTION_KEY: ' ' + 'a'.repeat(64) + ' ' }),
+      true
+    );
+    assert.deepStrictEqual(
+      spasiDiUjung.fatal,
+      [],
+      'kunci benar yang tersalin bersama spasi harus tetap diterima'
+    );
+  });
+
+  // Menahan server karena SMTP belum diisi berarti menukar "pembeli tidak dapat
+  // email" dengan "situs mati". Pertukaran itu salah arah.
+  it('SMTP, ADMIN_EMAIL, CRON_SECRET, dan chat hanya peringatan — tidak menahan boot', () => {
+    const { periksaEnv } = muat();
+    const hasil = periksaEnv(
+      envLengkap({
+        SMTP_HOST: '',
+        SMTP_USER: '',
+        SMTP_PASS: '',
+        MAIL_FROM: '',
+        ADMIN_EMAIL: '',
+        CRON_SECRET: '',
+        NEXT_PUBLIC_CHAT_URL: '',
+      }),
+      true
+    );
+    assert.deepStrictEqual(hasil.fatal, []);
+    for (const n of ['SMTP_HOST', 'SMTP_USER', 'SMTP_PASS', 'MAIL_FROM', 'ADMIN_EMAIL', 'CRON_SECRET', 'NEXT_PUBLIC_CHAT_URL']) {
+      assert.ok(nama(hasil.peringatan).includes(n), `${n} harus jadi peringatan`);
+    }
+  });
+
+  it('pastikanEnvSiap melempar saat ada temuan fatal dan menyebut nama variabelnya', () => {
+    const { pastikanEnvSiap } = muat();
+    const errAsli = console.error;
+    console.error = () => {};
+    try {
+      assert.throws(
+        () => pastikanEnvSiap(envLengkap({ NEXTAUTH_SECRET: '' }), true),
+        /NEXTAUTH_SECRET/
+      );
+    } finally {
+      console.error = errAsli;
+    }
+  });
+
+  it('pastikanEnvSiap lolos dan tidak melempar saat hanya ada peringatan', () => {
+    const { pastikanEnvSiap } = muat();
+    const warnAsli = console.warn;
+    const tercatat = [];
+    console.warn = (...a) => tercatat.push(a.join(' '));
+    try {
+      pastikanEnvSiap(envLengkap({ ADMIN_EMAIL: '' }), true);
+    } finally {
+      console.warn = warnAsli;
+    }
+    assert.strictEqual(tercatat.length, 1);
+    assert.match(tercatat[0], /ADMIN_EMAIL/);
+  });
+
+  it('environment lengkap tidak mencetak apa pun', () => {
+    const { pastikanEnvSiap } = muat();
+    const warnAsli = console.warn;
+    const errAsli = console.error;
+    const tercatat = [];
+    console.warn = (...a) => tercatat.push(a.join(' '));
+    console.error = (...a) => tercatat.push(a.join(' '));
+    try {
+      pastikanEnvSiap(envLengkap(), true);
+    } finally {
+      console.warn = warnAsli;
+      console.error = errAsli;
+    }
+    assert.deepStrictEqual(tercatat, []);
+  });
+
+  // NILAI RAHASIA TIDAK BOLEH IKUT KE LOG. Log server terbaca lebih banyak
+  // orang daripada `.env`, dan potongan nilai pun mempersempit ruang tebakan.
+  it('laporan menyebut nama variabel tapi tidak satu pun nilainya', () => {
+    const { periksaEnv, laporanEnv } = muat();
+
+    const RAHASIA = 'NILAI-RAHASIA-YANG-TIDAK-BOLEH-TERCETAK';
+    const env = envLengkap({
+      SETTINGS_ENCRYPTION_KEY: RAHASIA, // salah bentuk → memicu temuan
+      XENDIT_SECRET_KEY: '',
+      NEXTAUTH_SECRET: '',
+    });
+    // Nilai-nilai sah yang lain pun tidak boleh muncul.
+    env.DATABASE_URL = 'postgresql://pengguna:kata-sandi-rahasia@host:5432/db';
+
+    const laporan = laporanEnv(periksaEnv(env, true));
+
+    assert.ok(laporan.includes('SETTINGS_ENCRYPTION_KEY'), 'nama variabel harus ada');
+    assert.ok(!laporan.includes(RAHASIA), 'nilai yang salah bentuk tidak boleh ikut tercetak');
+    assert.ok(!laporan.includes('kata-sandi-rahasia'), 'nilai DATABASE_URL tidak boleh ikut');
+  });
+
+  it('pesan fatal tidak memuat panjang nilai maupun potongannya', () => {
+    const kode = kodeSajaAny(JALUR_ENV);
+    // Pola yang akan memasukkan nilai ke pesan.
+    assert.doesNotMatch(kode, /\$\{nilai\}/, 'nilai tidak boleh diinterpolasi ke pesan');
+    // Yang dilarang adalah panjang/potongan NILAI-nya. `hasil.fatal.length`
+    // adalah jumlah temuan, bukan isi variabel, jadi polanya harus menyebut
+    // sumber nilainya — bukan `.length` apa pun.
+    assert.doesNotMatch(
+      kode,
+      /\$\{[^}]*\b(nilai|mentah|bersih|kunciSetelan|env\[)[^}]*\.length/,
+      'panjang nilai tidak boleh dicetak'
+    );
+    assert.doesNotMatch(
+      kode,
+      /\$\{[^}]*\b(nilai|mentah|bersih|kunciSetelan)[^}]*\.slice\(/,
+      'potongan nilai tidak boleh dicetak'
+    );
+  });
+
+  // Instrumentation hook harus MELEMPAR, bukan `process.exit()`: Next
+  // membungkus lemparan menjadi kegagalan boot yang terbaca, sementara
+  // `process.exit()` membunuh proses tanpa jejak dan membuatnya tak teruji.
+  it('env.ts melempar, tidak memakai process.exit', () => {
+    const kode = kodeSajaAny(JALUR_ENV);
+    assert.doesNotMatch(kode, /process\.exit/);
+    assert.match(kode, /throw new Error\(/);
+  });
+
+  it('instrumentation.ts mengekspor register dan memanggil pastikanEnvSiap', () => {
+    const kode = fs.readFileSync(JALUR_HOOK, 'utf8');
+    assert.match(kode, /export async function register\(/);
+    assert.match(kode, /pastikanEnvSiap\(\)/);
+    assert.match(kode, /from '@\/lib\/env'/);
+  });
+
+  // Hook ini juga dijalankan untuk runtime Edge, yang tidak punya `process.env`
+  // lengkap dan tidak menjalankan satu pun route di aplikasi ini. Tanpa
+  // penjaga ini, Edge akan ditolak boot karena variabel yang tidak relevan.
+  it('instrumentation.ts melewati runtime edge', () => {
+    const kode = fs.readFileSync(JALUR_HOOK, 'utf8');
+    assert.match(kode, /NEXT_RUNTIME === 'edge'/);
+  });
+
+  // Hook tetap tipis: apa pun yang diimpor di sini ikut dimuat di setiap boot,
+  // termasuk `next dev`. Hanya satu impor yang diizinkan.
+  it('instrumentation.ts hanya mengimpor satu modul', () => {
+    const kode = fs.readFileSync(JALUR_HOOK, 'utf8');
+    const impor = kode.match(/^import .*$/gm) || [];
+    assert.strictEqual(impor.length, 1, `hook hanya boleh satu impor, ada ${impor.length}`);
+  });
+
+  // `src/lib/env.ts` tidak boleh mengimpor apa pun: ia dimuat paling awal di
+  // setiap boot, dan satu impor ke Prisma atau ke modul ber-`server-only` akan
+  // memindahkan kegagalannya dari "konfigurasi belum siap" menjadi jejak
+  // tumpukan yang tidak menyebut satu pun nama variabel.
+  it('env.ts tidak mengimpor apa pun', () => {
+    const kode = fs.readFileSync(JALUR_ENV, 'utf8');
+    assert.deepStrictEqual(kode.match(/^import .*$/gm), null);
+    assert.deepStrictEqual(kode.match(/\brequire\(/g), null);
+  });
+
+  // Setiap variabel yang gerbangnya diperiksa di sini harus punya barisnya di
+  // `.env.example`, kalau tidak pesan "lihat .env.example" menunjuk ke berkas
+  // yang tidak menyebutnya.
+  it('setiap variabel yang diperiksa ada di .env.example', () => {
+    const contoh = fs.readFileSync(akar('.env.example'), 'utf8');
+    const { periksaEnv } = muat();
+    const semua = periksaEnv({ NODE_ENV: 'production' }, true);
+    const diperiksa = [...semua.fatal, ...semua.peringatan].map((t) => t.nama);
+
+    assert.ok(diperiksa.length >= 10, `harus ada banyak temuan, ada ${diperiksa.length}`);
+    for (const n of diperiksa) {
+      assert.match(contoh, new RegExp('^' + n + '=', 'm'), `${n} belum ada di .env.example`);
+    }
+  });
+
+  // Temuan 7.16: satu-satunya variabel yang benar-benar hilang dari
+  // `.env.example`. Dibaca hanya oleh `prisma/set-admin.ts`, jadi ia tidak
+  // masuk ke `periksaEnv()` — tapi tetap harus terdokumentasi.
+  it('ADMIN_EMAIL_TARGET terdokumentasi di .env.example', () => {
+    const contoh = fs.readFileSync(akar('.env.example'), 'utf8');
+    assert.match(contoh, /^ADMIN_EMAIL_TARGET=/m);
+  });
+
+  // `.env.example` ikut ke git, jadi setiap nilai di dalamnya adalah nilai
+  // publik. Yang boleh terisi hanya tiga bentuk: kosong, alamat localhost, atau
+  // placeholder HURUF BESAR yang jelas harus diganti. Apa pun selain itu —
+  // nama host sungguhan, kunci, port produksi — adalah kebocoran.
+  it('.env.example hanya memuat nilai kosong, localhost, atau placeholder', () => {
+    const contoh = fs.readFileSync(akar('.env.example'), 'utf8');
+
+    // Default publik yang memang angka dan bukan rahasia.
+    const ANGKA_PUBLIK = /^(SMTP_PORT|PORT|CHAT_AI_BATAS_GLOBAL_PER_MENIT)$/;
+
+    const mencurigakan = [];
+    for (const baris of contoh.split('\n')) {
+      const m = baris.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (!m) continue;
+      const [, nama, mentah] = m;
+      const nilai = mentah.trim().replace(/^["']|["']$/g, '');
+      if (nilai === '') continue;
+      if (ANGKA_PUBLIK.test(nama) && /^\d+$/.test(nilai)) continue;
+      if (nilai.includes('localhost') || nilai.includes('127.0.0.1')) continue;
+      // Placeholder: hanya huruf besar, angka, dan tanda baca pemisah.
+      if (/^[A-Z0-9_<>\-]+$/.test(nilai)) continue;
+      mencurigakan.push(`${nama}=${nilai}`);
+    }
+
+    assert.deepStrictEqual(
+      mencurigakan,
+      [],
+      `nilai yang bukan kosong/localhost/placeholder: ${mencurigakan.join(', ')}`
+    );
+  });
+
+  // Gerbang kebocoran yang sesungguhnya: tidak satu pun nilai dari `.env` lokal
+  // boleh muncul di `.env.example`. Dilewati bila `.env` tidak ada (CI, mesin
+  // bersih) — di situ tidak ada yang bisa bocor.
+  it('tidak satu pun nilai dari .env lokal muncul di .env.example', () => {
+    const jalurEnv = akar('.env');
+    if (!fs.existsSync(jalurEnv)) return;
+
+    const contoh = fs.readFileSync(akar('.env.example'), 'utf8');
+    const bocor = [];
+
+    for (const baris of fs.readFileSync(jalurEnv, 'utf8').split('\n')) {
+      const m = baris.match(/^([A-Z_][A-Z0-9_]*)=(.*)$/);
+      if (!m) continue;
+      const [, nama, mentah] = m;
+      const nilai = mentah.trim().replace(/^["']|["']$/g, '');
+      // Nilai sangat pendek dan alamat localhost pembangunan tidak informatif.
+      if (nilai.length < 12) continue;
+      if (nilai.includes('localhost') || nilai.includes('127.0.0.1')) continue;
+      // HANYA nama variabelnya yang dilaporkan, tidak pernah nilainya.
+      if (contoh.includes(nilai)) bocor.push(nama);
+    }
+
+    assert.deepStrictEqual(bocor, [], `nilai .env ikut ke .env.example: ${bocor.join(', ')}`);
+  });
+});
