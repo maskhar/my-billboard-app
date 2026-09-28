@@ -22,6 +22,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
+import { pesanGalat } from '@/lib/pesan-galat';
 
 interface Props {
   billboardId: string;
@@ -94,8 +95,12 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
       }
 
       router.refresh();
-    } catch (error: any) {
-      alert(`Gagal mengubah status: ${error?.message || 'galat tidak diketahui'}`);
+    } catch (galat) {
+      // `error: any` lalu `error?.message` dulu tertulis di sini. Pada nilai
+      // yang bukan `Error` — `fetch` yang dibatalkan melempar objek tanpa
+      // `message` — hasilnya `undefined`, jadi operator selalu membaca "galat
+      // tidak diketahui" tanpa pernah tahu permintaannya batal, bukan ditolak.
+      alert(`Gagal mengubah status: ${pesanGalat(galat, 'galat tidak diketahui')}`);
     } finally {
       // `setTimeout(..., 500)` dulu menahan hamparan loading setengah detik
       // SETELAH pekerjaan selesai — jeda kosmetik yang, bila komponen sudah

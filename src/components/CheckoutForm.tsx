@@ -4,7 +4,8 @@
 import { useState, useEffect } from 'react';
 import { ArrowLeft, Upload, AlertCircle, Calendar, FileText } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation'; // TAMBAH useSearchParams
-import { useSession } from 'next-auth/react'; 
+import { useSession } from 'next-auth/react';
+import { bacaBadan } from '@/lib/baca-jawaban';
 
 interface CheckoutProps {
   billboard: {
@@ -153,7 +154,15 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
 
           // Respons error bisa saja bukan JSON (mis. halaman error), jadi
           // parsing dijaga agar pesan aslinya tidak tertelan oleh catch.
-          const result = await response.json().catch(() => ({} as any));
+          //
+          // `bacaBadan` memulangkan `Record<string, unknown>`, bukan `any`.
+          // Bedanya nyata di sini: ketiga kolom di bawah (`tagihanSekarang`,
+          // `orderId`, `message`) memang sudah diperiksa `typeof`, tapi dengan
+          // `any` satu nama yang salah tulis — `result.orderID` — lolos `tsc`
+          // dan jatuh ke cabang "halaman pembayaran belum dapat dibuka" pada
+          // SETIAP pesanan yang berhasil. Pembeli membacanya sebagai kegagalan
+          // dan memesan lagi.
+          const result = await bacaBadan(response);
 
           if (response.ok) {
               // Nominal yang dikonfirmasi diambil dari BALASAN SERVER, bukan

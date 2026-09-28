@@ -8,7 +8,7 @@ import {
   tenggatPelunasanLewat,
   uangMasuk,
 } from '@/lib/pembayaran';
-import { PaymentStatus, PaymentTujuan } from '@prisma/client';
+import { PaymentStatus, PaymentTujuan, Prisma } from '@prisma/client';
 import TransactionClient, { type TransaksiUntukClient } from './TransactionClient';
 import Link from 'next/link';
 import { getServerSession } from "next-auth";
@@ -49,7 +49,14 @@ export default async function AdminTransactionsPage({
 
   const filterStatus = paramsQuery.status || 'ALL';
 
-  const whereClause: any = {};
+  // `Prisma.BookingWhereInput`, bukan `any`. Dengan `any`, nama status yang
+  // salah tulis di kanan (`'REFUND_REQUESTED'` — persis cacat yang dicatat
+  // beberapa baris di bawah) lolos pemeriksaan tipe, dan Prisma tidak
+  // mengeluhkannya saat dijalankan: ia hanya tidak cocok dengan satu baris pun,
+  // jadi tabnya tampil kosong dan terbaca sebagai "tidak ada pengajuan refund".
+  // Nama KOLOM yang salah tulis pun dulu lolos dan menjadi query yang melempar
+  // saat dijalankan, bukan saat dibangun.
+  const whereClause: Prisma.BookingWhereInput = {};
   if (filterStatus === 'PENDING') whereClause.status = { in: ['PENDING_PAYMENT', 'PAID_CONFIRMED'] };
   if (filterStatus === 'ACTIVE') whereClause.status = 'ACTIVE';
   // Dulu tertulis 'REFUND_REQUESTED' — status yang tidak pernah ditulis

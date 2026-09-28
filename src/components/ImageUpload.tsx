@@ -1,8 +1,9 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CldUploadWidget } from 'next-cloudinary';
+import { CldUploadWidget, type CloudinaryUploadWidgetResults } from 'next-cloudinary';
 import { Image as ImageIcon, Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
+import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 
 interface ImageUploadProps {
     value: string;
@@ -21,17 +22,61 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
     useEffect(() => { setMounted(true); }, []);
 
     // 1. LOGIKA CLOUD (CLOUDINARY)
-    const onCloudUpload = (result: any) => {
-        onChange(result.info.secure_url);
+    //
+    // `result: any` dulu tertulis di sini, dan `result.info.secure_url`
+    // dibaca langsung. Tipe sungguhan dari pustakanya berbunyi
+    // `info?: string | CloudinaryUploadWidgetInfo` — jadi `info` boleh TEKS dan
+    // boleh tidak ada. Pada bentuk itu `.secure_url` bernilai `undefined`
+    // (`'teks'.secure_url` tidak melempar), sehingga `onChange(undefined)`
+    // MENGOSONGKAN kolom gambar yang tadi sudah terisi — persis setelah admin
+    // melihat widget Cloudinary melaporkan unggahannya berhasil.
+    const onCloudUpload = (result: CloudinaryUploadWidgetResults) => {
+        const info = result.info;
+        if (typeof info !== 'object' || info === null) {
+            alert('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
+            return;
+        }
+        const tautan = info.secure_url;
+        if (typeof tautan !== 'string' || tautan.trim() === '') {
+            alert('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
+            return;
+        }
+        onChange(tautan);
     };
 
     // 2. LOGIKA LOCAL (API SENDIRI)
+    //
+    // Empat cacat ditambal di sini sekaligus:
+    //
+    //   1. `data.error` dibacakan sebagai pesan penolakan. `/api/upload`
+    //      memulangkan `{ message }` pada SETIAP penolakannya — 401, 400 format
+    //      salah, 400 isi tidak cocok, 403, 429, 500 — jadi admin selalu
+    //      membaca "Gagal Upload Lokal: undefined" dan tidak pernah tahu
+    //      sebabnya. "Login dulu" dan "Format harus Gambar" menuntut tindakan
+    //      yang sama sekali berbeda.
+    //   2. `await res.json()` tanpa penjaga. Balasan 500 berbadan HTML
+    //      membuatnya melempar, lemparannya mendarat di `catch` di bawah, dan
+    //      pesan server yang sebenarnya hilang di balik "Error sistem upload".
+    //   3. `data.url` diteruskan tanpa diperiksa. Respons 200 tanpa `url`
+    //      menyetel kolom gambar menjadi `undefined`, jadi form yang tadi punya
+    //      gambar menjadi kosong SETELAH unggahan yang berhasil.
+    //   4. Kotak berkas tidak pernah dikosongkan. `<input type="file">` tidak
+    //      memicu `change` bila nilainya tidak berubah, jadi setelah gagal,
+    //      memilih berkas yang sama tidak melakukan apa pun sama sekali.
+    //
+    // Batas ukurannya juga disamakan dengan `MAX_BYTES` di route (10MB). Dua
+    // angka yang berbeda berarti berkas 7MB ditolak di sini dengan alasan
+    // "File max 5MB" padahal server menerimanya.
     const handleLocalUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        const file = e.target.files?.[0];
+        const kotak = e.currentTarget;
+        const file = kotak.files?.[0];
         if (!file) return;
-        
-        // Limit 5MB di Client sebelum dikirim
-        if (file.size > 5 * 1024 * 1024) return alert("File max 5MB");
+
+        if (file.size > 10 * 1024 * 1024) {
+            kotak.value = '';
+            alert('File terlalu besar! Maksimal 10MB.');
+            return;
+        }
 
         setLoading(true);
         const formData = new FormData();
@@ -39,15 +84,26 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
 
         try {
             const res = await fetch("/api/upload", { method: "POST", body: formData });
-            const data = await res.json();
-            
-            if (res.ok) {
-                onChange(data.url); // Simpan path lokal
-            } else {
-                alert("Gagal Upload Lokal: " + data.error);
+            const jawaban = await bacaJawaban(res);
+
+            if (!res.ok) {
+                alert('Gagal Upload Lokal: ' + alasanPenolakan(res, jawaban));
+                return;
             }
-        } catch (err) { alert("Error sistem upload"); } 
-        finally { setLoading(false); }
+            if (!jawaban.url) {
+                alert('Berkas terunggah, tapi server tidak memulangkan tautannya. Coba unggah ulang.');
+                return;
+            }
+            onChange(jawaban.url); // Simpan path lokal
+        } catch {
+            alert("Error sistem upload");
+        } finally {
+            // Di `finally`: setiap `return` lebih awal di atas melewati baris
+            // ini bila ia diletakkan di akhir fungsi, dan area unggah
+            // tertinggal berkata "Sedang Mengompres..." selamanya.
+            kotak.value = '';
+            setLoading(false);
+        }
     };
 
         if (!mounted) return null;
@@ -89,7 +145,10 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
                             <p className="font-bold text-sm mt-2">
                                 {loading ? "Sedang Mengompres..." : "Klik atau seret file ke sini"}
                             </p>
-                            <p className="text-xs text-gray-400">Max 5MB. Format WebP Otomatis.</p>
+                            {/* "Max 5MB" dulu tertulis di sini padahal `MAX_BYTES`
+                                di route bernilai 10MB — admin membuang berkas 7MB
+                                yang sebenarnya diterima server. */}
+                            <p className="text-xs text-gray-400">Max 10MB. Format WebP Otomatis.</p>
                         </div>
                     )}
     

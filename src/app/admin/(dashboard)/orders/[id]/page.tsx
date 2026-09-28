@@ -25,6 +25,9 @@
 //      tayang, dan tidak ada satu pun jejak bahwa penyimpanannya gagal.
 //   4. Dependensi `useEffect` kosong padahal `params` dipakai di dalamnya.
 //   5. POST tanpa header `Content-Type: application/json`.
+//   6. `catch (e: any)` lalu `e?.message`. Yang dilempar tidak selalu `Error`
+//      — `fetch` yang dibatalkan melempar objek tanpa `message`, dan sebuah
+//      `throw 'teks'` juga sah — jadi keduanya melewati `pesanGalat` sekarang.
 //
 // `newStatus: order.status` dipertahankan apa adanya: `transisiSah` di
 // `src/lib/transisi-status.ts` memulangkan `true` bila `dari === ke`, jadi
@@ -37,6 +40,7 @@ import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ImageUpload from '@/components/ImageUpload';
 import { labelPesanan } from '@/lib/nomor-pesanan';
+import { pesanGalat } from '@/lib/pesan-galat';
 import { ArrowLeft, Save, Loader2, AlertCircle } from 'lucide-react';
 
 type DetailPesanan = {
@@ -84,8 +88,8 @@ export default function AdminOrderDetailPage({
 
                 const data = (await res.json()) as DetailPesanan;
                 if (!dibatalkan) setOrder(data);
-            } catch (e: any) {
-                if (!dibatalkan) setGalat(e?.message || 'Gagal memuat pesanan.');
+            } catch (galatMuat) {
+                if (!dibatalkan) setGalat(pesanGalat(galatMuat, 'Gagal memuat pesanan.'));
             }
         };
 
@@ -136,8 +140,8 @@ export default function AdminOrderDetailPage({
             setOrder({ ...order, installationProof: bukti });
             alert(isi?.message || 'Bukti tayang disimpan.');
             router.refresh();
-        } catch (e: any) {
-            alert(`Gagal menyimpan: ${e?.message || 'galat tidak diketahui'}`);
+        } catch (galatSimpan) {
+            alert(`Gagal menyimpan: ${pesanGalat(galatSimpan, 'galat tidak diketahui')}`);
         } finally {
             setMenyimpan(false);
         }

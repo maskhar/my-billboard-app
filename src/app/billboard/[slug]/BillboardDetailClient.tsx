@@ -11,11 +11,26 @@ import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar } fro
 import TrafficReportModal from '@/components/TrafficReportModal';
 import { arrayDariJson } from '@/lib/safe-json';
 import { rupiahSingkat } from '@/lib/money';
+import type { DetailBillboardPublik, PengaturanPublik } from '@/lib/tipe-billboard';
 
 // Tipe properti yang diterima dari Server Component
+//
+// `rawData: any` dan `setting: any` dulu tertulis di sini, dan keduanya
+// menyembunyikan cacat dengan biaya berbeda:
+//
+//   - `rawData.price` bertipe `Prisma.Decimal` di database. Next.js mengubah
+//     setiap prop menjadi JSON sebelum menyeberang ke `'use client'`, dan objek
+//     Decimal tidak bisa diubah: SELURUH halaman produk publik gagal dirender.
+//     `page.tsx` kini menormalkannya lewat `uangUntukClient`, dan tipe di bawah
+//     yang menjaga langkah itu tidak bisa hilang lagi tanpa `tsc` berbunyi.
+//   - `setting: any` menerima apa pun, termasuk seluruh baris `SystemSetting`
+//     beserta `geminiApiKey` di dalamnya — kunci yang hanya boleh dipakai server
+//     dan akan terbaca setiap pengunjung bila ikut menyeberang. `page.tsx`
+//     memaksanya `null`; `PengaturanPublik` membuat kelalaian itu menjadi galat
+//     kompilasi, bukan kebocoran yang diam.
 type DetailPageClientProps = {
-  rawData: any;
-  setting: any;
+  rawData: DetailBillboardPublik;
+  setting: PengaturanPublik | null;
   bookedDates: { start: string; end: string }[];
   initialDate: string;
 };

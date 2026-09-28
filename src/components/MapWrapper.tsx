@@ -1,6 +1,7 @@
 'use client';
 
 import dynamic from 'next/dynamic';
+import type { PenandaPeta } from '@/lib/tipe-billboard';
 
 // Import HeroMap secara dinamis (Lazy Loading) agar tidak error di server
 const HeroMap = dynamic(() => import('./HeroMap'), { 
@@ -9,7 +10,7 @@ const HeroMap = dynamic(() => import('./HeroMap'), {
 });
 
 // Wrapper menerima props 'data' dari halaman server
-export default function MapWrapper({ data }: { data: any[] }) {
+export default function MapWrapper({ data }: { data: PenandaPeta[] }) {
   // Lalu meneruskannya ke HeroMap sebagai props 'billboards'
   return <HeroMap billboards={data} />;
 }

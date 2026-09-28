@@ -6,6 +6,7 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 import Link from 'next/link';
 import { rupiahSingkat } from '@/lib/money';
+import type { PenandaPeta } from '@/lib/tipe-billboard';
 
 const icon = L.icon({
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
@@ -16,7 +17,7 @@ const icon = L.icon({
 });
 
 interface HeroMapProps {
-  billboards: any[];
+  billboards: PenandaPeta[];
 }
 
 const HeroMap = ({ billboards }: HeroMapProps) => {
@@ -46,8 +47,22 @@ const HeroMap = ({ billboards }: HeroMapProps) => {
             <Popup className="request-popup">
               <div className="w-[220px] font-sans">
                 <div className="w-full h-28 overflow-hidden rounded-t-lg relative">
-                    <img 
-                        src={board.mainImage} 
+                    {/*
+                      `<img>` biasa, bukan `next/image`: `mainImage` diisi admin
+                      dan boleh menunjuk ke penyimpanan mana pun, sedangkan
+                      `remotePatterns` di next.config.ts hanya memuat tiga host.
+                      `next/image` MELEMPAR saat dijalankan untuk sumber di luar
+                      daftar itu — satu billboard dengan URL host baru akan
+                      mengosongkan peta halaman depan.
+
+                      `alt` dulu tidak ada sama sekali. Pembaca layar membacakan
+                      nama berkasnya (atau diam), padahal judul billboardnya
+                      tertulis tepat di bawah gambar ini.
+                    */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={board.mainImage}
+                        alt={`Foto ${board.title}`}
                         className="w-full h-full object-cover"
                         onError={(e) => { e.currentTarget.src = "https://via.placeholder.com/300"; }}
                     />

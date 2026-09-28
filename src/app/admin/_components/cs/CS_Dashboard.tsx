@@ -1,15 +1,53 @@
 'use client';
 
-import { ArrowUpRight, BarChart, Clock, Users, MessageSquare } from 'lucide-react';
+import { ArrowDownRight, ArrowUpRight, BarChart, Clock, Users, MessageSquare, Minus, type LucideIcon } from 'lucide-react';
+
+/**
+ * Satu kartu statistik.
+ *
+ * `: any` dulu tertulis di seluruh daftar prop ini sekaligus, dan itu menutupi
+ * dua hal. `change` dipakai dengan `>` — dengan `any`, memanggilnya
+ * `change="75"` (teks) lolos `tsc` dan `"75" > 0` di JavaScript memulangkan
+ * `true` lewat konversi diam-diam, jadi cacatnya tidak pernah terlihat sampai
+ * suatu nilai seperti `"tidak ada"` masuk. Dan `icon` dipanggil sebagai
+ * komponen (`<Icon ... />`); prop yang bukan komponen menjatuhkan seluruh
+ * dashboard saat render, bukan saat dibangun.
+ */
+type StatCardProps = {
+  title: string;
+  /** Sudah diformat untuk dibaca (`"1"`, `"-"`), bukan angka mentah. */
+  value: string;
+  /** Selisih persen terhadap tujuh hari lalu. Boleh negatif dan boleh nol. */
+  change: number;
+  icon: LucideIcon;
+  /** Hex enam digit; `+ '1A'` di bawah menempelkan alfa ~10%. */
+  color: string;
+};
 
 // Komponen Kartu Statistik
-const StatCard = ({ title, value, change, icon: Icon, color }: any) => (
+const StatCard = ({ title, value, change, icon: Icon, color }: StatCardProps) => (
   <div className="bg-white p-5 rounded-lg border border-gray-200 flex items-start justify-between">
     <div>
       <p className="text-xs text-gray-500 font-medium uppercase tracking-wider">{title}</p>
       <p className="text-3xl font-bold text-gray-800 mt-1">{value}</p>
-      <div className={`text-xs flex items-center mt-2 font-semibold ${change > 0 ? 'text-green-600' : 'text-red-600'}`}>
-        <ArrowUpRight size={14} className="mr-1"/>
+      {/*
+        Tiga keadaan, bukan dua. Sebelumnya hanya `change > 0` yang diperiksa,
+        sehingga perubahan NOL tampil merah dengan panah naik: "0% vs 7 hari
+        lalu" dibacakan sebagai penurunan, lengkap dengan ikon yang
+        membantahnya sendiri. Dua dari empat kartu di halaman ini bernilai nol.
+      */}
+      <div
+        className={`text-xs flex items-center mt-2 font-semibold ${
+          change > 0 ? 'text-green-600' : change < 0 ? 'text-red-600' : 'text-gray-500'
+        }`}
+      >
+        {change > 0 ? (
+          <ArrowUpRight size={14} className="mr-1" />
+        ) : change < 0 ? (
+          <ArrowDownRight size={14} className="mr-1" />
+        ) : (
+          <Minus size={14} className="mr-1" />
+        )}
         {change > 0 ? '+' : ''}{change}% vs 7 hari lalu
       </div>
     </div>

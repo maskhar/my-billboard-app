@@ -139,13 +139,41 @@ export default async function DetailPage({ params, searchParams }: Props) {
 
   return (
     <BillboardDetailClient
+      // Kolomnya disebut satu per satu, BUKAN `{ ...rawData }`.
+      //
       // `price` bertipe Decimal — sebuah objek. Next.js mengubah setiap prop
       // menjadi JSON sebelum menyeberang ke komponen 'use client', dan objek
       // Decimal tidak bisa diubah: halaman detail produk gagal dirender saat
       // dijalankan. Karena `rawData` di sana bertipe `any`, pemeriksaan tipe
       // tidak menangkapnya.
-      rawData={{ ...rawData, price: uangUntukClient(rawData.price) }}
-      setting={setting}
+      //
+      // Sebaran `...rawData` juga menyeberangkan seluruh baris billboard,
+      // termasuk `bookings` (tanggal pesanan orang lain) dan setiap kolom baru
+      // yang kelak ditambahkan ke schema — otomatis, tanpa ada yang memutuskan.
+      // Daftar eksplisit ini membuat penambahan kolom ke halaman publik menjadi
+      // sebuah keputusan yang tertulis.
+      rawData={{
+        id: rawData.id,
+        title: rawData.title,
+        slug: rawData.slug,
+        type: rawData.type,
+        status: rawData.status,
+        address: rawData.address,
+        mainImage: rawData.mainImage,
+        price: uangUntukClient(rawData.price),
+        lat: rawData.lat,
+        lng: rawData.lng,
+        smartsucoUrl: rawData.smartsucoUrl,
+        gallery: rawData.gallery,
+        specs: rawData.specs,
+        includes: rawData.includes,
+        excludes: rawData.excludes,
+      }}
+      // Hanya `googleMapsApiKey` yang diteruskan. `setting` utuh memuat
+      // `geminiApiKey`, dan walaupun `getSystemSettings` sudah memaksanya
+      // `null`, mengirim objek utuh berarti kebocoran itu hanya sejauh satu
+      // baris yang kelak lupa dihapus.
+      setting={setting ? { googleMapsApiKey: setting.googleMapsApiKey } : null}
       bookedDates={bookedDates}
       initialDate={selectedDate}
     />

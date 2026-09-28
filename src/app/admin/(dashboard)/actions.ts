@@ -7,9 +7,18 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { jumlah, keAngka, kurang } from '@/lib/money';
 
-// Mendefinisikan tipe data yang akan dikembalikan
-type ChartData = {
+// Mendefinisikan tipe data yang akan dikembalikan.
+//
+// Diekspor karena bentuk ini dulu ditulis ulang di `RevenueSection` dan
+// dilupakan sama sekali di `RevenueChart` (`data: any[]` di sana). Yang
+// menghasilkan datanya adalah fungsi di bawah, jadi di sinilah bentuknya
+// didefinisikan; keduanya sekarang mengimpornya. `export type` tidak
+// meninggalkan apa pun saat dijalankan, jadi aturan "use server" — hanya
+// fungsi async yang boleh diekspor — tidak dilanggar.
+export type ChartData = {
+  /** Label sumbu X: nama bulan, atau tanggal untuk mode harian. */
   name: string;
+  /** Uang masuk bersih dalam rupiah penuh, sudah dikurangi refund. */
   total: number;
 };
 

@@ -5,12 +5,20 @@ import { io, Socket } from "socket.io-client";
 import { MessageCircle, X, Send, Loader2, User, ArrowRight } from 'lucide-react';
 import Link from 'next/link';
 import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
+import type { PesanChat } from '@/lib/tipe-chat';
+import { bacaBadan } from '@/lib/baca-jawaban';
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', email: '', phone: '' });
-  const [messages, setMessages] = useState<any[]>([]);
+  // `any[]` dulu tertulis di sini, dan itu membiarkan `tempMessage` di
+  // `handleSend` lahir dengan bentuk yang BERBEDA dari pesan yang datang dari
+  // socket: tanpa `sessionId`, dan dengan `createdAt` berupa objek `Date`
+  // sementara server mengirim teks ISO. Satu array berisi dua bentuk adalah
+  // jebakan yang menunggu pembaca pertama yang membaca `createdAt` — jam pesan
+  // belum dirender hari ini, jadi cacatnya belum terlihat, bukan tidak ada.
+  const [messages, setMessages] = useState<PesanChat[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -76,15 +84,29 @@ export default function ChatWidget() {
         socketRef.current?.emit('joinRoom', sid);
     });
 
-    socketRef.current.on('newMessage', (newMessage) => {
+    // Payload-nya adalah satu baris `ChatMessage` yang dikirim chat-server
+    // (`io.to(sessionId).emit("newMessage", originalMessage)`). socket.io
+    // mengubahnya menjadi JSON, jadi `createdAt` tiba sebagai teks ISO —
+    // itulah sebabnya `PesanChat.createdAt` bertipe `string`.
+    socketRef.current.on('newMessage', (newMessage: PesanChat) => {
         if (localStorage.getItem('utero_chat_id') === newMessage.sessionId && newMessage.sender !== 'USER') {
             setMessages((prev) => [...prev, newMessage]);
         }
     });
 
-    socketRef.current.on('loadHistory', (history) => {
-        setMessages(history);
-    });
+    // Pendengar `loadHistory` DIHAPUS dari sini.
+    //
+    // chat-server tidak pernah menyiarkan peristiwa bernama itu — satu-satunya
+    // yang dipancarkannya adalah `authError`, `guestSessionClaimed`,
+    // `newMessage`, dan `presenceChanged`. Jadi pendengarnya tidak pernah
+    // berjalan sekali pun, dan keberadaannya membuat riwayat tampak seolah-olah
+    // sudah ditangani.
+    //
+    // Akibat sebenarnya belum tertutup dan dicatat sebagai pekerjaan terpisah:
+    // tamu yang kembali membawa `utero_chat_token` berhasil `joinRoom`, tapi
+    // kotak percakapannya KOSONG — seluruh riwayatnya ada di database dan tidak
+    // ada jalur yang memintanya. Menambal itu berarti menambah endpoint atau
+    // peristiwa baru di chat-server, bukan mengubah tipe di file ini.
 
     return () => {
       socketRef.current?.disconnect();
@@ -114,8 +136,14 @@ export default function ChatWidget() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(form)
           });
-          const session = await res.json();
-          if (session.id && session.guestToken) {
+          // `await res.json()` tanpa penjaga: balasan 429 atau 500 yang berbadan
+          // HTML (proxy di depan chat-server) membuatnya melempar, lemparannya
+          // mendarat di `catch` di bawah, dan pengunjung membaca "Tidak bisa
+          // menghubungi layanan chat" padahal layanannya menjawab — hanya
+          // menolak, dan alasannya ("Terlalu banyak percakapan dimulai. Coba
+          // lagi dalam 420 detik.") justru yang perlu ia tahu.
+          const session = await bacaBadan(res);
+          if (typeof session.id === 'string' && typeof session.guestToken === 'string') {
               localStorage.setItem('utero_chat_id', session.id);
               localStorage.setItem('utero_chat_token', session.guestToken);
               // Socket sudah tersambung sebagai tamu tanpa identitas. Alih-alih
@@ -124,7 +152,14 @@ export default function ChatWidget() {
               // `guestSessionClaimed` yang menjalankan joinRoom.
               socketRef.current?.emit('claimGuestSession', session.guestToken);
           } else {
-              setError(session.error || 'Gagal memulai sesi chat.');
+              // `error`, bukan `message`: chat-server adalah server Express
+              // terpisah dan setiap penolakannya berbunyi `{ error }` —
+              // 400 data kurang, 429 terlalu sering, 500 gagal. Karena itu
+              // `bacaJawaban` (yang membaca `message`) tidak dipakai di sini.
+              const alasan = session.error;
+              setError(typeof alasan === 'string' && alasan.trim() !== ''
+                  ? alasan
+                  : 'Gagal memulai sesi chat.');
           }
       } catch (e) {
         console.error("Gagal memulai sesi chat:", e);
@@ -137,7 +172,17 @@ export default function ChatWidget() {
         e.preventDefault();
         if(!input.trim() || !sessionId || !socketRef.current) return;
         const userMsg = input;
-        const tempMessage = { sender: 'USER', message: userMsg, createdAt: new Date(), id: Date.now().toString() };
+        // Bentuknya disamakan dengan pesan yang datang dari socket: `sessionId`
+        // ikut, dan `createdAt` berupa teks ISO — bukan objek `Date`. Dulu
+        // keduanya menyimpang, dan karena array-nya bertipe `any[]` tidak ada
+        // yang menuntut kesamaan itu.
+        const tempMessage: PesanChat = {
+            id: Date.now().toString(),
+            sessionId,
+            sender: 'USER',
+            message: userMsg,
+            createdAt: new Date().toISOString(),
+        };
         setMessages(prev => [...prev, tempMessage]);
         setInput("");
         socketRef.current.emit('sendMessage', { 

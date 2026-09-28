@@ -13161,3 +13161,566 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
     assert.ok(!/:\s*any\b/.test(kode));
   });
 });
+
+// ===========================================================================
+// `any` HABIS: SETIAP TITIK YANG DULU BERTIPE `any` PUNYA TIPE SUNGGUHAN
+// ===========================================================================
+//
+// Kedua puluh satu galat `@typescript-eslint/no-explicit-any` yang tersisa
+// dibereskan di fase ini. Tes di bawah bukan pengulangan pekerjaan eslint:
+// aturan lint bisa dimatikan satu baris dengan `eslint-disable`, sedangkan yang
+// diuji di sini adalah bahwa tipe PENGGANTINYA memang yang benar — dan bahwa
+// cacat yang dulu disembunyikan `any` sudah tertutup.
+describe('tipe menggantikan `any` di batas server-client', () => {
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  const src = (...bagian) => path.join(__dirname, '..', 'src', ...bagian);
+
+  const JALUR_DETAIL_CLIENT = src('app', 'billboard', '[slug]', 'BillboardDetailClient.tsx');
+  const JALUR_DETAIL_PAGE = src('app', 'billboard', '[slug]', 'page.tsx');
+  const JALUR_CHAT_WIDGET = src('components', 'ChatWidget.tsx');
+  const JALUR_UNGGAH = src('components', 'ImageUpload.tsx');
+  const JALUR_TIPE_BILLBOARD = src('lib', 'tipe-billboard.ts');
+  const JALUR_BACA_JAWABAN = src('lib', 'baca-jawaban.ts');
+  const JALUR_LAYOUT_ADMIN = src('app', 'admin', '(dashboard)', 'layout.tsx');
+  const JALUR_CS_DASHBOARD = src('app', 'admin', '_components', 'cs', 'CS_Dashboard.tsx');
+  const JALUR_CS_LAYOUT = src('app', 'admin', '_components', 'cs', 'CS_Layout.tsx');
+  const JALUR_CS_SIDEBAR = src('app', 'admin', '_components', 'cs', 'CS_Sidebar.tsx');
+  const JALUR_PETA_WRAPPER = src('components', 'MapWrapper.tsx');
+  const JALUR_PETA = src('components', 'HeroMap.tsx');
+  const JALUR_GRAFIK = src('components', 'admin', 'RevenueChart.tsx');
+  const JALUR_SEKSI_OMZET = src('components', 'admin', 'RevenueSection.tsx');
+  const JALUR_AKSI_ADMIN = src('app', 'admin', '(dashboard)', 'actions.ts');
+  const JALUR_STATUS_CHANGER = src('components', 'admin', 'StatusChanger.tsx');
+  const JALUR_PESANAN_ADMIN = src('app', 'admin', '(dashboard)', 'orders', 'page.tsx');
+  const JALUR_DETAIL_PESANAN = src('app', 'admin', '(dashboard)', 'orders', '[id]', 'page.tsx');
+  const JALUR_PENGATURAN = src('app', 'admin', '(dashboard)', 'settings', 'page.tsx');
+  const JALUR_CHECKOUT = src('components', 'CheckoutForm.tsx');
+
+  const SEMUA = [
+    JALUR_DETAIL_CLIENT,
+    JALUR_DETAIL_PAGE,
+    JALUR_CHAT_WIDGET,
+    JALUR_UNGGAH,
+    JALUR_LAYOUT_ADMIN,
+    JALUR_CS_DASHBOARD,
+    JALUR_CS_LAYOUT,
+    JALUR_CS_SIDEBAR,
+    JALUR_PETA_WRAPPER,
+    JALUR_PETA,
+    JALUR_GRAFIK,
+    JALUR_SEKSI_OMZET,
+    JALUR_STATUS_CHANGER,
+    JALUR_PESANAN_ADMIN,
+    JALUR_DETAIL_PESANAN,
+    JALUR_PENGATURAN,
+    JALUR_CHECKOUT,
+  ];
+
+  it('tak satu pun dari ketujuh belas berkas ini memuat `any` lagi', () => {
+    for (const jalur of SEMUA) {
+      const kode = kodeSaja(jalur);
+      assert.ok(
+        !/:\s*any\b/.test(kode),
+        `${path.basename(jalur)} masih memuat anotasi \`any\``,
+      );
+      assert.ok(
+        !/\bas\s+any\b/.test(kode),
+        `${path.basename(jalur)} masih memuat \`as any\``,
+      );
+      assert.ok(
+        !/any\[\]/.test(kode),
+        `${path.basename(jalur)} masih memuat \`any[]\``,
+      );
+    }
+  });
+
+  it('tidak ada yang menyiasati aturannya dengan eslint-disable', () => {
+    for (const jalur of SEMUA) {
+      const isi = fs.readFileSync(jalur, 'utf8');
+      assert.ok(
+        !/eslint-disable.*no-explicit-any/.test(isi),
+        `${path.basename(jalur)} mematikan aturannya alih-alih mengetik nilainya`,
+      );
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // `bacaBadan`: pembaca badan JSON yang memaksa pemanggilnya memeriksa
+  // -------------------------------------------------------------------------
+  describe('bacaBadan', () => {
+    const { bacaBadan, bacaJawaban } = require('../src/lib/baca-jawaban.ts');
+
+    it('memulangkan rekaman kosong, bukan melempar, saat badannya bukan JSON', async () => {
+      const hasil = await bacaBadan({
+        async json() {
+          throw new SyntaxError('Unexpected token < in JSON');
+        },
+      });
+      assert.deepStrictEqual(hasil, {});
+    });
+
+    it('memulangkan rekaman kosong saat badannya `null`', async () => {
+      // `JSON.parse('null')` berhasil dan bernilai `null`. Tanpa penjaga,
+      // `hasil.orderId` pada nilai itu MELEMPAR TypeError — bukan `undefined`.
+      const hasil = await bacaBadan({ async json() { return null; } });
+      assert.deepStrictEqual(hasil, {});
+    });
+
+    it('memulangkan rekaman kosong saat badannya teks atau angka', async () => {
+      assert.deepStrictEqual(await bacaBadan({ async json() { return 'gagal'; } }), {});
+      assert.deepStrictEqual(await bacaBadan({ async json() { return 42; } }), {});
+      assert.deepStrictEqual(await bacaBadan({ async json() { return true; } }), {});
+    });
+
+    it('meneruskan objek apa adanya, tanpa menyaring kolom', async () => {
+      const badan = { orderId: 'ord_1', tagihanSekarang: { tujuan: 'DP' }, message: 'oke' };
+      const hasil = await bacaBadan({ async json() { return badan; } });
+      assert.strictEqual(hasil.orderId, 'ord_1');
+      assert.deepStrictEqual(hasil.tagihanSekarang, { tujuan: 'DP' });
+      assert.strictEqual(hasil.message, 'oke');
+    });
+
+    it('array dibiarkan lolos: setiap pembacaan kolomnya `undefined`', async () => {
+      const hasil = await bacaBadan({ async json() { return ['a', 'b']; } });
+      assert.strictEqual(hasil.message, undefined);
+      assert.strictEqual(hasil.url, undefined);
+    });
+
+    it('`bacaJawaban` dibangun di atasnya dan tetap hanya membaca message/url', async () => {
+      const hasil = await bacaJawaban({
+        async json() {
+          return { message: 'ditolak', url: '/x.webp', rahasia: 'jangan-ikut' };
+        },
+      });
+      assert.deepStrictEqual(hasil, { pesan: 'ditolak', url: '/x.webp' });
+    });
+
+    it('`bacaJawaban` memulangkan dua null saat badannya bukan objek', async () => {
+      const hasil = await bacaJawaban({ async json() { return 'HTML 500'; } });
+      assert.deepStrictEqual(hasil, { pesan: null, url: null });
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Halaman produk publik: dua kebocoran yang dulu dijaga `any`
+  // -------------------------------------------------------------------------
+  describe('halaman detail billboard publik', () => {
+    it('prop-nya bertipe bentuk publik, bukan model Prisma utuh', () => {
+      const kode = kodeSaja(JALUR_DETAIL_CLIENT);
+      assert.match(kode, /rawData:\s*DetailBillboardPublik/);
+      assert.match(kode, /setting:\s*PengaturanPublik\s*\|\s*null/);
+      assert.match(kode, /from\s+'@\/lib\/tipe-billboard'/);
+    });
+
+    it('`PengaturanPublik` tidak menyebut geminiApiKey sama sekali', () => {
+      const kode = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = kode.slice(kode.indexOf('export type PengaturanPublik'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      assert.match(blok, /googleMapsApiKey/);
+      assert.ok(
+        !/geminiApiKey/.test(blok),
+        'kunci Gemini hanya untuk server dan tidak boleh ada di tipe prop client',
+      );
+    });
+
+    it('`DetailBillboardPublik` memuat delapan belas kolom, bukan `bookings`', () => {
+      const kode = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = kode.slice(kode.indexOf('export type DetailBillboardPublik'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      for (const kolom of [
+        'id', 'title', 'slug', 'type', 'status', 'address',
+        'mainImage', 'price', 'lat', 'lng', 'smartsucoUrl',
+        'gallery', 'specs', 'includes', 'excludes',
+      ]) {
+        assert.ok(
+          new RegExp(`\\b${kolom}\\b`).test(blok),
+          `kolom ${kolom} dibaca komponennya tapi tidak ada di tipe`,
+        );
+      }
+      assert.ok(
+        !/\bbookings\b/.test(blok),
+        'tanggal pesanan orang lain tidak boleh menyeberang ke halaman publik',
+      );
+    });
+
+    it('`price` bertipe angka biasa, bukan Decimal', () => {
+      const kode = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = kode.slice(kode.indexOf('export type DetailBillboardPublik'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      assert.match(blok, /price:\s*number/);
+      assert.ok(!/Decimal/.test(blok));
+    });
+
+    it('keempat kolom jsonb bertipe unknown, diputuskan arrayDariJson', () => {
+      const kode = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = kode.slice(kode.indexOf('export type DetailBillboardPublik'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      for (const kolom of ['gallery', 'specs', 'includes', 'excludes']) {
+        assert.match(blok, new RegExp(`${kolom}:\\s*unknown`));
+      }
+    });
+
+    it('halaman server menyebut kolomnya satu per satu, tidak menyebar rawData', () => {
+      const kode = kodeSaja(JALUR_DETAIL_PAGE);
+      assert.ok(
+        !/rawData=\{\{\s*\.\.\.rawData/.test(kode),
+        'sebaran `...rawData` menyeberangkan setiap kolom baru schema dengan sendirinya',
+      );
+      assert.match(kode, /price:\s*uangUntukClient\(rawData\.price\)/);
+    });
+
+    it('halaman server hanya meneruskan googleMapsApiKey dari pengaturan', () => {
+      const kode = kodeSaja(JALUR_DETAIL_PAGE);
+      assert.match(kode, /setting=\{setting\s*\?\s*\{\s*googleMapsApiKey:\s*setting\.googleMapsApiKey\s*\}\s*:\s*null\}/);
+      assert.ok(
+        !/setting=\{setting\}/.test(kode),
+        'objek pengaturan utuh memuat kunci yang hanya boleh dipakai server',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ChatWidget
+  // -------------------------------------------------------------------------
+  describe('ChatWidget', () => {
+    it('array pesan bertipe PesanChat, satu bentuk untuk socket dan lokal', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      assert.match(kode, /useState<PesanChat\[\]>/);
+      assert.match(kode, /from\s+'@\/lib\/tipe-chat'/);
+    });
+
+    it('pesan sementara membawa sessionId dan createdAt berupa teks ISO', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      const potong = kode.slice(kode.indexOf('const tempMessage'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      assert.match(blok, /tempMessage:\s*PesanChat/);
+      assert.match(blok, /sessionId/);
+      assert.match(blok, /createdAt:\s*new Date\(\)\.toISOString\(\)/);
+      assert.ok(
+        !/createdAt:\s*new Date\(\)\s*,/.test(blok),
+        'server mengirim teks ISO; objek Date di array yang sama adalah dua bentuk',
+      );
+    });
+
+    it('pendengar `loadHistory` dibuang: chat-server tidak pernah memancarkannya', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      assert.ok(
+        !/on\('loadHistory'/.test(kode),
+        'pendengar untuk peristiwa yang tidak ada membuat riwayat tampak sudah ditangani',
+      );
+
+      const server = fs.readFileSync(
+        path.join(__dirname, '..', 'chat-server', 'index.js'),
+        'utf8',
+      );
+      assert.ok(
+        !/emit\("loadHistory"/.test(server),
+        'kalau server mulai memancarkannya, pendengarnya memang perlu ada kembali',
+      );
+    });
+
+    it('setiap peristiwa yang didengar widget memang dipancarkan chat-server', () => {
+      const kode = fs.readFileSync(JALUR_CHAT_WIDGET, 'utf8');
+      const server = fs.readFileSync(
+        path.join(__dirname, '..', 'chat-server', 'index.js'),
+        'utf8',
+      );
+      const didengar = [...kode.matchAll(/\.on\('([a-zA-Z]+)'/g)].map((m) => m[1]);
+      const bawaan = new Set(['connect', 'disconnect', 'connect_error']);
+      for (const peristiwa of didengar) {
+        if (bawaan.has(peristiwa)) continue;
+        assert.ok(
+          server.includes(`emit("${peristiwa}"`),
+          `widget mendengar '${peristiwa}' yang tidak pernah dipancarkan chat-server`,
+        );
+      }
+    });
+
+    it('jawaban /api/chat/start dibaca lewat bacaBadan, bukan res.json() telanjang', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      assert.match(kode, /bacaBadan\(res\)/);
+      assert.ok(
+        !/await res\.json\(\)/.test(kode),
+        'balasan 429 berbadan HTML melempar dan menutupi alasan penolakan server',
+      );
+    });
+
+    it('id dan token diperiksa bertipe teks sebelum disimpan ke localStorage', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      assert.match(kode, /typeof session\.id === 'string'/);
+      assert.match(kode, /typeof session\.guestToken === 'string'/);
+    });
+
+    it('pesan penolakan dibaca dari kolom `error` — chat-server memakai itu', () => {
+      const kode = kodeSaja(JALUR_CHAT_WIDGET);
+      assert.match(kode, /session\.error/);
+
+      const server = fs.readFileSync(
+        path.join(__dirname, '..', 'chat-server', 'index.js'),
+        'utf8',
+      );
+      // Dicari definisi route-nya, bukan sebutan pertama jalur itu: nama
+      // `/api/chat/start` muncul lebih dulu di dalam komentar penjelasan.
+      const mulai = server.indexOf('app.post("/api/chat/start"');
+      assert.ok(mulai !== -1, 'route /api/chat/start tidak ditemukan di chat-server');
+      const blok = server.slice(mulai, mulai + 2200);
+      assert.ok(
+        /json\(\{\s*error:/.test(blok),
+        'kalau chat-server beralih ke `message`, pembacaan di widget ikut berubah',
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // ImageUpload
+  // -------------------------------------------------------------------------
+  describe('ImageUpload', () => {
+    it('hasil widget Cloudinary bertipe dari pustakanya, dan diperiksa', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      assert.match(kode, /CloudinaryUploadWidgetResults/);
+      // `info` boleh TEKS menurut tipe pustakanya, dan `'teks'.secure_url`
+      // bernilai `undefined` tanpa melempar.
+      assert.match(kode, /typeof info !== 'object'/);
+      assert.match(kode, /typeof tautan !== 'string'/);
+    });
+
+    it('tautan kosong tidak diteruskan sebagai gambar', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      assert.match(kode, /tautan\.trim\(\) === ''/);
+    });
+
+    it('unggahan lokal membaca `message`, kolom yang benar-benar dikirim route', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      assert.ok(
+        !/data\.error/.test(kode),
+        '/api/upload memulangkan `message`; `data.error` selalu undefined',
+      );
+      assert.match(kode, /alasanPenolakan\(res, jawaban\)/);
+
+      const route = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'app', 'api', 'upload', 'route.ts'),
+        'utf8',
+      );
+      assert.ok(
+        !/json\(\{\s*error:/.test(route),
+        'kalau route beralih ke `error`, pembacaan di komponen ikut berubah',
+      );
+    });
+
+    it('url dari server diperiksa sebelum menimpa gambar yang sudah ada', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      assert.match(kode, /if \(!jawaban\.url\)/);
+      const urut = kode.indexOf('if (!jawaban.url)');
+      const pakai = kode.indexOf('onChange(jawaban.url)');
+      assert.ok(urut !== -1 && pakai !== -1 && urut < pakai);
+    });
+
+    it('kotak berkas dikosongkan di `finally`, supaya berkas yang sama bisa dicoba lagi', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      const potong = kode.slice(kode.indexOf('const handleLocalUpload'));
+      const blok = potong.slice(0, potong.indexOf('\n    };'));
+      const finally_ = blok.slice(blok.indexOf('} finally {'));
+      assert.match(finally_, /kotak\.value = ''/);
+      assert.match(finally_, /setLoading\(false\)/);
+    });
+
+    it('batas ukuran di client sama dengan MAX_BYTES di route', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      const route = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'app', 'api', 'upload', 'route.ts'),
+        'utf8',
+      );
+      const cocok = /const MAX_BYTES = (\d+) \* 1024 \* 1024/.exec(route);
+      assert.ok(cocok, 'MAX_BYTES tidak ditemukan di route unggah');
+      const mb = cocok[1];
+      assert.ok(
+        new RegExp(`${mb} \\* 1024 \\* 1024`).test(kode),
+        `client harus memakai batas ${mb}MB yang sama dengan server`,
+      );
+      assert.ok(
+        !/Max 5MB/.test(kode),
+        'teks batas yang lebih kecil membuat admin membuang berkas yang diterima server',
+      );
+    });
+
+    it('tidak ada lagi `catch (err)` yang parameternya tidak dipakai', () => {
+      const kode = kodeSaja(JALUR_UNGGAH);
+      assert.ok(!/catch \(err\)/.test(kode));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Dashboard admin & CS
+  // -------------------------------------------------------------------------
+  describe('layout dan kartu dashboard', () => {
+    it('sesi layout admin mengetik `role` sehingga ejaan salah gagal build', () => {
+      const kode = kodeSaja(JALUR_LAYOUT_ADMIN);
+      assert.match(kode, /type SesiLayout/);
+      assert.match(kode, /role:\s*Role/);
+      assert.match(kode, /session:\s*SesiLayout/);
+    });
+
+    it('baris menu admin mengetik ikonnya sebagai komponen lucide', () => {
+      const kode = kodeSaja(JALUR_LAYOUT_ADMIN);
+      assert.match(kode, /icon:\s*LucideIcon/);
+      assert.match(kode, /menus:\s*MenuAdmin\[\]/);
+    });
+
+    it('CS_Layout meneruskan pengguna bertipe, bukan objek sesi apa pun', () => {
+      const kode = kodeSaja(JALUR_CS_LAYOUT);
+      assert.match(kode, /PenggunaSidebar/);
+      assert.match(kode, /session:\s*\{\s*user:\s*PenggunaSidebar\s*\}/);
+      const sidebar = kodeSaja(JALUR_CS_SIDEBAR);
+      assert.match(sidebar, /export type PenggunaSidebar/);
+      assert.match(sidebar, /user\s*\}:\s*\{\s*user:\s*PenggunaSidebar\s*\}/);
+    });
+
+    it('kartu statistik CS mengetik ikonnya; nilai bukan komponen melempar saat render', () => {
+      const kode = kodeSaja(JALUR_CS_DASHBOARD);
+      assert.match(kode, /icon:\s*LucideIcon/);
+      assert.match(kode, /type StatCardProps/);
+    });
+
+    it('selisih nol dirender netral, bukan merah dengan panah naik', () => {
+      const kode = kodeSaja(JALUR_CS_DASHBOARD);
+      // Dua dari empat kartu di layar ini bernilai nol. Dengan satu uji
+      // `change > 0`, "0% vs 7 hari lalu" terbaca sebagai penurunan sekaligus
+      // membawa ikon yang membantahnya.
+      assert.match(kode, /change < 0/);
+      assert.match(kode, /text-gray-500/);
+      assert.match(kode, /<Minus size=\{14\}/);
+      assert.match(kode, /import \{[^}]*\bMinus\b/);
+    });
+
+    it('grafik omzet memakai ChartData dari actions, satu sumber', () => {
+      const grafik = kodeSaja(JALUR_GRAFIK);
+      assert.match(grafik, /data:\s*ChartData\[\]/);
+      assert.match(grafik, /import type \{ ChartData \}/);
+
+      const aksi = kodeSaja(JALUR_AKSI_ADMIN);
+      assert.match(aksi, /export type ChartData/);
+
+      const seksi = kodeSaja(JALUR_SEKSI_OMZET);
+      assert.match(seksi, /type ChartData \} from '@\/app\/admin\/\(dashboard\)\/actions'/);
+      assert.ok(
+        !/^type ChartData/m.test(seksi),
+        'salinan kedua bentuk yang sama akan menyimpang dari sumbernya',
+      );
+    });
+
+    it('kolom dataKey grafik memang ada di ChartData', () => {
+      const grafik = fs.readFileSync(JALUR_GRAFIK, 'utf8');
+      const aksi = kodeSaja(JALUR_AKSI_ADMIN);
+      const potong = aksi.slice(aksi.indexOf('export type ChartData'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      for (const kunci of [...grafik.matchAll(/dataKey="([a-zA-Z]+)"/g)].map((m) => m[1])) {
+        assert.ok(
+          new RegExp(`\\b${kunci}\\b`).test(blok),
+          `dataKey="${kunci}" tidak ada di ChartData — sumbunya kosong tanpa galat`,
+        );
+      }
+    });
+
+    it('filter pesanan admin bertipe Prisma, sehingga status salah tulis gagal build', () => {
+      const kode = kodeSaja(JALUR_PESANAN_ADMIN);
+      assert.match(kode, /whereClause:\s*Prisma\.BookingWhereInput/);
+    });
+
+    it('StatusChanger memakai pesanGalat, bukan `error: any`', () => {
+      const kode = kodeSaja(JALUR_STATUS_CHANGER);
+      assert.match(kode, /pesanGalat\(galat/);
+      assert.ok(!/catch \(error: any\)/.test(kode));
+    });
+
+    it('ketiga catch di halaman pengaturan memakai pesanGalat', () => {
+      const kode = kodeSaja(JALUR_PENGATURAN);
+      assert.strictEqual((kode.match(/pesanGalat\(/g) || []).length, 3);
+      assert.ok(!/:\s*any/.test(kode));
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // Peta halaman depan
+  // -------------------------------------------------------------------------
+  describe('rantai peta halaman depan', () => {
+    it('kedua perhentiannya bertipe PenandaPeta', () => {
+      assert.match(kodeSaja(JALUR_PETA_WRAPPER), /data:\s*PenandaPeta\[\]/);
+      assert.match(kodeSaja(JALUR_PETA), /billboards:\s*PenandaPeta\[\]/);
+    });
+
+    it('setiap kolom yang dibaca HeroMap ada di PenandaPeta', () => {
+      const peta = fs.readFileSync(JALUR_PETA, 'utf8');
+      const tipe = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = tipe.slice(tipe.indexOf('export type PenandaPeta'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      for (const kolom of new Set([...peta.matchAll(/board\.([a-zA-Z]+)/g)].map((m) => m[1]))) {
+        assert.ok(
+          new RegExp(`\\b${kolom}\\b`).test(blok),
+          `board.${kolom} dibaca peta tapi tidak ada di PenandaPeta — Leaflet melempar di dalam render dan SELURUH peta kosong`,
+        );
+      }
+    });
+
+    it('setiap kolom PenandaPeta memang dipilih oleh halaman depan', () => {
+      const halaman = fs.readFileSync(
+        path.join(__dirname, '..', 'src', 'app', 'page.tsx'),
+        'utf8',
+      );
+      const tipe = kodeSaja(JALUR_TIPE_BILLBOARD);
+      const potong = tipe.slice(tipe.indexOf('export type PenandaPeta'));
+      const blok = potong.slice(0, potong.indexOf('};'));
+      const kolom = [...blok.matchAll(/^\s{2}([a-zA-Z]+):/gm)].map((m) => m[1]);
+      assert.ok(kolom.length >= 8, 'PenandaPeta harus memuat delapan kolom peta');
+      for (const nama of kolom) {
+        assert.ok(
+          new RegExp(`${nama}:\\s*true`).test(halaman),
+          `${nama} ada di tipe tapi tidak dipilih halaman depan — nilainya undefined saat dijalankan`,
+        );
+      }
+    });
+
+    it('gambar penanda punya alt dan alasan tertulis kenapa bukan next/image', () => {
+      const isi = fs.readFileSync(JALUR_PETA, 'utf8');
+      assert.match(isi, /alt=\{`Foto \$\{board\.title\}`\}/);
+      assert.match(isi, /eslint-disable-next-line @next\/next\/no-img-element/);
+      assert.match(isi, /remotePatterns/);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CheckoutForm
+  // -------------------------------------------------------------------------
+  describe('CheckoutForm', () => {
+    it('jawaban checkout dibaca lewat bacaBadan, tanpa `as any`', () => {
+      const kode = kodeSaja(JALUR_CHECKOUT);
+      assert.match(kode, /bacaBadan\(response\)/);
+      assert.ok(!/as any/.test(kode));
+    });
+
+    it('ketiga pembacaan kolomnya tetap memeriksa bentuk lebih dulu', () => {
+      const kode = kodeSaja(JALUR_CHECKOUT);
+      // `result.orderId` yang salah tulis dulu lolos `tsc` dan mengirim SETIAP
+      // pesanan yang berhasil ke cabang "halaman pembayaran belum dapat
+      // dibuka" — pembeli lalu memesan ulang.
+      assert.match(kode, /typeof result\.orderId === 'string'/);
+    });
+  });
+
+  it('baca-jawaban tetap bebas Prisma dan server-only', () => {
+    const kode = kodeSaja(JALUR_BACA_JAWABAN);
+    assert.match(kode, /export async function bacaBadan/);
+    assert.match(kode, /Record<string, unknown>/);
+    assert.ok(!/from '@prisma\/client'/.test(kode));
+    assert.ok(!/server-only/.test(kode));
+  });
+});

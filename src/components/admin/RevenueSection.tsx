@@ -2,15 +2,13 @@
 'use client';
 
 import { useState, useEffect, useTransition } from 'react';
-import { getRevenueData } from '@/app/admin/(dashboard)/actions';
+import { getRevenueData, type ChartData } from '@/app/admin/(dashboard)/actions';
 import RevenueChart from './RevenueChart'; // Komponen Chart yang sudah ada
 import { Loader2 } from 'lucide-react';
 
-// Tipe data untuk chart
-type ChartData = {
-  name: string;
-  total: number;
-};
+// `ChartData` dulu ditulis ulang di sini, salinan kedua dari bentuk yang sama
+// di `actions.ts`. Sekarang diimpor dari sumbernya: kolom yang ditambahkan di
+// satu tempat tidak lagi bisa luput di tempat lain.
 
 // Tipe data untuk filter
 type Period = 'daily' | '1m' | '3m' | '6m' | '12m' | 'all';

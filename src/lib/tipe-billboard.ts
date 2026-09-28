@@ -118,6 +118,83 @@ export type BarisRiwayatBillboard = {
 };
 
 /**
+ * Satu penanda di peta halaman depan.
+ *
+ * Persis delapan kolom yang dipilih `select` di `src/app/page.tsx`, dengan
+ * `price` sudah menjadi angka biasa lewat `uangUntukClient` — `Prisma.Decimal`
+ * adalah objek dan tidak bisa menyeberang ke Client Component.
+ *
+ * Rantai `page.tsx` → `MapWrapper` → `HeroMap` dulu bertipe `any[]` di kedua
+ * perhentiannya, dan `HeroMap` membaca delapan kolom dari sana (`board.lat`,
+ * `board.lng`, `board.mainImage`, `board.type`, `board.title`, `board.price`,
+ * `board.slug`, `board.id`). Kolom yang tidak ikut di `select` karena itu
+ * tidak menghasilkan galat apa pun: `position={[undefined, undefined]}`
+ * membuat Leaflet melempar di dalam render, jadi PETA HALAMAN DEPAN kosong
+ * total — bukan satu penanda yang hilang — dan penyebabnya hanya terlihat di
+ * konsol browser pengunjung.
+ */
+export type PenandaPeta = {
+  id: string;
+  slug: string;
+  title: string;
+  type: string;
+  mainImage: string;
+  lat: number;
+  lng: number;
+  /** Harga per periode dalam rupiah penuh. */
+  price: number;
+};
+
+/**
+ * Billboard sebagaimana dibaca halaman produk publik.
+ *
+ * Persis empat belas kolom yang dibaca `BillboardDetailClient`, bukan seluruh
+ * `model Billboard`: halaman itu menerima hasil `findFirst` tanpa `select`, jadi
+ * mengetiknya sebagai `Billboard` utuh akan mengundang JSX di sana membaca kolom
+ * yang tidak ada hubungannya dengan tampilan publik.
+ *
+ * `price` sudah menjadi angka biasa lewat `uangUntukClient` di `page.tsx` —
+ * `Prisma.Decimal` adalah objek dan Next.js gagal merender saat menyeberangkannya
+ * ke komponen `'use client'`. Dulu tipe prop-nya `any`, jadi `tsc` tidak
+ * menangkap itu dan halaman detail produk yang mati baru terlihat di browser.
+ *
+ * Keempat kolom jsonb bertipe `unknown` dan memang harus: isinya data lama yang
+ * belum tentu berbentuk array, dan `arrayDariJson` adalah yang memutuskan.
+ * Mengetiknya `string[]` berarti berjanji sesuatu yang database tidak menjamin.
+ */
+export type DetailBillboardPublik = {
+  id: string;
+  title: string;
+  slug: string;
+  type: string;
+  status: StatusBillboard;
+  address: string;
+  mainImage: string;
+  /** Rupiah penuh sebagai angka biasa, hasil `uangUntukClient`. */
+  price: number;
+  lat: number;
+  lng: number;
+  smartsucoUrl: string | null;
+  gallery: unknown;
+  specs: unknown;
+  includes: unknown;
+  excludes: unknown;
+};
+
+/**
+ * Bagian pengaturan sistem yang BOLEH menyeberang ke browser.
+ *
+ * Hanya `googleMapsApiKey`, dan hanya karena skrip peta di sisi klien
+ * memerlukannya. `geminiApiKey` sengaja tidak ada di tipe ini: `page.tsx`
+ * memaksanya `null` sebelum mengirim, dan tipe yang menyebutnya akan membuat
+ * langkah itu tampak opsional. Prop-nya dulu `any` — sebuah tipe yang dengan
+ * senang hati menerima seluruh baris `SystemSetting` beserta kunci Gemini-nya.
+ */
+export type PengaturanPublik = {
+  googleMapsApiKey: string | null;
+};
+
+/**
  * Bentuk jawaban `GET /api/admin/billboards/detail`.
  *
  * Seluruh kolomnya opsional (`Partial`) karena route itu mengembalikan `null`

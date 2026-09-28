@@ -12,7 +12,19 @@ const csMenus = [
   { name: "Reporting", icon: BarChart3, link: "/admin/reporting" }, 
 ];
 
-export default function CS_Sidebar({ user }: { user: any }) {
+/**
+ * Yang dibaca sidebar dari sesi: huruf pertama nama, untuk avatar dan tooltip.
+ *
+ * Hanya satu kolom, dan itulah alasannya ditulis begini alih-alih `any`. Nama
+ * kolom yang salah tulis di sini tidak melempar apa pun — pembacaannya sudah
+ * `user?.name`, jadi hasilnya hanya avatar "C" yang terlihat wajar. Cacat
+ * seperti itu tidak pernah dilaporkan siapa pun.
+ */
+export type PenggunaSidebar = {
+  name?: string | null;
+};
+
+export default function CS_Sidebar({ user }: { user: PenggunaSidebar }) {
   const pathname = usePathname();
 
   return (

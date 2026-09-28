@@ -23,8 +23,15 @@
 //      sesuatu yang tidak akan pernah datang.
 //   4. `handleTestAI` sama persis, dengan `setAiLoading(false)` yang juga tidak
 //      di `finally`.
+//
+//   5. `catch (e: any)` di ketiga penangkap. `e?.message` pada nilai yang
+//      bukan `Error` — objek biasa dari `fetch` yang dibatalkan, atau string
+//      yang dilempar langsung — menghasilkan `undefined`, jadi pesan
+//      cadangannya yang tampil; pada objek tanpa prototype `?.` tidak
+//      menyelamatkan apa pun. `pesanGalat` memeriksa bentuknya lebih dulu.
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Save, Loader2, Bot, Key, Globe, CheckCircle2, Map } from 'lucide-react'; // Tambah icon Map
+import { pesanGalat } from '@/lib/pesan-galat';
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(false);
@@ -94,8 +101,8 @@ export default function SettingsPage() {
                   googleMapsApiKeySet: !!data.googleMapsApiKeySet,
                   googleMapsApiKeyMasked: data.googleMapsApiKeyMasked ?? null,
               });
-          } catch (e: any) {
-              if (!dibatalkan) setGalat(e?.message || 'Gagal memuat pengaturan.');
+          } catch (galatMuat) {
+              if (!dibatalkan) setGalat(pesanGalat(galatMuat, 'Gagal memuat pengaturan.'));
           } finally {
               if (!dibatalkan) setMemuat(false);
           }
@@ -153,8 +160,8 @@ export default function SettingsPage() {
               });
           }
           setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
-      } catch (e: any) {
-          alert("Gagal menyimpan: " + (e?.message || "galat tidak diketahui"));
+      } catch (galatSimpan) {
+          alert('Gagal menyimpan: ' + pesanGalat(galatSimpan, 'galat tidak diketahui'));
       } finally {
           // Di `finally`, bukan di baris terakhir fungsi: `await res.json()`
           // yang melempar dulu meninggalkan tombol berputar tanpa akhir.
@@ -193,8 +200,8 @@ export default function SettingsPage() {
                   ? json.aiResult
                   : 'Server menjawab berhasil tanpa teks hasil.'
           );
-      } catch (e: any) {
-          alert("Gagal: " + (e?.message || "galat tidak diketahui"));
+      } catch (galatUji) {
+          alert('Gagal: ' + pesanGalat(galatUji, 'galat tidak diketahui'));
       } finally {
           setAiLoading(false);
       }

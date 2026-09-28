@@ -3,8 +3,16 @@
 
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 import { rupiah, rupiahSingkat } from '@/lib/money';
+import type { ChartData } from '@/app/admin/(dashboard)/actions';
 
-export default function RevenueChart({ data }: { data: any[] }) {
+// `data: any[]` dulu tertulis di sini. `dataKey="total"` dan `dataKey="name"`
+// di bawah adalah teks, jadi tidak ada satu pun yang menghubungkannya dengan
+// bentuk yang sebenarnya dikirim: kolom yang diganti nama di
+// `prosesBulanan`/`prosesHarian` menghasilkan grafik BERSUMBU KOSONG — batang
+// hilang, sumbu X tanpa label — dan tidak ada galat apa pun, di `tsc` maupun
+// di konsol. Tipe ini tidak memaksa `dataKey` cocok, tapi ia membuat
+// pemanggilan dari komponen yang salah bentuk gagal dibangun.
+export default function RevenueChart({ data }: { data: ChartData[] }) {
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-200 h-[400px]">
         <h3 className="font-bold text-gray-800 mb-6">Tren Pendapatan</h3>

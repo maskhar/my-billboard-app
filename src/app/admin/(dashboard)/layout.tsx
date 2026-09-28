@@ -7,11 +7,41 @@ import Link from "next/link";
 // [PEMBARUAN] Impor komponen-komponen layout
 import LogoutButton from '../_components/LogoutButton';
 import CS_Layout from "../_components/cs/CS_Layout"; // Layout Baru untuk CS
-import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert } from 'lucide-react';
+import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert, type LucideIcon } from 'lucide-react';
 import { Role } from "@/lib/enum-guard";
 
+// Bentuk yang BENAR-BENAR dibaca kedua layout di bawah, bukan `any`.
+//
+// `session: any` di sini bukan kelonggaran tipe — ia mematikan satu-satunya
+// pemeriksaan yang berlaku atas `session.user.role`. `src/types/next-auth.d.ts`
+// sengaja mengetik `role` sebagai enum `Role` dari Prisma supaya salah tulis
+// seperti `'ADMINN'` gagal di `tsc`; `any` di parameter ini mengembalikan
+// kelonggaran itu tepat di layar yang memutuskan siapa boleh masuk. Dan
+// `session.user.nama` (bukan `name`) dulu lolos juga, lalu tampil sebagai
+// avatar tanpa huruf.
+//
+// Ditulis sebagai himpunan bagian, bukan `Session` dari next-auth: hanya empat
+// kolom ini yang dibaca, dan `Session` membawa `expires` beserta seluruh isi
+// `user` yang tidak relevan di sini. Objek `Session` sungguhan tetap diterima
+// karena TypeScript mencocokkan bentuk.
+type SesiLayout = {
+  user: {
+    role: Role;
+    name?: string | null;
+    email?: string | null;
+  };
+};
+
+/** Satu baris menu di sidebar admin. */
+type MenuAdmin = {
+  name: string;
+  /** Komponen ikon lucide-react, dipanggil sebagai `<item.icon size={20} />`. */
+  icon: LucideIcon;
+  link: string;
+};
+
 // [OPSIONAL] Komponen untuk menjaga konsistensi
-const AccessDenied = ({ session }: { session: any }) => (
+const AccessDenied = ({ session }: { session: SesiLayout }) => (
     <div className="h-screen flex flex-col items-center justify-center bg-gray-50 font-sans p-4">
         <div className="bg-white p-8 rounded-3xl shadow-xl text-center border border-gray-100 max-w-md">
             <ShieldAlert className="w-20 h-20 text-red-500 mx-auto mb-4" />
@@ -35,7 +65,7 @@ const AccessDenied = ({ session }: { session: any }) => (
 );
 
 // [REFAKTOR] Layout Admin Standar
-const StandardAdminLayout = ({ children, session, menus }: { children: React.ReactNode, session: any, menus: any[] }) => (
+const StandardAdminLayout = ({ children, session, menus }: { children: React.ReactNode, session: SesiLayout, menus: MenuAdmin[] }) => (
     <div className="flex min-h-screen bg-gray-100 font-sans text-slate-800">
         <aside className="w-64 bg-[#0F172A] text-white flex-shrink-0 hidden md:flex flex-col">
             <div className="p-6 border-b border-gray-800">

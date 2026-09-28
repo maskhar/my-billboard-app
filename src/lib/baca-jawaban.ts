@@ -43,24 +43,37 @@ function teksAtauNull(nilai: unknown): string | null {
 }
 
 /**
- * Baca badan JSON sebuah respons tanpa pernah melempar.
+ * Badan JSON sebagai rekaman bernilai `unknown`, atau `{}` bila tidak terbaca.
  *
  * Respons 500 dari Next.js berisi halaman HTML, bukan JSON, dan `res.json()`
  * melemparkan SyntaxError pada badan seperti itu. Bila galat itu dibiarkan
  * naik, ia MENGGANTIKAN pesan server: pengguna membaca "Unexpected token <"
  * untuk setiap kegagalan yang tidak sempat menulis badan JSON.
+ *
+ * Nilainya `unknown`, bukan `any`: pembaca WAJIB memeriksa tipenya
+ * (`typeof isi.orderId === 'string'`) sebelum memakainya, dan pemeriksaan itu
+ * sekaligus yang menyempitkan tipenya. Itulah perbedaan yang menentukan —
+ * dengan `any`, `isi.orderId.trim()` lolos `tsc` lalu melempar di browser.
  */
-export async function bacaJawaban(res: Response): Promise<JawabanServer> {
+export async function bacaBadan(res: Response): Promise<Record<string, unknown>> {
   let isi: unknown;
   try {
     isi = await res.json();
   } catch {
-    return { pesan: null, url: null };
+    return {};
   }
+  // Array juga `typeof 'object'` dan bukan `null`. Ia dibiarkan lolos: setiap
+  // pembacaan kolomnya menghasilkan `undefined`, yang persis arti yang
+  // dimaksud ("kolom itu tidak ada di badan ini").
   if (typeof isi !== 'object' || isi === null) {
-    return { pesan: null, url: null };
+    return {};
   }
-  const rekaman = isi as Record<string, unknown>;
+  return isi as Record<string, unknown>;
+}
+
+/** Dua kolom yang dibaca hampir semua pemanggil: `message` dan `url`. */
+export async function bacaJawaban(res: Response): Promise<JawabanServer> {
+  const rekaman = await bacaBadan(res);
   return {
     pesan: teksAtauNull(rekaman.message),
     url: teksAtauNull(rekaman.url),
