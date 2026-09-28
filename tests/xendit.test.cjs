@@ -11195,8 +11195,48 @@ describe('pisahkanOpsi()', () => {
 });
 
 describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
-  function pasang(snapshot, { peran = 'ADMIN' } = {}) {
+  /** Keadaan billboard yang sedang berlaku sebelum rollback dijalankan. */
+  const SEKARANG = {
+    id: 'bb-1',
+    title: 'Billboard Sekarang',
+    price: '12000000',
+    status: 'Available',
+    slug: 'billboard-sekarang',
+    sku: 'BB-009',
+    address: 'Jl. Sekarang 9',
+    type: 'Videotron',
+    mainImage: 'https://contoh.test/sekarang.jpg',
+    lat: -6.9,
+    lng: 106.9,
+    updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+
+  function pasang(
+    snapshot,
+    { peran = 'ADMIN', sekarang = SEKARANG, countUpdate = 1, galatTulis = null } = {}
+  ) {
     const tertulis = [];
+    const arsip = [];
+
+    // Penulisan rollback kini terjadi di dalam `$transaction` dengan callback —
+    // baca-ulang, arsipkan keadaan sekarang, lalu `updateMany` ber-CAS.
+    const tx = {
+      billboard: {
+        findUnique: async () => sekarang,
+        updateMany: async (args) => {
+          if (galatTulis) throw galatTulis;
+          tertulis.push(args);
+          return { count: countUpdate };
+        },
+      },
+      billboardHistory: {
+        create: async (args) => {
+          arsip.push(args);
+          return {};
+        },
+      },
+    };
+
     const prisma = {
       billboardHistory: {
         findUnique: async () => ({
@@ -11208,12 +11248,7 @@ describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
           snapshot,
         }),
       },
-      billboard: {
-        update: async (args) => {
-          tertulis.push(args);
-          return {};
-        },
-      },
+      $transaction: async (fn) => fn(tx),
     };
 
     const route = muatDenganModulPalsu(JALUR_ROUTE_ROLLBACK, {
@@ -11225,7 +11260,7 @@ describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
       '@/lib/prisma': { prisma },
     });
 
-    return { route, tertulis: () => tertulis };
+    return { route, tertulis: () => tertulis, arsip: () => arsip };
   }
 
   function permintaan(isi) {
@@ -11372,6 +11407,243 @@ describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
     assert.equal(tertulis().length, 0);
   });
 });
+
+describe('rollback billboard menulis arsipnya dan menolak balapan', () => {
+  const SEKARANG = {
+    id: 'bb-1',
+    title: 'Billboard Sekarang',
+    price: '12000000',
+    status: 'Available',
+    slug: 'billboard-sekarang',
+    sku: 'BB-009',
+    address: 'Jl. Sekarang 9',
+    type: 'Videotron',
+    mainImage: 'https://contoh.test/sekarang.jpg',
+    lat: -6.9,
+    lng: 106.9,
+    updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+
+  const LENGKAP = {
+    address: 'Jl. Merdeka 1',
+    sku: 'BB-001',
+    type: 'Billboard',
+    mainImage: 'https://contoh.test/a.jpg',
+    lat: -6.2,
+    lng: 106.8,
+    slug: 'billboard-lama',
+  };
+
+  function pasang({ sekarang = SEKARANG, countUpdate = 1, galatTulis = null } = {}) {
+    const tertulis = [];
+    const arsip = [];
+    const urutan = [];
+
+    const tx = {
+      billboard: {
+        findUnique: async () => {
+          urutan.push('baca');
+          return sekarang;
+        },
+        updateMany: async (args) => {
+          urutan.push('tulis');
+          if (galatTulis) throw galatTulis;
+          tertulis.push(args);
+          return { count: countUpdate };
+        },
+      },
+      billboardHistory: {
+        create: async (args) => {
+          urutan.push('arsip');
+          arsip.push(args);
+          return {};
+        },
+      },
+    };
+
+    const prisma = {
+      billboardHistory: {
+        findUnique: async () => ({
+          id: 'hist-1',
+          billboardId: 'bb-1',
+          title: 'Billboard Lama',
+          price: '10000000',
+          status: 'Available',
+          snapshot: JSON.stringify(LENGKAP),
+        }),
+      },
+      $transaction: async (fn) => fn(tx),
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ROLLBACK, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+    });
+
+    return {
+      route,
+      tertulis: () => tertulis,
+      arsip: () => arsip,
+      urutan: () => urutan,
+      minta: () => route.POST({ json: async () => ({ historyId: 'hist-1' }) }),
+    };
+  }
+
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    return fn().then(
+      (hasil) => {
+        console.error = asli;
+        return { hasil, log: tercatat.join('\n') };
+      },
+      (galat) => {
+        console.error = asli;
+        throw galat;
+      }
+    );
+  }
+
+  it('keadaan yang ditimpa diarsipkan sebelum ditimpa', async () => {
+    // INI CACAT UTAMANYA. Rollback dulu hanya menimpa billboard tanpa menulis
+    // satu baris riwayat pun, padahal `billboards/update` selalu menulisnya.
+    // Rollback karena itu satu-satunya operasi di modul ini yang menghancurkan
+    // data tanpa menyisakan salinannya: versi yang ditimpa hilang selamanya,
+    // dan rollback itu sendiri tidak bisa dibatalkan. Admin yang salah memilih
+    // baris riwayat — dua baris berurutan tampak mirip di layar — tidak punya
+    // jalan kembali.
+    const p = pasang();
+    const res = await p.minta();
+
+    assert.equal(res.status, 200);
+    assert.equal(p.arsip().length, 1, 'rollback tidak meninggalkan jejak apa pun');
+
+    const data = p.arsip()[0].data;
+    assert.equal(data.billboardId, 'bb-1');
+    assert.equal(data.title, 'Billboard Sekarang');
+    assert.equal(data.status, 'Available');
+    assert.equal(data.changedById, 'admin-1');
+
+    // Snapshot ditulis sebagai teks JSON, sama bentuknya dengan yang ditulis
+    // `update/route.ts` — rollback berikutnya membacanya dengan pembaca yang
+    // sama, jadi bentuk yang berbeda berarti arsipnya tidak bisa dipulihkan.
+    assert.equal(typeof data.snapshot, 'string');
+    const diurai = JSON.parse(data.snapshot);
+    assert.equal(diurai.slug, 'billboard-sekarang');
+    assert.equal(diurai.lat, -6.9);
+    assert.equal(diurai.mainImage, 'https://contoh.test/sekarang.jpg');
+  });
+
+  it('urutannya baca, arsip, lalu tulis — semuanya di satu transaksi', async () => {
+    // Pembacaan dan penulisan dulu terpisah di luar transaksi: di antara
+    // keduanya, admin lain bisa menyunting billboard yang sama, dan snapshot
+    // yang dibaca menjadi usang sebelum dipakai.
+    const p = pasang();
+    await p.minta();
+    assert.deepEqual(p.urutan(), ['baca', 'arsip', 'tulis']);
+  });
+
+  it('suntingan yang menyelip di sela dibatalkan, bukan ditimpa diam-diam', async () => {
+    // `count === 0` berarti `updatedAt` sudah berubah sejak dibaca: ada yang
+    // menyunting di sela itu. Meneruskannya berarti menimpa perubahan yang
+    // bahkan belum sempat terbaca siapa pun.
+    const p = pasang({ countUpdate: 0 });
+    const res = await p.minta();
+
+    assert.equal(res.status, 409);
+    const isi = await res.json();
+    assert.match(isi.message, /disunting orang lain/);
+    assert.match(isi.message, /Muat ulang/);
+  });
+
+  it('gerbang balapan membandingkan updatedAt yang baru dibaca', async () => {
+    const p = pasang();
+    await p.minta();
+    const where = p.tertulis()[0].where;
+    assert.equal(where.id, 'bb-1');
+    assert.deepEqual(where.updatedAt, SEKARANG.updatedAt);
+  });
+
+  it('billboard yang sudah lenyap dijawab 404, tanpa menulis apa pun', async () => {
+    const p = pasang({ sekarang: null });
+    const res = await p.minta();
+
+    assert.equal(res.status, 404);
+    assert.equal(p.arsip().length, 0);
+    assert.equal(p.tertulis().length, 0);
+  });
+
+  it('slug yang sudah dipakai billboard lain dijawab 409 dengan sebabnya', async () => {
+    // `slug` dan `sku` keduanya unik. Snapshot yang memulihkan nilai yang
+    // sementara ini dipakai billboard lain ditolak database; tanpa cabang ini
+    // admin hanya membaca "Gagal Rollback" dan tidak tahu bahwa yang perlu
+    // diubah adalah billboard YANG LAIN.
+    const { Prisma } = require('@prisma/client');
+    const galat = new Prisma.PrismaClientKnownRequestError('Unique failed', {
+      code: 'P2002',
+      clientVersion: 'x',
+      meta: { target: ['slug'] },
+    });
+
+    const p = pasang({ galatTulis: galat });
+    const { hasil: res } = await tanpaGalat(() => p.minta());
+
+    assert.equal(res.status, 409);
+    const isi = await res.json();
+    assert.match(isi.message, /slug/i);
+    assert.doesNotMatch(isi.message, /Gagal Rollback/);
+  });
+
+  it('sku yang bentrok punya pesannya sendiri', async () => {
+    const { Prisma } = require('@prisma/client');
+    const galat = new Prisma.PrismaClientKnownRequestError('Unique failed', {
+      code: 'P2002',
+      clientVersion: 'x',
+      meta: { target: ['sku'] },
+    });
+
+    const p = pasang({ galatTulis: galat });
+    const { hasil: res } = await tanpaGalat(() => p.minta());
+
+    assert.equal(res.status, 409);
+    const isi = await res.json();
+    assert.match(isi.message, /SKU/);
+  });
+
+  it('galat lain tetap 500 dan tidak membocorkan isinya', async () => {
+    const p = pasang({ galatTulis: new Error('koneksi database putus di host rahasia') });
+    const { hasil: res, log } = await tanpaGalat(() => p.minta());
+
+    assert.equal(res.status, 500);
+    const isi = await res.json();
+    assert.equal(isi.message, 'Gagal Rollback');
+    assert.doesNotMatch(isi.message, /host rahasia/);
+    // Keterangannya tetap ada — hanya di log server.
+    assert.match(log, /host rahasia/);
+  });
+
+  it('baris riwayat yang dipulihkan tidak dihapus', () => {
+    // Ia tetap menjadi jejak bahwa versi itu pernah ada, dan kini berdampingan
+    // dengan arsip keadaan yang baru saja digantikannya.
+    const kode = kodeSajaAny(JALUR_ROUTE_ROLLBACK);
+    assert.doesNotMatch(kode, /billboardHistory\.delete/);
+    assert.match(kode, /billboardHistory\.create/);
+  });
+
+  it('tidak ada lagi penulisan di luar transaksi', () => {
+    const kode = kodeSajaAny(JALUR_ROUTE_ROLLBACK);
+    assert.match(kode, /prisma\.\$transaction\(async \(tx\) =>/);
+    // `prisma.billboard.update(` di luar tx adalah bentuk lamanya.
+    assert.doesNotMatch(kode, /prisma\.billboard\.update\(/);
+    assert.match(kode, /tx\.billboard\.updateMany\(/);
+  });
+});
+
 
 describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
   it('route pengaturan tidak lagi mengirim pesan galat mentah ke browser', () => {
