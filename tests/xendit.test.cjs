@@ -11344,9 +11344,11 @@ describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
 
 describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
   it('route pengaturan tidak lagi mengirim pesan galat mentah ke browser', () => {
-    // Pesan galat `fetch` ke Google memuat URL yang diminta, dan URL itu membawa
-    // `?key=<API key Gemini>`. Dikembalikan sebagai `errorDetails`, key itu
-    // tampil di tab Network siapa pun yang membuka halaman pengaturan.
+    // Pesan galat `fetch` ke Google memuat URL yang diminta. Saat kuncinya masih
+    // di query string, mengembalikannya sebagai `errorDetails` menampilkan key
+    // itu di tab Network siapa pun yang membuka halaman pengaturan. Kuncinya
+    // sekarang di header (dijaga test berikutnya), tapi pesan galat pihak ketiga
+    // tetap tidak diteruskan apa adanya.
     const kode = kodeSajaAny(
       path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'settings', 'route.ts')
     );
@@ -11354,6 +11356,27 @@ describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
     assert.doesNotMatch(kode, /catch\s*\(\s*error\s*:\s*any\s*\)/);
     // Keterangannya tetap ada — hanya di log server.
     assert.match(kode, /console\.error\(/);
+  });
+
+  it('kunci Gemini dikirim lewat header, bukan query string', () => {
+    // Satu-satunya pemanggil Gemini di sisi Next. Kembarannya di
+    // `chat-server/index.js` sudah dijaga di suite lain, dan dua pemanggil yang
+    // berbeda cara melindungi kuncinya berarti yang paling lemah yang
+    // menentukan — selama satu di antaranya memakai `?key=`, kuncinya tetap
+    // tercatat di access log Google dan di setiap proxy pada jalur keluar.
+    //
+    // Yang dilarang adalah `key=` DI DALAM URL Gemini, bukan kata "key" di mana
+    // pun: berkas ini memang penuh dengan `geminiApiKey`, `apiKey`, dan
+    // `googleMapsApiKey`, dan pola yang terlalu luas akan menolak kode yang benar.
+    const kode = kodeSajaAny(JALUR_ROUTE_SETTINGS);
+
+    assert.doesNotMatch(kode, /generativelanguage[^`'"]*\?key=/);
+    assert.match(kode, /'x-goog-api-key': apiKey/);
+
+    // Kunci Maps di `LocationVisualizer` TIDAK ikut aturan ini: kunci itu
+    // dirender ke browser karena skrip petanya berjalan di sisi klien, dan
+    // pembatasnya adalah restriksi HTTP referrer di konsol Google, bukan
+    // tempat kuncinya ditaruh.
   });
 
   it('pembaca badan galat Xendit tidak memakai any', () => {
@@ -14174,8 +14197,13 @@ describe('A2: gambar, binding mati, dan dependensi effect', () => {
     // `?key=${GEMINI_API_KEY}` menaruh kunci di URL, dan URL adalah bagian
     // request yang paling banyak disalin: access log setiap proxy, jejak
     // tumpukan `fetch` saat TLS gagal, metrik per-endpoint. Tidak satu pun bisa
-    // dibersihkan belakangan. Route Next sudah memakai header; berkas ini
-    // tertinggal dan membocorkan kunci yang sama.
+    // dibersihkan belakangan.
+    //
+    // Baris ini dulu berbunyi "Route Next sudah memakai header; berkas ini
+    // tertinggal" — dan itu TIDAK benar: `api/admin/settings/route.ts` masih
+    // menaruh kuncinya di query string, dan kalimat itu justru membuat orang
+    // berhenti memeriksanya. Keduanya kini dijaga, masing-masing dengan
+    // assertion-nya sendiri.
     assert.ok(
       !/\?key=\$\{GEMINI_API_KEY\}/.test(kode),
       'kunci Gemini masih di query string'

@@ -90,8 +90,16 @@ export async function POST(req: Request) {
       console.log(`🤖 Testing AI with model: ${MODEL_NAME}`);
 
       try {
-          const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
-          
+          // Tanpa `?key=` di query string.
+          //
+          // Query string adalah bagian URL yang ikut tercatat di mana-mana:
+          // access log Google, setiap proxy di jalur keluar, dan jejak `fetch`
+          // di pemantau APM apa pun yang terpasang. Header tidak. Kunci yang
+          // sama sudah dikirim lewat header di `chat-server/index.js`, dan dua
+          // pemanggil Gemini yang berbeda cara melindungi kuncinya berarti yang
+          // paling lemah yang menentukan.
+          const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent`;
+
           // Nama usaha dibaca dari pengaturan, bukan ditulis di kode.
           //
           // Sebelumnya di sini tertulis 'Utero Cloud' apa adanya — di berkas yang
@@ -109,7 +117,10 @@ export async function POST(req: Request) {
 
           const aiResponse = await fetch(url, {
               method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
+              headers: {
+                  'Content-Type': 'application/json',
+                  'x-goog-api-key': apiKey,
+              },
               body: JSON.stringify(payload)
           });
 
@@ -137,10 +148,13 @@ export async function POST(req: Request) {
           // TypeError DI DALAM catch — galat 500 tanpa badan JSON, di jalur yang
           // justru dibuat untuk melaporkan galat.
           //
-          // Isinya juga tidak lagi dikirim ke browser. Pesan galat `fetch` ke
-          // Google memuat URL yang diminta, dan URL itu membawa `?key=<API key
-          // Gemini>` di query string — dikembalikan sebagai `errorDetails`, key
-          // itu tampil di tab Network siapa pun yang membuka halaman pengaturan.
+          // Isinya juga tidak lagi dikirim ke browser. Dulu kuncinya ada di
+          // query string, jadi pesan galat `fetch` — yang memuat URL yang
+          // diminta — membocorkannya ke tab Network siapa pun yang membuka
+          // halaman pengaturan. Kunci itu sekarang di header dan tidak lagi ada
+          // di URL, tapi pesan galat dari pihak ketiga tetap tidak dikirim
+          // apa adanya: isinya tidak kita kendalikan, dan jalur inilah yang
+          // paling sering dipakai untuk mengorek keadaan dalam server.
           // Keterangannya tetap ada, hanya di log server.
           console.error(
               '[admin/settings] Gagal menghubungi Gemini:',
