@@ -7,7 +7,7 @@ import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import LocationVisualizer from '@/components/LocationVisualizer';
 import AvailabilityCalendar from '@/components/AvailabilityCalendar';
-import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar } from 'lucide-react';
+import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar, MessageCircle } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
 import { arrayDariJson } from '@/lib/safe-json';
 import { rupiahSingkat } from '@/lib/money';
@@ -31,11 +31,20 @@ import type { DetailBillboardPublik, PengaturanPublik } from '@/lib/tipe-billboa
 type DetailPageClientProps = {
   rawData: DetailBillboardPublik;
   setting: PengaturanPublik | null;
+  /**
+   * Tautan `wa.me` yang sudah jadi, atau `null` bila nomornya belum diatur.
+   *
+   * Bertipe tautan, bukan nomor, supaya pembentuknya tidak pernah ditulis untuk
+   * kedua kalinya di sini — `keE164()` hanya berjalan di server, dan versi
+   * browser yang menyusun sendiri `wa.me/<nomor>` akan menerima bentuk apa pun
+   * yang ada di database.
+   */
+  tautanWa: string | null;
   bookedDates: { start: string; end: string }[];
   initialDate: string;
 };
 
-export default function BillboardDetailClient({ rawData, setting, bookedDates, initialDate }: DetailPageClientProps) {
+export default function BillboardDetailClient({ rawData, setting, tautanWa, bookedDates, initialDate }: DetailPageClientProps) {
   const router = useRouter();
   const currentSearchParams = useSearchParams();
 
@@ -234,15 +243,31 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
                   {selectedDate ? 'Lanjut ke Pembayaran' : 'Pilih Tanggal Dulu'}
                 </button>
               </Link>
-              {/* Tombol "Hubungi Sales (WA)" DIBUANG.
-                  Ia tidak punya `onClick`, tidak punya `href`, dan tidak ada
-                  satu pun nomor WhatsApp perusahaan di `.env.example` maupun di
-                  `SystemSetting` untuk dituju. Pengunjung yang ragu — persis
-                  orang yang paling butuh bicara dengan manusia sebelum
-                  mengeluarkan uang sebesar ini — mengkliknya, tidak terjadi
-                  apa-apa, dan pergi. Live chat di halaman depan adalah jalur
-                  kontak yang benar-benar tersambung; nomor WA sebagai
-                  pengaturan adalah fitur terpisah. */}
+              {/* Tombol "Chat Sales" dulu dibuang karena tidak punya `onClick`,
+                  tidak punya `href`, dan tidak ada satu pun nomor WhatsApp
+                  perusahaan untuk dituju. Sekarang ada:
+                  `SystemSetting.waNumber`, diatur admin, dan tautannya dibentuk
+                  di server.
+
+                  Dirender HANYA bila nomornya ada dan bentuknya sah. Nomor yang
+                  belum diatur mengembalikan `null`, dan tidak adanya tombol
+                  adalah keadaan yang benar — bukan tombol yang mendarat di
+                  halaman galat WhatsApp, yang dibaca pengunjung sebagai
+                  perusahaan yang tidak menjawab.
+
+                  `rel="noopener noreferrer"` pada `target="_blank"`: tanpa
+                  `noopener`, halaman WhatsApp memegang `window.opener` dan bisa
+                  mengarahkan tab ini ke mana pun. */}
+              {tautanWa && (
+                <a
+                  href={tautanWa}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mt-3 w-full border-2 border-gray-200 hover:border-green-500 hover:bg-green-50 text-gray-700 hover:text-green-700 font-bold py-3.5 rounded-xl transition flex items-center justify-center gap-2"
+                >
+                  <MessageCircle size={18} /> Chat Sales
+                </a>
+              )}
             </div>
           </div>
         </div>

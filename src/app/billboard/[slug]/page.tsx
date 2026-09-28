@@ -1,11 +1,13 @@
 // src/app/billboard/[slug]/page.tsx
 import { notFound } from 'next/navigation';
 import BillboardDetailClient from './BillboardDetailClient';
-import { Billboard, SystemSetting } from '@prisma/client';
+import { Billboard } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { uangUntukClient } from '@/lib/money';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
 import { dekripsi } from '@/lib/rahasia';
+import { ambilIdentitasSitus } from '@/lib/identitas-situs';
+import { keTautanWa } from '@/lib/telepon';
 
 export const dynamic = 'force-dynamic';
 
@@ -76,26 +78,31 @@ async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | n
 // kunci Maps dipakai oleh skrip peta di sisi klien. `geminiApiKey` sengaja
 // TIDAK ikut — ia hanya dipakai server, dan mengirimnya ke browser berarti
 // membagikannya ke setiap pengunjung halaman.
-async function getSystemSettings(): Promise<SystemSetting | null> {
+// Tipenya `SystemSetting` utuh dulu tertulis di sini, padahal `select` di bawah
+// hanya mengambil lima kolom. Setiap kolom baru di schema karena itu menjadi
+// galat `tsc` di berkas ini — persis apa yang terjadi saat `waNumber`
+// ditambahkan — dan jalan keluar yang paling mudah adalah menambahkannya ke
+// `select`, yang berarti kolom itu ikut menyeberang ke Client Component tanpa
+// ada yang memutuskannya. Tipe sempit ini membuat pilihan sebaliknya yang mudah.
+type PengaturanPeta = {
+  googleMapsApiKey: string | null;
+};
+
+async function getSystemSettings(): Promise<PengaturanPeta | null> {
     try {
+        // SATU kolom. `id`, `siteName`, `siteDesc`, dan `updatedAt` ikut diambil
+        // di sini sebelumnya, lalu diteruskan lewat `...setting` — tidak satu pun
+        // dipakai halaman ini, dan `siteName`/`siteDesc` sekarang punya
+        // pembacanya sendiri di `ambilIdentitasSitus()`. Sisa yang berguna
+        // hanyalah kunci peta.
         const setting = await prisma.systemSetting.findUnique({
             where: { id: 'default_config' },
-            select: {
-                id: true,
-                siteName: true,
-                siteDesc: true,
-                googleMapsApiKey: true,
-                updatedAt: true,
-            },
+            select: { googleMapsApiKey: true },
         });
 
         if (!setting) return null;
 
-        return {
-            ...setting,
-            googleMapsApiKey: dekripsi(setting.googleMapsApiKey),
-            geminiApiKey: null,
-        };
+        return { googleMapsApiKey: dekripsi(setting.googleMapsApiKey) };
     } catch (error) {
         // Peta yang tidak muncul tidak boleh membuat seluruh halaman produk
         // gagal terbuka — sisa halaman masih berguna tanpanya.
@@ -116,9 +123,16 @@ export default async function DetailPage({ params, searchParams }: Props) {
   const selectedDate = resolvedSearchParams?.date as string || "";
 
   // Ambil data menggunakan fungsi fetch yang baru dan bersih
-  const [rawData, setting] = await Promise.all([
+  const [rawData, setting, identitas] = await Promise.all([
     getBillboardBySlug(resolvedParams.slug), // Gunakan slug dari params yang sudah di-unwrap
-    getSystemSettings()
+    getSystemSettings(),
+    // Baris `SystemSetting` yang sama sudah dibaca `getSystemSettings()` di
+    // atas, tapi `ambilIdentitasSitus()` dibungkus `cache()` React dan layout
+    // akar sudah memanggilnya pada permintaan ini — jadi ini bukan query kedua.
+    // Menambahkan `waNumber` ke `getSystemSettings()` justru akan
+    // menyeberangkannya lewat objek yang dikirim ke Client Component, dan
+    // komentar di fungsi itu menjelaskan kenapa objek utuh tidak diteruskan.
+    ambilIdentitasSitus(),
   ]);
 
   // `notFound()` menggantikan kartu buatan sendiri di sini.
@@ -130,6 +144,17 @@ export default async function DetailPage({ params, searchParams }: Props) {
   if (!rawData) {
     notFound();
   }
+
+  // Pesan pembukanya menyebut titik yang sedang dilihat pengunjung.
+  //
+  // Tanpa itu sales menerima "Halo" tanpa konteks, lalu harus bertanya balik
+  // media mana yang dimaksud — pada percakapan yang justru dibuka karena
+  // pengunjung ingin cepat. Judulnya di-encode oleh `keTautanWa`, jadi tanda `&`
+  // di nama titik tidak memotong pesannya di tengah.
+  const tautanWa = keTautanWa(
+    identitas.nomorWa,
+    `Halo, saya ingin bertanya tentang ${rawData.title}.`
+  );
 
   // Proses data seperti biasa
   const bookedDates = rawData.bookings.map(b => ({
@@ -174,6 +199,14 @@ export default async function DetailPage({ params, searchParams }: Props) {
       // `null`, mengirim objek utuh berarti kebocoran itu hanya sejauh satu
       // baris yang kelak lupa dihapus.
       setting={setting ? { googleMapsApiKey: setting.googleMapsApiKey } : null}
+      // Tautan `wa.me` yang sudah jadi, bukan nomornya.
+      //
+      // Client Component tidak perlu tahu nomornya untuk merender tombol, dan
+      // memberinya nomor mentah berarti pembentuk tautannya ditulis untuk kedua
+      // kalinya di sisi browser — tempat `keE164()` tidak pernah dijalankan.
+      // `null` berarti belum diatur atau bentuknya tidak sah, dan tombolnya
+      // tidak dirender sama sekali.
+      tautanWa={tautanWa}
       bookedDates={bookedDates}
       initialDate={selectedDate}
     />

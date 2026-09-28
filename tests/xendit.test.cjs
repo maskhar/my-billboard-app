@@ -9966,7 +9966,13 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
   it('nilai API key tetap tidak pernah masuk ke state form', () => {
     // Invariant yang sudah ada sebelumnya dan tidak boleh ikut hilang saat
     // penanganan galat ditambahkan.
-    assert.doesNotMatch(kode, /setForm\([\s\S]{0,200}?geminiApiKey:/);
+    //
+    // Batasnya `[^;]*` — sampai akhir pernyataan — bukan "200 karakter
+    // berikutnya" seperti dulu. Jarak dalam karakter menangkap `setNewKeys({
+    // geminiApiKey: "" })` yang berada di pernyataan BERIKUTNYA dan justru
+    // membersihkan nilainya: satu baris `setForm` baru di atasnya sudah cukup
+    // membuat test ini gagal atas kode yang benar.
+    assert.doesNotMatch(kode, /setForm\([^;]*geminiApiKey/);
     assert.match(kode, /geminiApiKeyMasked/);
   });
 });
@@ -11731,19 +11737,28 @@ describe('nama situs dibaca dari pengaturan, bukan ditulis di kode', () => {
   }
 
   it('nilai dari database dipakai apa adanya', async () => {
-    const { modul } = muat({ siteName: 'Billboard Nusantara', siteDesc: 'Sewa titik strategis' });
+    const { modul } = muat({
+      siteName: 'Billboard Nusantara',
+      siteDesc: 'Sewa titik strategis',
+      waNumber: '+628123456789',
+    });
     assert.deepStrictEqual(await modul.ambilIdentitasSitus(), {
       nama: 'Billboard Nusantara',
       deskripsi: 'Sewa titik strategis',
+      nomorWa: '+628123456789',
     });
   });
 
-  it('hanya dua kolom yang dibaca — baris yang sama memuat API key terenkripsi', async () => {
-    const { modul, dicatat } = muat({ siteName: 'X', siteDesc: 'Y' });
+  it('hanya tiga kolom yang dibaca — baris yang sama memuat API key terenkripsi', async () => {
+    const { modul, dicatat } = muat({ siteName: 'X', siteDesc: 'Y', waNumber: null });
     await modul.ambilIdentitasSitus();
 
     assert.strictEqual(dicatat.length, 1);
-    assert.deepStrictEqual(dicatat[0].select, { siteName: true, siteDesc: true });
+    assert.deepStrictEqual(dicatat[0].select, {
+      siteName: true,
+      siteDesc: true,
+      waNumber: true,
+    });
     // Bila `select` suatu hari berubah menjadi `include`, `geminiApiKey` dan
     // `googleMapsApiKey` ikut terbaca — di layout akar, yang merender setiap
     // halaman publik.
@@ -15514,4 +15529,352 @@ describe('halaman /about ada, dan tautannya ikut terpasang', () => {
   // Hal yang sama untuk `/list` dan tombol "Sewakan Tempat": keduanya sudah
   // dijaga di suite itu, dan menuntutnya dua kali berarti dua tempat yang harus
   // diubah bersama saat alurnya akhirnya ditulis.
+});
+
+// ===========================================================================
+// NOMOR WHATSAPP PERUSAHAAN: TOMBOL "CHAT SALES" YANG AKHIRNYA PUNYA TUJUAN
+// ===========================================================================
+//
+// Tombol "Chat Sales" di halaman detail billboard pernah dibuang karena tidak
+// punya `href`, tidak punya `onClick`, dan tidak ada satu pun nomor perusahaan
+// untuk dituju. Sekarang nomornya ada di `SystemSetting.waNumber`, diatur admin.
+//
+// Seluruh suite ini menjaga satu kalimat: TIDAK ADA TOMBOL lebih baik daripada
+// tombol yang mendarat di halaman galat WhatsApp. Tombol yang rusak dibaca
+// pengunjung sebagai "nomornya benar, perusahaannya yang tidak menjawab" — dan
+// ia tidak akan mencoba jalur lain.
+
+describe('nomor WhatsApp perusahaan: penyimpan, pembaca, dan tautannya', () => {
+  const JALUR_TELEPON = path.join(__dirname, '..', 'src', 'lib', 'telepon.ts');
+  const JALUR_DETAIL_PAGE_WA = path.join(
+    __dirname, '..', 'src', 'app', 'billboard', '[slug]', 'page.tsx'
+  );
+  const JALUR_DETAIL_CLIENT_WA = path.join(
+    __dirname, '..', 'src', 'app', 'billboard', '[slug]', 'BillboardDetailClient.tsx'
+  );
+  const JALUR_HALAMAN_SETELAN = path.join(
+    __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'settings', 'page.tsx'
+  );
+
+  const { keTautanWa } = require(JALUR_TELEPON);
+
+  describe('keTautanWa', () => {
+    it('tanda plus dibuang — `wa.me/+62...` mendarat di halaman galat', () => {
+      // Ini seluruh alasan fungsi ini ada. `wa.me` menolak tanda plus dan
+      // setiap pemisah baca; nomor tersimpan justru MEMAKAI tanda plus karena
+      // bentuk simpanannya E.164.
+      assert.strictEqual(keTautanWa('+628123456789'), 'https://wa.me/628123456789');
+      assert.doesNotMatch(keTautanWa('+628123456789'), /\+/);
+    });
+
+    it('bentuk ketikan apa pun pulang sebagai satu tautan yang sama', () => {
+      const harapan = 'https://wa.me/628123456789';
+      for (const ketikan of ['08123456789', '628123456789', '+62 812-3456-789', '(0812) 3456 789']) {
+        assert.strictEqual(keTautanWa(ketikan), harapan, `gagal untuk "${ketikan}"`);
+      }
+    });
+
+    it('nomor yang bentuknya salah memulangkan null, bukan tautan tebakan', () => {
+      // `null` berarti pemanggilnya tidak merender tombol sama sekali. Tautan
+      // "usaha terbaik" di sini berarti tombol yang mendarat di halaman galat.
+      for (const rusak of [null, undefined, '', '   ', '0812ABC4567', '+0123456789', '62', 'hubungi sales']) {
+        assert.strictEqual(keTautanWa(rusak), null, `seharusnya null untuk ${JSON.stringify(rusak)}`);
+      }
+    });
+
+    it('pesan pembuka di-encode — `&` tidak memotong kalimatnya di tengah', () => {
+      const tautan = keTautanWa('+628123456789', 'Billboard A & B, apakah tersedia?');
+      assert.ok(tautan.startsWith('https://wa.me/628123456789?text='));
+      assert.ok(!tautan.includes(' '), 'spasi tidak di-encode');
+      // Tanpa encoding, `&` memulai parameter query baru dan sisa pesannya
+      // hilang sebelum sampai ke WhatsApp.
+      assert.ok(!/&(?!amp;)/.test(tautan.slice('https://wa.me/628123456789?text='.length)));
+      assert.strictEqual(
+        decodeURIComponent(tautan.split('?text=')[1]),
+        'Billboard A & B, apakah tersedia?'
+      );
+    });
+
+    it('pesan kosong tidak meninggalkan `?text=` menggantung', () => {
+      assert.strictEqual(keTautanWa('+628123456789', '   '), 'https://wa.me/628123456789');
+      assert.strictEqual(keTautanWa('+628123456789'), 'https://wa.me/628123456789');
+    });
+
+    it('nomor rusak menang atas pesan yang sah — null tetap null', () => {
+      assert.strictEqual(keTautanWa('bukan nomor', 'Halo'), null);
+    });
+  });
+
+  describe('ambilIdentitasSitus membaca nomornya, dan tidak memercayainya', () => {
+    function muatIdentitas(baris) {
+      return muatDenganModulPalsu(JALUR_IDENTITAS_SITUS, {
+        'server-only': {},
+        'next/server': { connection: async () => {} },
+        '@/lib/prisma': {
+          prisma: { systemSetting: { findUnique: async () => baris } },
+        },
+        react: { cache: (fn) => fn },
+      });
+    }
+
+    it('nomor sah diteruskan dalam bentuk E.164', async () => {
+      const modul = muatIdentitas({ siteName: 'A', siteDesc: 'B', waNumber: '+628123456789' });
+      assert.strictEqual((await modul.ambilIdentitasSitus()).nomorWa, '+628123456789');
+    });
+
+    it('nilai tersimpan tetap dilewatkan keE164 — `psql` tidak punya penyaring', async () => {
+      // Kolomnya memang hanya pernah ditulis lewat gerbang di
+      // `api/admin/settings`, tapi nilai yang masuk lewat `psql`, seed, atau
+      // versi route yang lebih tua tidak punya jaminan bentuk apa pun.
+      const modul = muatIdentitas({ siteName: 'A', siteDesc: 'B', waNumber: '0812-3456-789' });
+      assert.strictEqual((await modul.ambilIdentitasSitus()).nomorWa, '+628123456789');
+    });
+
+    it('nilai tersimpan yang rusak menjadi null, bukan diteruskan apa adanya', async () => {
+      const modul = muatIdentitas({ siteName: 'A', siteDesc: 'B', waNumber: 'telepon saja' });
+      assert.strictEqual((await modul.ambilIdentitasSitus()).nomorWa, null);
+    });
+
+    it('kolom kosong dan baris yang belum ada sama-sama null', async () => {
+      const kosong = muatIdentitas({ siteName: 'A', siteDesc: 'B', waNumber: null });
+      assert.strictEqual((await kosong.ambilIdentitasSitus()).nomorWa, null);
+
+      const belumAda = muatIdentitas(null);
+      assert.strictEqual((await belumAda.ambilIdentitasSitus()).nomorWa, null);
+    });
+
+    it('nilai bawaannya null, bukan nomor konstanta apa pun', () => {
+      // Beda perlakuan dengan `nama`, yang jatuh ke `NAMA_PENJUAL`. Nama usaha
+      // yang keliru membuat judul tab salah; nomor telepon yang keliru mengirim
+      // pengunjung ke orang asing.
+      const modul = muatIdentitas(null);
+      assert.strictEqual(modul.IDENTITAS_BAWAAN.nomorWa, null);
+      const kode = kodeSajaIdentitas(JALUR_IDENTITAS_SITUS);
+      assert.doesNotMatch(kode, /nomorWa:\s*'\+?\d/);
+    });
+  });
+
+  describe('POST /api/admin/settings: tiga keadaan, bukan dua', () => {
+    function buatRouteSetelan(peran = 'SUPER_ADMIN') {
+      const tertulis = [];
+      const route = muatDenganModulPalsu(JALUR_ROUTE_SETTINGS, {
+        'next/server': {
+          NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+        },
+        'next-auth': {
+          getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null),
+        },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': {
+          prisma: {
+            systemSetting: {
+              upsert: async (args) => {
+                tertulis.push(args);
+                return { id: 'default_config' };
+              },
+              findUnique: async () => null,
+            },
+          },
+        },
+        // Modul aslinya mengimpor `server-only` dan `next/server`; yang diuji di
+        // sini hanya gerbang nomornya.
+        '@/lib/identitas-situs': {
+          ambilIdentitasSitus: async () => ({ nama: 'A', deskripsi: 'B', nomorWa: null }),
+          namaUntukPrompt: (n) => n,
+        },
+      });
+      return { route, tertulis };
+    }
+
+    function permintaanSetelan(isi) {
+      return new Request('https://contoh.test/api/admin/settings', {
+        method: 'POST',
+        body: JSON.stringify(isi),
+      });
+    }
+
+    it('field yang tidak dikirim berarti jangan ubah', async () => {
+      const { route, tertulis } = buatRouteSetelan();
+      const res = await route.POST(permintaanSetelan({ siteName: 'Billboard Nusantara' }));
+
+      assert.equal(res.status, 200);
+      assert.equal(tertulis.length, 1);
+      assert.ok(!('waNumber' in tertulis[0].update), 'waNumber ikut ditulis padahal tidak dikirim');
+    });
+
+    it('teks kosong MENGHAPUS nomornya — sales yang berhenti harus bisa dibuang', async () => {
+      // Aturan "kosong berarti jangan ubah" yang berlaku untuk
+      // `siteName`/`siteDesc` sengaja TIDAK berlaku di sini: tanpa keadaan
+      // ketiga ini, nomor pribadi sales yang sudah berhenti bekerja menempel di
+      // halaman publik sampai ada yang membuka database.
+      const { route, tertulis } = buatRouteSetelan();
+      const res = await route.POST(permintaanSetelan({ waNumber: '   ' }));
+
+      assert.equal(res.status, 200);
+      assert.strictEqual(tertulis[0].update.waNumber, null);
+    });
+
+    it('nomor sah disimpan dalam bentuk E.164, bukan seperti yang diketik', async () => {
+      const { route, tertulis } = buatRouteSetelan();
+      const res = await route.POST(permintaanSetelan({ waNumber: '0812-3456-789' }));
+
+      assert.equal(res.status, 200);
+      assert.strictEqual(tertulis[0].update.waNumber, '+628123456789');
+      assert.strictEqual(tertulis[0].create.waNumber, '+628123456789');
+    });
+
+    it('nomor yang bentuknya salah DITOLAK 400, dan tidak ada yang tertulis', async () => {
+      // Bukan "usaha terbaik", dan bukan disimpan apa adanya. Admin yang salah
+      // ketik lebih baik diberi tahu di layar yang sama tempat ia mengetiknya —
+      // bukan lewat pengunjung yang tidak pernah sampai ke percakapan.
+      const { route, tertulis } = buatRouteSetelan();
+      const res = await route.POST(
+        permintaanSetelan({ siteName: 'Nama Baru', waNumber: '0812ABC4567' })
+      );
+
+      assert.equal(res.status, 400);
+      assert.equal(tertulis.length, 0, 'siteName tertulis padahal nomornya ditolak');
+      const isi = await res.json();
+      // Pesannya menyebut bentuk yang diterima DAN cara menghapus. Pesan galat
+      // yang hanya berkata "tidak valid" membuat admin mencoba bentuk yang sama
+      // berulang kali.
+      assert.match(isi.message, /0812/);
+      assert.match(isi.message, /Kosongkan/);
+    });
+
+    it('gerbang SUPER_ADMIN tetap berlaku untuk nomor ini juga', async () => {
+      const { route, tertulis } = buatRouteSetelan('ADMIN');
+      const res = await route.POST(permintaanSetelan({ waNumber: '08123456789' }));
+
+      assert.equal(res.status, 401);
+      assert.equal(tertulis.length, 0);
+    });
+  });
+
+  describe('halaman publik: tautan jadi, dan tanpa tombol bila nomornya tidak ada', () => {
+    it('server mengirim tautan, BUKAN nomor mentah, ke Client Component', () => {
+      // `keE164()` hanya berjalan di server. Versi browser yang menyusun sendiri
+      // `wa.me/<nomor>` akan menerima bentuk apa pun yang ada di database.
+      const kode = kodeSajaIdentitas(JALUR_DETAIL_PAGE_WA);
+      assert.match(kode, /keTautanWa\(/);
+      assert.match(kode, /tautanWa=\{tautanWa\}/);
+      assert.doesNotMatch(kode, /nomorWa=\{/);
+
+      const klien = kodeSajaIdentitas(JALUR_DETAIL_CLIENT_WA);
+      assert.doesNotMatch(klien, /wa\.me/);
+      assert.doesNotMatch(klien, /keE164|normalisasiNomorLokal/);
+    });
+
+    it('nomor WhatsApp tidak ikut di objek `setting` yang menyeberang', () => {
+      // `setting` diteruskan ke Client Component. Menambahkan `waNumber` ke
+      // `select`-nya membuat kolom itu ikut menyeberang lewat objek yang sama.
+      const kode = kodeSajaIdentitas(JALUR_DETAIL_PAGE_WA);
+      const pilih = kode.match(/select:\s*\{\s*googleMapsApiKey:\s*true\s*\}/);
+      assert.ok(pilih, 'select getSystemSettings berubah — periksa apa saja yang ikut terbaca');
+      assert.doesNotMatch(kode, /setting\?\.waNumber|setting\.waNumber/);
+    });
+
+    it('tombolnya dirender bersyarat — null berarti tidak ada tombol', () => {
+      const kode = kodeSajaIdentitas(JALUR_DETAIL_CLIENT_WA);
+      assert.match(kode, /\{tautanWa && \(/);
+      assert.match(kode, /Chat Sales/);
+      // Tombol yang selalu ada dengan `href` yang mungkin kosong mendarat di
+      // halaman galat WhatsApp; pengunjung membacanya sebagai perusahaan yang
+      // tidak menjawab.
+      assert.doesNotMatch(kode, /href=\{tautanWa \?\?|href=\{tautanWa \|\|/);
+    });
+
+    it('kedua tautan target="_blank" memakai rel="noopener noreferrer"', () => {
+      // Tanpa `noopener`, halaman WhatsApp memegang `window.opener` dan bisa
+      // mengarahkan tab ini ke mana pun.
+      for (const jalur of [JALUR_DETAIL_CLIENT_WA, JALUR_ABOUT]) {
+        const kode = kodeSajaIdentitas(jalur);
+        const blank = [...kode.matchAll(/target="_blank"/g)];
+        assert.ok(blank.length >= 1, `tidak ada target="_blank" di ${path.basename(jalur)}`);
+        const noopener = [...kode.matchAll(/rel="noopener noreferrer"/g)];
+        assert.strictEqual(
+          noopener.length,
+          blank.length,
+          `ada target="_blank" tanpa rel="noopener noreferrer" di ${path.basename(jalur)}`
+        );
+      }
+    });
+
+    it('pesan pembuka di halaman detail menyebut titik yang sedang dilihat', () => {
+      // Tanpa konteks, sales menerima "Halo" lalu harus bertanya balik media
+      // mana yang dimaksud — pada percakapan yang justru dibuka karena
+      // pengunjung ingin cepat.
+      const kode = kodeSajaIdentitas(JALUR_DETAIL_PAGE_WA);
+      assert.match(kode, /rawData\.title/);
+      assert.match(kode, /keTautanWa\(\s*identitas\.nomorWa/);
+    });
+
+    it('/about merender baris WhatsApp hanya bila nomornya ada', () => {
+      // Baris "WhatsApp: —" adalah janji jalur kontak yang tidak ada.
+      const kode = kodeSajaIdentitas(JALUR_ABOUT);
+      assert.match(kode, /\{tautanWa && \(/);
+      assert.match(kode, /keTautanWa\(nomorWa\)/);
+    });
+
+    it('/about tidak menyusun sendiri tautan wa.me', () => {
+      const kode = kodeSajaIdentitas(JALUR_ABOUT);
+      assert.doesNotMatch(kode, /wa\.me/);
+    });
+  });
+
+  describe('halaman pengaturan admin', () => {
+    const kode = fs.readFileSync(JALUR_HALAMAN_SETELAN, 'utf8');
+
+    it('kotak isiannya ada, bertipe tel, dan terhubung ke label', () => {
+      assert.match(kode, /id="waNumber"/);
+      assert.match(kode, /htmlFor="waNumber"/);
+      assert.match(kode, /type="tel"/);
+    });
+
+    it('nilainya di-sinkronkan ulang setelah simpan — server MENULIS ULANG bentuknya', () => {
+      // Admin mengetik `0812…`, server menyimpan `+62812…`. Tanpa sinkronisasi
+      // ini kolomnya tetap menampilkan apa yang diketik, dan admin tidak pernah
+      // tahu bentuk mana yang sebenarnya dipakai tombol publiknya.
+      assert.match(kode, /setForm\(\(sebelumnya\) => \(\{ \.\.\.sebelumnya, waNumber: segar\.waNumber \}\)\)/);
+    });
+
+    it('kosongnya dijelaskan sebagai keadaan yang disengaja, bukan galat', () => {
+      assert.match(kode, /form\.waNumber\.trim\(\) === ""/);
+    });
+
+    it('tidak ada nomor telepon yang ditulis langsung di kodenya', () => {
+      // Nomor contoh yang tampak seperti nomor sungguhan akan ditelepon orang.
+      // Yang boleh ada hanya placeholder bertanda `x`.
+      const kosong = kode.replace(/placeholder="[^"]*"/g, '');
+      assert.doesNotMatch(kosong, /\+62\d{5,}/);
+      assert.doesNotMatch(kosong, /\b08\d{8,}\b/);
+    });
+  });
+
+  describe('schema dan migrasinya', () => {
+    const schema = fs.readFileSync(
+      path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+      'utf8'
+    );
+
+    it('kolomnya nullable — nomor karangan lebih buruk daripada tidak ada nomor', () => {
+      const model = schema.match(/model SystemSetting \{[\s\S]*?\n\}/);
+      assert.ok(model, 'model SystemSetting tidak ditemukan');
+      assert.match(model[0], /waNumber\s+String\?/);
+      assert.doesNotMatch(model[0], /waNumber\s+String\?\s*@default/);
+    });
+
+    it('ada migrasi yang menambahkan kolomnya', () => {
+      // Kolom yang hanya ada di schema tapi tidak di migrasi berarti kode ini
+      // melempar P2022 di database mana pun yang sudah berjalan.
+      const akar = path.join(__dirname, '..', 'prisma', 'migrations');
+      const ditemukan = fs
+        .readdirSync(akar)
+        .filter((nama) => fs.statSync(path.join(akar, nama)).isDirectory())
+        .map((nama) => path.join(akar, nama, 'migration.sql'))
+        .filter((jalur) => fs.existsSync(jalur))
+        .some((jalur) => /ADD COLUMN "waNumber"/.test(fs.readFileSync(jalur, 'utf8')));
+      assert.ok(ditemukan, 'tidak ada migrasi yang menambahkan kolom waNumber');
+    });
+  });
 });

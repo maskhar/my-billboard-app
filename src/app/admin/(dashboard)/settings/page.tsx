@@ -30,7 +30,7 @@
 //      cadangannya yang tampil; pada objek tanpa prototype `?.` tidak
 //      menyelamatkan apa pun. `pesanGalat` memeriksa bentuknya lebih dulu.
 import { useCallback, useEffect, useState } from 'react';
-import { AlertCircle, Save, Loader2, Bot, Key, Globe, CheckCircle2, Map } from 'lucide-react'; // Tambah icon Map
+import { AlertCircle, Save, Loader2, Bot, Key, Globe, CheckCircle2, Map, MessageCircle } from 'lucide-react'; // Tambah icon Map
 import { useToast } from '@/components/ui/Toast';
 import { bacaBadan, bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
@@ -49,6 +49,7 @@ import { pesanGalat } from '@/lib/pesan-galat';
 type SetelanTerbaca = {
   siteName: string;
   siteDesc: string;
+  waNumber: string;
   geminiApiKeySet: boolean;
   geminiApiKeyMasked: string | null;
   googleMapsApiKeySet: boolean;
@@ -61,6 +62,10 @@ function bacaSetelan(isi: Record<string, unknown>): SetelanTerbaca {
   return {
     siteName: teks(isi.siteName),
     siteDesc: teks(isi.siteDesc),
+    // Kolomnya nullable, dan `teks()` memulangkan `''` untuk `null` — bentuk yang
+    // memang dibutuhkan input terkendali. Kosong di sini berarti belum diatur,
+    // dan halaman detail billboard tidak merender tombol WhatsApp-nya.
+    waNumber: teks(isi.waNumber),
     geminiApiKeySet: isi.geminiApiKeySet === true,
     geminiApiKeyMasked: teksAtauNull(isi.geminiApiKeyMasked),
     googleMapsApiKeySet: isi.googleMapsApiKeySet === true,
@@ -91,6 +96,7 @@ export default function SettingsPage() {
   const [form, setForm] = useState({
       siteName: "",
       siteDesc: "",
+      waNumber: "",
   });
 
   // Status key tersimpan di server — bukan nilainya.
@@ -136,6 +142,7 @@ export default function SettingsPage() {
               setForm({
                   siteName: data.siteName,
                   siteDesc: data.siteDesc,
+                  waNumber: data.waNumber,
               });
               setKeyStatus({
                   geminiApiKeySet: data.geminiApiKeySet,
@@ -209,6 +216,13 @@ export default function SettingsPage() {
                       googleMapsApiKeySet: segar.googleMapsApiKeySet,
                       googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked,
                   });
+                  // Nomor WA ikut disegarkan, dan ini bukan kerapian: server
+                  // MENGUBAH bentuknya. Admin mengetik `0812…`, yang tersimpan
+                  // `+62812…`. Tanpa baris ini kolomnya tetap menampilkan apa yang
+                  // ia ketik, jadi ia tidak pernah tahu bentuk mana yang sebenarnya
+                  // dipakai tombol di halaman publik — dan bila ia menekan Simpan
+                  // lagi tanpa mengubah apa pun, ia mengirim ulang bentuk lamanya.
+                  setForm((sebelumnya) => ({ ...sebelumnya, waNumber: segar.waNumber }));
               }
           }
           setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
@@ -319,6 +333,39 @@ export default function SettingsPage() {
                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Deskripsi</label>
                     <input value={form.siteDesc || ""} onChange={e => setForm({...form, siteDesc: e.target.value})} className="w-full border rounded-lg p-3" placeholder="Sewa Billboard..."/>
                 </div>
+            </div>
+
+            {/* Nomor WhatsApp sales.
+                `type="tel"` membuka papan tombol angka di ponsel, dan halaman
+                admin memang dibuka dari ponsel saat sales sedang di lapangan. */}
+            <div className="mt-6 pt-6 border-t border-gray-100">
+                <label htmlFor="waNumber" className="text-xs font-bold text-gray-500 uppercase mb-1 block">
+                    Nomor WhatsApp Sales
+                </label>
+                <div className="relative">
+                    <MessageCircle size={16} className="absolute left-3 top-3.5 text-gray-400"/>
+                    <input
+                        id="waNumber"
+                        type="tel"
+                        inputMode="tel"
+                        autoComplete="off"
+                        value={form.waNumber}
+                        onChange={e => setForm({...form, waNumber: e.target.value})}
+                        className="w-full border border-gray-300 rounded-lg pl-10 p-3"
+                        placeholder="0812xxxxxxx atau +62 812-xxxx-xxx"
+                    />
+                </div>
+                {form.waNumber.trim() === "" ? (
+                    <p className="text-[10px] text-gray-400 mt-1 italic">
+                        Belum diisi — tombol &ldquo;Chat Sales&rdquo; tidak muncul di halaman billboard.
+                        Itu disengaja: tombol yang menuju nomor kosong lebih buruk daripada tidak ada tombolnya.
+                    </p>
+                ) : (
+                    <p className="text-[10px] text-gray-500 mt-1">
+                        Tampil sebagai tombol &ldquo;Chat Sales&rdquo; di setiap halaman billboard.
+                        Kosongkan kolom ini lalu Simpan untuk menghapusnya.
+                    </p>
+                )}
             </div>
         </div>
 

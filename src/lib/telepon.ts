@@ -59,3 +59,32 @@ export function keE164(input: string | null | undefined): string | null {
   const e164 = '+' + normalisasiNomorLokal(rapi);
   return POLA_E164.test(e164) ? e164 : null;
 }
+
+/**
+ * Tautan `wa.me` untuk nomor yang tersimpan, atau `null` bila nomornya tidak
+ * bisa dipakai.
+ *
+ * `wa.me` menolak tanda plus dan setiap pemisah baca: `wa.me/+628123456789`
+ * mendarat di halaman galat WhatsApp, bukan di percakapan. Yang dibuang hanya
+ * saat MERENDER — bukan saat menyimpan — supaya nilai yang tersimpan tetap
+ * terbaca manusia di halaman pengaturan dan tetap sah untuk `tel:`.
+ *
+ * Nomornya dilewatkan `keE164()` lebih dulu, bukan dipakai apa adanya. Kolomnya
+ * memang hanya pernah ditulis lewat penyaring itu, tapi nilai yang sudah ada di
+ * database sebelum penyaringnya dipasang — atau yang ditulis lewat `psql` — tidak
+ * punya jaminan apa pun. Nomor yang bentuknya salah menghasilkan `null`, dan
+ * pemanggilnya tidak merender tombol; tombol menuju halaman galat WhatsApp lebih
+ * buruk daripada tidak ada tombol, karena pengunjung menyimpulkan nomornya
+ * benar dan perusahaannya yang tidak menjawab.
+ *
+ * `pesan` di-encode. Tanpa itu `&` dalam teks memulai parameter query baru dan
+ * sisa pesannya hilang di tengah kalimat.
+ */
+export function keTautanWa(nomor: string | null | undefined, pesan?: string): string | null {
+  const e164 = keE164(nomor);
+  if (!e164) return null;
+
+  const digit = e164.slice(1);
+  const kueri = pesan && pesan.trim() !== '' ? `?text=${encodeURIComponent(pesan.trim())}` : '';
+  return `https://wa.me/${digit}${kueri}`;
+}

@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { dekripsi, enkripsi, enkripsiSiap } from "@/lib/rahasia";
 import { ambilIdentitasSitus, namaUntukPrompt } from "@/lib/identitas-situs";
+import { keE164 } from "@/lib/telepon";
 
 // Menyamarkan API key: hanya 4 karakter terakhir yang ditampilkan.
 // Nilai utuh tidak pernah meninggalkan server.
@@ -177,6 +178,44 @@ export async function POST(req: Request) {
   // API key di bawah — bukan "kosongkan".
   if (siteName !== null) data.siteName = siteName;
   if (siteDesc !== null) data.siteDesc = siteDesc;
+
+  // Nomor WhatsApp punya tiga keadaan, bukan dua, dan itu bedanya dengan kedua
+  // field di atas:
+  //
+  //   - field tidak dikirim sama sekali  -> jangan ubah
+  //   - dikirim berisi teks              -> ganti, tapi hanya bila bentuknya sah
+  //   - dikirim sebagai teks kosong      -> HAPUS nomornya
+  //
+  // Keadaan ketiga wajib ada dan tidak boleh ikut aturan "kosong berarti jangan
+  // ubah": sales yang berhenti bekerja meninggalkan nomor pribadi di halaman
+  // publik, dan admin harus punya cara membuangnya tanpa membuka database.
+  // Untuk `siteName`/`siteDesc` aturan itu tidak berlaku — kolomnya non-null,
+  // dan judul tab kosong bukan keadaan yang pernah dimaksudkan siapa pun.
+  if (typeof body.waNumber === 'string') {
+    const diketik = body.waNumber.trim();
+    if (diketik === '') {
+      data.waNumber = null;
+    } else {
+      // DITOLAK, bukan disimpan apa adanya, dan bukan pula "usaha terbaik".
+      // Nomor yang bentuknya salah menjadi tombol yang mendarat di halaman
+      // galat WhatsApp — pengunjung menyimpulkan nomornya benar dan
+      // perusahaannya yang tidak menjawab. Admin yang salah ketik lebih baik
+      // diberi tahu sekarang, di layar yang sama tempat ia mengetiknya.
+      const e164 = keE164(diketik);
+      if (!e164) {
+        return NextResponse.json(
+          {
+            message:
+              'Nomor WhatsApp tidak dikenali. Tulis dalam salah satu bentuk ini: ' +
+              '0812xxxxxxx, 62812xxxxxxx, atau +62 812-xxxx-xxx. ' +
+              'Kosongkan kolomnya bila ingin menghapus nomor yang tersimpan.',
+          },
+          { status: 400 }
+        );
+      }
+      data.waNumber = e164;
+    }
+  }
 
   const adaKeyBaru =
       (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim() !== "") ||

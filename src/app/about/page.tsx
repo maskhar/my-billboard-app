@@ -38,8 +38,9 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
-import { Building2, Mail, MapPin, MonitorPlay } from 'lucide-react';
+import { Building2, Mail, MapPin, MessageCircle, MonitorPlay } from 'lucide-react';
 import { ambilIdentitasSitus } from '@/lib/identitas-situs';
+import { keTautanWa } from '@/lib/telepon';
 import {
   ALAMAT_PENJUAL,
   BADAN_USAHA_PENJUAL,
@@ -118,7 +119,13 @@ const TAHAP_PESANAN = [
 ] as const;
 
 export default async function AboutPage() {
-  const { nama, deskripsi } = await ambilIdentitasSitus();
+  const { nama, deskripsi, nomorWa } = await ambilIdentitasSitus();
+
+  // Tanpa pesan pembuka: halaman ini tidak sedang menunjukkan satu titik media,
+  // jadi tidak ada konteks yang bisa disebut. Menuliskan "Halo" saja lalu
+  // mengirimkannya membuat sales menerima pesan yang tidak menambah apa pun di
+  // atas pesan yang ditulis pengunjung sendiri.
+  const tautanWa = keTautanWa(nomorWa);
 
   return (
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
@@ -231,6 +238,26 @@ export default async function AboutPage() {
                 </a>
               </div>
             </div>
+
+            {/* WhatsApp hanya muncul bila admin sudah mengaturnya. Halaman ini
+                tidak pernah menampilkan baris kontak kosong: baris "WhatsApp:
+                —" adalah janji jalur kontak yang tidak ada. */}
+            {tautanWa && (
+              <div className="flex gap-4">
+                <MessageCircle className="text-gray-400 flex-shrink-0" size={18} />
+                <div>
+                  <p className="text-xs font-bold text-gray-500 uppercase">WhatsApp</p>
+                  <a
+                    href={tautanWa}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sm text-utero font-medium mt-0.5 block hover:underline"
+                  >
+                    {nomorWa}
+                  </a>
+                </div>
+              </div>
+            )}
           </div>
         </section>
 

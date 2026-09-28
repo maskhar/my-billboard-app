@@ -33,6 +33,7 @@ import { cache } from 'react';
 import { connection } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { NAMA_PENJUAL } from '@/lib/penjual';
+import { keE164 } from '@/lib/telepon';
 
 /** Keterangan singkat situs, dipakai bila admin belum mengisinya. */
 export const DESKRIPSI_SITUS_BAWAAN = 'Platform Sewa Billboard Terlengkap';
@@ -40,11 +41,22 @@ export const DESKRIPSI_SITUS_BAWAAN = 'Platform Sewa Billboard Terlengkap';
 export type IdentitasSitus = {
   nama: string;
   deskripsi: string;
+  /**
+   * Nomor WhatsApp sales dalam bentuk E.164, atau `null` bila belum diatur.
+   *
+   * Tidak punya fallback ke konstanta apa pun, beda dengan `nama`. Nama usaha
+   * yang salah membuat judul tab keliru; nomor telepon yang salah mengirim
+   * pengunjung ke orang asing atau ke nomor mati, lalu ia menyimpulkan
+   * perusahaannya tidak menjawab. `null` di sini berarti pemanggilnya TIDAK
+   * merender tombol kontak sama sekali.
+   */
+  nomorWa: string | null;
 };
 
 export const IDENTITAS_BAWAAN: IdentitasSitus = {
   nama: NAMA_PENJUAL,
   deskripsi: DESKRIPSI_SITUS_BAWAAN,
+  nomorWa: null,
 };
 
 /**
@@ -102,12 +114,20 @@ export const ambilIdentitasSitus = cache(async function ambilIdentitasSitus(): P
       // yang merender setiap halaman publik, jadi keduanya tidak boleh ikut
       // terbaca hanya karena satu hari ada yang mengganti `select` ini dengan
       // `include`.
-      select: { siteName: true, siteDesc: true },
+      select: { siteName: true, siteDesc: true, waNumber: true },
     });
 
     return {
       nama: bersih(baris?.siteName) ?? IDENTITAS_BAWAAN.nama,
       deskripsi: bersih(baris?.siteDesc) ?? IDENTITAS_BAWAAN.deskripsi,
+      // Dilewatkan `keE164()` di sini, bukan dipercaya apa adanya. Kolomnya
+      // memang hanya pernah ditulis lewat penyaring yang sama di
+      // `api/admin/settings`, tapi nilai yang masuk lewat `psql` atau lewat
+      // versi route yang lebih tua tidak punya jaminan bentuk — dan nomor yang
+      // bentuknya salah menjadi tombol yang mendarat di halaman galat
+      // WhatsApp, yang dibaca pengunjung sebagai perusahaan yang tidak
+      // menjawab.
+      nomorWa: keE164(baris?.waNumber),
     };
   } catch (error) {
     console.error('[identitas-situs] Gagal membaca pengaturan situs:', error);

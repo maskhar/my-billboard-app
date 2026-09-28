@@ -496,7 +496,18 @@ model SystemSetting {
   id               String  @id @default("default_config")
   siteName         String  @default("Utero Cloud")
   siteDesc         String  @default("Platform Sewa Billboard Terlengkap")
-  geminiApiKey     String? 
+
+  /// Nomor WhatsApp sales, dalam bentuk E.164 (`+628123456789`).
+  ///
+  /// Nullable tanpa nilai bawaan, dan itu disengaja: nomor karangan lebih buruk
+  /// daripada tidak ada nomor — pengunjung mengirim pesan ke orang asing atau ke
+  /// nomor mati, lalu menyimpulkan perusahaannya tidak menjawab. `null` berarti
+  /// belum diatur, dan halaman detail tidak merender tombolnya sama sekali.
+  ///
+  /// Hanya pernah ditulis setelah lolos `keE164()` di `src/lib/telepon.ts`.
+  waNumber         String?
+
+  geminiApiKey     String?
   googleMapsApiKey String?
   updatedAt        DateTime @updatedAt
 }

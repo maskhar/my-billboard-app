@@ -1,0 +1,51 @@
+-- NOMOR WHATSAPP PERUSAHAAN SEBAGAI PENGATURAN
+--
+-- MASALAH YANG DIPERBAIKI
+-- -----------------------
+-- Halaman detail billboard dulu punya tombol "Hubungi Sales (WA)" tanpa
+-- `onClick` dan tanpa `href`. Tidak ada satu pun nomor WhatsApp perusahaan di
+-- `.env.example` maupun di `SystemSetting` untuk dituju, jadi tombol itu tidak
+-- pernah bisa bekerja. Ia dibuang, dengan catatan bahwa nomor WA sebagai
+-- pengaturan adalah fitur terpisah. Kolom ini fiturnya.
+--
+-- Pengunjung yang ragu adalah persis orang yang paling butuh bicara dengan
+-- manusia sebelum mengeluarkan uang sebesar harga sewa satu titik media. Live
+-- chat sudah tersambung, tapi ia menuntut pengunjung menunggu di halaman;
+-- WhatsApp berpindah ke ponselnya dan tetap ada setelah tab ditutup.
+--
+-- KENAPA DI `SystemSetting`, BUKAN DI `src/lib/penjual.ts`
+-- -------------------------------------------------------
+-- `penjual.ts` adalah identitas yang tercetak di INVOICE: nama badan usaha,
+-- alamat kantor, surel. Nilainya tidak boleh berubah hanya karena ada yang
+-- mengedit sesuatu di halaman pengaturan, karena dokumen yang sudah diserahkan
+-- ke pelanggan memuat nilai lamanya. Nomor sales bukan bagian dari dokumen itu:
+-- ia berganti saat orangnya berganti, dan yang tahu nomor barunya adalah admin,
+-- bukan orang yang bisa mengubah kode lalu men-deploy.
+--
+-- BENTUK PENYIMPANANNYA E.164, DAN ITU BUKAN PILIHAN KOSMETIK
+-- ----------------------------------------------------------
+-- `src/lib/telepon.ts` sudah menjadi satu-satunya penafsir nomor telepon di
+-- aplikasi ini, dan alasannya tertulis di sana: `08123456789`,
+-- `628123456789`, dan `+62 812-3456-789` semuanya benar menurut orang yang
+-- mengetiknya. Nilai di kolom ini hanya pernah ditulis setelah lolos `keE164()`,
+-- jadi yang tersimpan selalu satu bentuk. `wa.me` menolak tanda plus dan
+-- pemisah, jadi pembentuk tautannya membuang keduanya saat merender — bukan saat
+-- menyimpan, supaya nilai yang tersimpan tetap bisa dibaca manusia dan tetap
+-- sah untuk `tel:`.
+--
+-- NULLABLE, DAN TIDAK ADA NILAI BAWAAN
+-- ------------------------------------
+-- Nomor telepon karangan lebih buruk daripada tidak ada nomor: pengunjung
+-- mengirim pesan ke orang asing, atau ke nomor mati, dan menyimpulkan
+-- perusahaannya tidak menjawab. `NULL` berarti "belum diatur", dan halaman
+-- detail TIDAK merender tombolnya sama sekali sampai admin mengisinya — sama
+-- seperti keadaan sebelum migrasi ini, jadi tidak ada satu pun tombol mati yang
+-- muncul karena kolom ini ditambahkan.
+--
+-- CATATAN PENGUNCIAN
+-- ------------------
+-- Satu kolom nullable tanpa nilai bawaan: PostgreSQL hanya mengubah katalognya
+-- tanpa menulis ulang tabel, dan `SystemSetting` berisi satu baris. Aman
+-- dijalankan kapan saja, termasuk pada database yang sedang melayani.
+
+ALTER TABLE "SystemSetting" ADD COLUMN "waNumber" TEXT;
