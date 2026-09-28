@@ -206,9 +206,15 @@ Laporkan celah keamanan langsung ke pemilik repo, jangan lewat issue publik.
 `vercel.json` ada, tetapi isinya HANYA satu entri cron — penjadwal yang memukul
 `/api/cron/sweep` tiap jam untuk menghanguskan pesanan yang lewat tenggat
 bayarnya. Route itu menolak seluruh permintaan bila `CRON_SECRET` kosong, jadi
-penjadwalnya tidak berguna tanpa variabel itu terpasang. Tidak ada `Dockerfile`
-dan tidak ada workflow CI (`.github/` belum ada), jadi tidak ada yang
-menjalankan test suite selain orang yang mengetiknya.
+penjadwalnya tidak berguna tanpa variabel itu terpasang. Tidak ada `Dockerfile`.
+
+`.github/workflows/periksa.yml` menjalankan keempat gerbang — `tsc`, ESLint,
+seluruh test suite, dan `npm run build` — pada setiap push dan setiap pull
+request ke `master`. `npm run build` ikut bukan karena dianggap test, melainkan
+karena satu kelas kegagalan di repo ini hanya muncul di sana: metadata route
+tanpa `force-dynamic` menghentikan deploy, dan `tsc` maupun test tidak melihat
+apa pun. CI tidak memakai database dan tidak menarik satu pun secret repo;
+keempat gerbang diverifikasi lulus dengan nilai palsu.
 
 Urutan minimum di server sendiri:
 

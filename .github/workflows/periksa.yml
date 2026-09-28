@@ -1,0 +1,107 @@
+# Empat gerbang yang sudah ada, dijalankan oleh mesin alih-alih oleh ingatan.
+#
+# Repo ini punya 1298 test, `tsc`, dan ESLint — dan sampai berkas ini ada, tidak
+# satu pun dijalankan kecuali seseorang mengetiknya sendiri sebelum commit.
+# Artinya setiap gerbang itu hanya seketat kedisiplinan orang yang paling lelah
+# pada hari itu, dan kegagalan baru masuk ke `master` tanpa satu pun yang
+# menahannya.
+#
+# `npm run build` ikut, bukan karena dianggap test, melainkan karena satu cacat
+# nyata di repo ini HANYA bisa ditangkap olehnya: `src/app/sitemap.ts` tanpa
+# `force-dynamic` menghentikan seluruh deploy dengan
+# `Export encountered an error on /sitemap.xml/route`, dan `tsc` maupun test
+# tidak melihat apa pun. Kegagalan yang hanya muncul saat build harus muncul di
+# sini, bukan saat deploy.
+#
+# TIDAK ADA DATABASE DI SINI, dan itu diverifikasi, bukan diasumsikan: keempat
+# gerbang dijalankan dengan `DATABASE_URL` yang menunjuk ke host yang tidak
+# menjawab, dan semuanya lulus. Test memalsukan Prisma lewat penukar modul di
+# dalam berkas test-nya sendiri, dan seluruh halaman yang menyentuh database
+# sudah dinamis. Menambahkan layanan Postgres di sini berarti menambah tiga menit
+# dan satu sumber kegagalan yang tidak menguji apa pun.
+name: Periksa
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: [master]
+
+# Push beruntun ke cabang yang sama membatalkan jalannya yang lebih tua: yang
+# menarik adalah keadaan commit terakhir, bukan riwayat commit di tengah.
+concurrency:
+  group: periksa-${{ github.ref }}
+  cancel-in-progress: true
+
+# Hanya membaca repo. Tidak menulis komentar, tidak menyentuh rilis, tidak
+# membuat token yang bisa mendorong commit.
+permissions:
+  contents: read
+
+jobs:
+  periksa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # NILAI PALSU, SENGAJA, DAN TIDAK SATU PUN RAHASIA SUNGGUHAN.
+      #
+      # `src/instrumentation.ts` menuntut `DATABASE_URL` dan `NEXTAUTH_SECRET`
+      # ada sebelum server menerima permintaan pertama. Next SENGAJA melewati
+      # hook itu pada fase build, jadi build tidak menuntutnya — tapi nilai di
+      # sini membuat CI tidak bergantung pada perilaku itu bertahan.
+      #
+      # Host `127.0.0.1:1` tidak menjawab, dan itu maksudnya: bila suatu saat
+      # ada kode yang mulai menyentuh database saat build atau saat test, CI
+      # GAGAL alih-alih diam-diam terhubung ke sesuatu.
+      DATABASE_URL: 'postgresql://ci:ci@127.0.0.1:1/ci?schema=public'
+      NEXTAUTH_SECRET: 'rahasia-palsu-khusus-ci-bukan-nilai-produksi'
+      NEXTAUTH_URL: 'http://localhost:4000'
+      # `NODE_ENV` DIBIARKAN tidak produksi. Pemeriksaan boot menuntut lebih
+      # banyak variabel di mode produksi (kedua kunci Xendit,
+      # `SETTINGS_ENCRYPTION_KEY`), dan memasang nilai palsu untuk semuanya di
+      # sini berarti CI menguji konfigurasi yang tidak pernah dipakai siapa pun.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          # Test runner memakai `node --test` dengan
+          # `--conditions=react-server`; Node lama tidak cukup.
+          node-version: '20'
+          cache: 'npm'
+
+      # `npm ci`, bukan `npm install`: ia menuntut `package-lock.json` cocok
+      # dengan `package.json` dan menolak memperbaiki sendiri bila tidak. CI yang
+      # diam-diam menaikkan versi dependensi menguji pohon yang berbeda dari yang
+      # dipakai siapa pun.
+      - name: Pasang dependensi
+        run: npm ci
+
+      # Tanpa ini `tsc` gagal di seluruh berkas yang mengimpor `@prisma/client`:
+      # tipenya dihasilkan dari schema, bukan disimpan di repo. Tidak menyentuh
+      # database — hanya membaca `prisma/schema.prisma`.
+      - name: Hasilkan klien Prisma
+        run: npx prisma generate
+
+      # Menangkap drift schema yang tidak disengaja tanpa menjalankan migrasi apa
+      # pun. `migrate` TIDAK dijalankan di sini: tidak ada database, dan CI bukan
+      # tempat yang benar untuk menyentuh skema milik siapa pun.
+      - name: Validasi schema
+        run: npx prisma validate
+
+      - name: Periksa tipe
+        run: npx tsc --noEmit
+
+      - name: ESLint
+        run: npm run lint
+
+      # Dijalankan setelah lint supaya kegagalan yang paling murah muncul lebih
+      # dulu, tapi sebelum build supaya kegagalan yang paling informatif tidak
+      # tertutup tiga menit build.
+      - name: Test
+        run: npm run test:xendit
+
+      - name: Build
+        run: npm run build

@@ -18667,3 +18667,150 @@ describe('README menjelaskan repo ini, bukan templat', () => {
     assert.ok(disebut.includes('npm run test:xendit'), 'README tidak menyebut cara menjalankan test');
   });
 });
+
+describe('CI menjalankan gerbang yang sudah ada', () => {
+  // Sampai `.github/workflows/periksa.yml` ada, tidak satu pun dari `tsc`,
+  // ESLint, test suite, dan `npm run build` dijalankan kecuali seseorang
+  // mengetiknya sendiri sebelum commit. Artinya setiap gerbang hanya seketat
+  // kedisiplinan orang yang paling lelah pada hari itu.
+  //
+  // Test ini menjaga agar gerbangnya tidak bisa dicabut diam-diam lagi. Ia
+  // membaca berkas workflow sebagai teks, bukan lewat pustaka YAML: repo ini
+  // tidak punya parser YAML sebagai dependensi, dan menambahkan satu hanya
+  // untuk test ini berarti menambah permukaan dependensi demi pemeriksaan yang
+  // bisa dilakukan dengan pencocokan baris.
+  const JALUR_WORKFLOW = path.join(__dirname, '..', '.github', 'workflows', 'periksa.yml');
+
+  it('berkas workflow-nya ada', () => {
+    assert.ok(
+      fs.existsSync(JALUR_WORKFLOW),
+      '.github/workflows/periksa.yml hilang — tidak ada yang menjalankan test selain orang yang mengetiknya'
+    );
+  });
+
+  // Setiap perintah di sini pernah menjadi satu-satunya yang menangkap satu
+  // kelas kegagalan di repo ini:
+  //
+  // - `npm ci`   : menuntut `package-lock.json` cocok; `npm install` diam-diam
+  //                memperbaiki sendiri dan menguji pohon dependensi yang
+  //                berbeda dari yang dipakai siapa pun.
+  // - `generate` : tipe `@prisma/client` dihasilkan dari schema dan TIDAK
+  //                dilacak Git (`node_modules/` ada di `.gitignore`), jadi
+  //                tanpa langkah ini `tsc` gagal di seluruh berkas yang
+  //                mengimpornya.
+  // - `tsc`      : satu-satunya yang melihat tipe.
+  // - `lint`     : satu-satunya yang melihat aturan lint.
+  // - `test`     : satu-satunya yang melihat perilaku.
+  // - `build`    : satu-satunya yang melihat `src/app/sitemap.ts` tanpa
+  //                `force-dynamic` menghentikan seluruh deploy dengan
+  //                `Export encountered an error on /sitemap.xml/route`. `tsc`
+  //                dan test tidak melihat apa pun di sana.
+  const GERBANG = [
+    'npm ci',
+    'npx prisma generate',
+    'npx tsc --noEmit',
+    'npm run lint',
+    'npm run test:xendit',
+    'npm run build',
+  ];
+
+  for (const perintah of GERBANG) {
+    it('menjalankan `' + perintah + '`', () => {
+      const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+      assert.ok(
+        isi.includes('run: ' + perintah),
+        'workflow tidak lagi menjalankan `' + perintah + '`'
+      );
+    });
+  }
+
+  it('gerbang termurah dijalankan lebih dulu', () => {
+    // `tsc` dan lint selesai dalam hitungan detik; build butuh beberapa menit.
+    // Urutan yang terbalik berarti setiap kesalahan tipe sepele menunggu build
+    // selesai sebelum terlihat, dan kegagalan yang paling informatif (test)
+    // tertutup di bawah keluaran build.
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    const urutan = ['npx tsc --noEmit', 'npm run lint', 'npm run test:xendit', 'npm run build']
+      .map((p) => isi.indexOf('run: ' + p));
+
+    for (const posisi of urutan) assert.ok(posisi > -1, 'satu gerbang hilang dari workflow');
+    for (let i = 1; i < urutan.length; i += 1) {
+      assert.ok(
+        urutan[i] > urutan[i - 1],
+        'urutan gerbang di workflow tidak lagi dari yang termurah ke yang termahal'
+      );
+    }
+  });
+
+  it('tidak menjalankan migrate apa pun', () => {
+    // CI bukan tempat yang benar untuk menyentuh skema milik siapa pun, dan
+    // tidak ada database di sana untuk disentuh. `prisma validate` menangkap
+    // drift schema tanpa menjalankan satu migrasi pun.
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    assert.ok(!/run:.*prisma\s+migrate/.test(isi), 'workflow menjalankan prisma migrate');
+    assert.ok(!/run:.*prisma\s+db\s+push/.test(isi), 'workflow menjalankan prisma db push');
+    assert.ok(isi.includes('run: npx prisma validate'), 'workflow tidak lagi memvalidasi schema');
+  });
+
+  it('tidak meminta satu pun secret repo', () => {
+    // Keempat gerbang lulus dengan nilai palsu — diverifikasi, bukan
+    // diasumsikan. Workflow yang menarik `secrets.*` memberi setiap commit di
+    // setiap cabang, termasuk dari fork, akses ke kredensial produksi demi
+    // pemeriksaan yang tidak membutuhkannya.
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    assert.ok(
+      !/secrets\./.test(isi),
+      'workflow menarik secret repo untuk pemeriksaan yang tidak membutuhkannya'
+    );
+  });
+
+  it('izinnya hanya baca', () => {
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    assert.match(
+      isi,
+      /permissions:\s*\n\s*contents: read/,
+      'workflow tidak lagi membatasi izinnya ke contents: read'
+    );
+  });
+
+  it('tidak memuat satu pun nilai dari .env', () => {
+    // `.github/` adalah bagian repo yang publik. Nilai palsu di sana tidak
+    // berbahaya; nilai sungguhan yang tersalin dari `.env` berbahaya.
+    const jalurEnv = path.join(__dirname, '..', '.env');
+    if (!fs.existsSync(jalurEnv)) return;
+
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    const bocor = [];
+    for (const baris of fs.readFileSync(jalurEnv, 'utf8').split('\n')) {
+      const cocok = baris.match(/^\s*([A-Z0-9_]+)\s*=\s*"?([^"\n]*)"?\s*$/);
+      if (!cocok) continue;
+      const [, nama, nilai] = cocok;
+      const bersih = nilai.trim();
+      if (bersih.length < 12) continue;
+      if (/localhost|127\.0\.0\.1/.test(bersih)) continue;
+      if (isi.includes(bersih)) bocor.push(nama);
+    }
+    // Hanya NAMA variabelnya yang dilaporkan, bukan nilainya.
+    assert.deepStrictEqual(bocor, [], 'nilai variabel ini muncul di workflow: ' + bocor.join(', '));
+  });
+
+  it('versi Node-nya cukup untuk test runner', () => {
+    // Test suite dijalankan `node --test` dengan `--conditions=react-server`.
+    const isi = fs.readFileSync(JALUR_WORKFLOW, 'utf8');
+    const cocok = isi.match(/node-version:\s*'(\d+)'/);
+    assert.ok(cocok, 'workflow tidak menyetel node-version secara eksplisit');
+    assert.ok(Number(cocok[1]) >= 20, 'node-version di workflow terlalu tua untuk `node --test`');
+  });
+
+  it('README tidak lagi menyatakan CI belum ada', () => {
+    // Klaim ini benar sampai workflow-nya ada, dan menjadi salah begitu ia ada.
+    // README yang menyatakan tidak ada yang menjalankan test membuat orang
+    // berikutnya menganggap hasil CI merah sebagai sesuatu yang tidak ada.
+    const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
+    assert.ok(
+      !/tidak ada workflow CI/.test(readme),
+      'README masih menyatakan tidak ada workflow CI'
+    );
+    assert.match(readme, /periksa\.yml/, 'README tidak menyebut workflow CI yang ada');
+  });
+});
