@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { dekripsi, enkripsi, enkripsiSiap } from "@/lib/rahasia";
+import { ambilIdentitasSitus, namaUntukPrompt } from "@/lib/identitas-situs";
 
 // Menyamarkan API key: hanya 4 karakter terakhir yang ditampilkan.
 // Nilai utuh tidak pernah meninggalkan server.
@@ -86,9 +87,18 @@ export async function POST(req: Request) {
       try {
           const url = `https://generativelanguage.googleapis.com/v1beta/models/${MODEL_NAME}:generateContent?key=${apiKey}`;
           
+          // Nama usaha dibaca dari pengaturan, bukan ditulis di kode.
+          //
+          // Sebelumnya di sini tertulis 'Utero Cloud' apa adanya — di berkas yang
+          // TUGASNYA menyimpan nama usaha yang bisa diganti admin. Admin
+          // mengganti namanya di kotak isian tepat di atas tombol ini, menekan
+          // Tes AI, dan menerima slogan untuk perusahaan dengan nama lama.
+          const { nama } = await ambilIdentitasSitus();
           const payload = {
             contents: [{
-              parts: [{ text: "Buatkan slogan singkat 5-8 kata yang punchy untuk jasa sewa Billboard 'Utero Cloud'." }]
+              parts: [{
+                text: `Buatkan slogan singkat 5-8 kata yang punchy untuk jasa sewa Billboard '${namaUntukPrompt(nama)}'.`,
+              }]
             }]
           };
 

@@ -13,6 +13,7 @@ import CS_Dashboard from '../_components/cs/CS_Dashboard';
 import { angkaRupiah, kurang, rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
+import { ambilIdentitasSitus } from '@/lib/identitas-situs';
 import { BookingStatus, PaymentStatus } from '@prisma/client';
 
 // Supaya data selalu fresh
@@ -29,6 +30,9 @@ export default async function AdminDashboard() {
   }
 
   // --- START: DATA FETCHING & PROCESSING (Hanya untuk Admin) ---
+
+  // Nama usaha dibaca dari pengaturan, bukan ditulis di kode.
+  const identitasPromise = ambilIdentitasSitus();
 
   // 1. Ambil semua data agregat dalam satu panggilan (lebih efisien)
   const totalBillboardsPromise = prisma.billboard.count();
@@ -67,13 +71,15 @@ export default async function AdminDashboard() {
     totalOrders,
     totalCustomers,
     hasilUangMasuk,
-    hasilRefund
+    hasilRefund,
+    identitas
   ] = await Promise.all([
     totalBillboardsPromise,
     totalOrdersPromise,
     totalCustomersPromise,
     uangMasukPromise,
-    refundPromise
+    refundPromise,
+    identitasPromise
   ]);
 
   // `_sum` mengembalikan null bila tidak ada baris yang cocok. Dibiarkan
@@ -113,7 +119,7 @@ export default async function AdminDashboard() {
         {/* HEADER */}
         <div>
             <h1 className="text-2xl font-bold text-gray-800">Ringkasan Bisnis</h1>
-            <p className="text-gray-500 text-sm">Pantau kinerja penjualan Utero Cloud.</p>
+            <p className="text-gray-500 text-sm">Pantau kinerja penjualan {identitas.nama}.</p>
         </div>
 
         {/* STATS CARDS */}
