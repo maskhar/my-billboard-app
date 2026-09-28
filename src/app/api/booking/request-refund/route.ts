@@ -9,9 +9,11 @@ import { keAngka, nol, persen, rupiah } from "@/lib/money";
 import { sudahLunas, uangMasuk as uangMasukLedger } from "@/lib/pembayaran";
 import { BookingStatus, Prisma } from "@prisma/client";
 import { STATUS_BOLEH_AJUKAN_REFUND } from "@/lib/transisi-status";
-
-/** Bagian dari uang masuk yang dikembalikan; sisanya potongan biaya admin. */
-const PERSEN_REFUND = 90;
+// Bagian dari uang masuk yang dikembalikan; sisanya potongan biaya admin.
+// Nilainya di `src/lib/tarif.ts` karena `DashboardWrapper.tsx` menampilkan
+// PERKIRAAN refund dengan angka yang sama. Dua salinan tidak menghasilkan galat
+// — hanya pembeli yang dijanjikan 90% lalu menerima porsi lain.
+import { PERSEN_REFUND } from "@/lib/tarif";
 
 /**
  * Kolom Payment yang cukup untuk menjawab "berapa uang yang sudah masuk".

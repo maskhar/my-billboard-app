@@ -16853,3 +16853,107 @@ describe('alur "Sewakan Tempat" dari pengaju sampai admin', () => {
     });
   });
 });
+
+describe('src/lib/tarif.ts — satu sumber tarif', () => {
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  const akar = path.join(__dirname, '..');
+  const jalurTarif = path.join(akar, 'src', 'lib', 'tarif.ts');
+  const kodeTarif = kodeSaja(jalurTarif);
+
+  it('nilainya tepat: PPN 11%, admin 50.000, DP 60%, refund 90%', () => {
+    assert.match(kodeTarif, /export const PERSEN_PPN = 11;/);
+    assert.match(kodeTarif, /export const BIAYA_ADMIN = 50_000;/);
+    assert.match(kodeTarif, /export const PERSEN_DP = 60;/);
+    assert.match(kodeTarif, /export const PERSEN_REFUND = 90;/);
+  });
+
+  it('NOL impor — supaya Client Component boleh membacanya', () => {
+    // `money.ts` dan `pembayaran.ts` sama-sama mengimpor `@prisma/client`.
+    // Mengimpor salah satunya dari `CheckoutForm.tsx` menarik runtime Prisma
+    // ke bundel browser. Berkas ini karena itu tidak boleh punya satu impor
+    // pun: begitu ada, ia berhenti bisa dipakai sisi klien dan tarifnya
+    // terpecah dua lagi tanpa satu galat muncul.
+    assert.doesNotMatch(kodeTarif, /^\s*import\s/m);
+    assert.doesNotMatch(kodeTarif, /require\(/);
+  });
+
+  it('persenAngka membulatkan sama dengan ROUND_HALF_UP sisi server', () => {
+    const { persenAngka } = require(path.join(akar, 'src', 'lib', 'tarif.ts'));
+    assert.strictEqual(persenAngka(100_000, 11), 11_000);
+    // 10.000.000 × 11% = 1.100.000 utuh; nilai yang menuntut pembulatan:
+    assert.strictEqual(persenAngka(150, 11), 17); // 16,5 → 17 (HALF_UP)
+    assert.strictEqual(persenAngka(50, 11), 6); // 5,5 → 6
+    assert.strictEqual(persenAngka(1_000_000, 60), 600_000);
+    assert.strictEqual(persenAngka(0, 11), 0);
+  });
+
+  it('keempat pembacanya mengimpor dari @/lib/tarif, bukan menyalin angka', () => {
+    // Tarif yang DITAGIH dan tarif yang DILIHAT pembeli harus satu angka.
+    // Selama keduanya disalin, satu berkas bisa diubah tanpa pasangannya dan
+    // pembeli melihat satu nominal di checkout lalu ditagih nominal lain.
+    const pembaca = [
+      ['src/app/api/booking/create/route.ts', /BIAYA_ADMIN|PERSEN_PPN|PERSEN_DP/],
+      ['src/components/CheckoutForm.tsx', /BIAYA_ADMIN|PERSEN_PPN|PERSEN_DP/],
+      ['src/app/api/booking/request-refund/route.ts', /PERSEN_REFUND/],
+      ['src/app/dashboard/DashboardWrapper.tsx', /PERSEN_REFUND/],
+    ];
+
+    for (const [relatif, namaTarif] of pembaca) {
+      const kode = kodeSaja(path.join(akar, relatif));
+      const impor = kode.match(/import\s*\{([^}]*)\}\s*from\s*['"]@\/lib\/tarif['"]/);
+      assert.ok(impor, `${relatif} tidak mengimpor dari @/lib/tarif`);
+      assert.match(impor[1], namaTarif, `${relatif} tidak mengambil tarif yang ia pakai`);
+
+      // Dan tidak mendeklarasikan ulang tarif yang sama secara lokal.
+      assert.doesNotMatch(
+        kode,
+        /const (PERSEN_PPN|BIAYA_ADMIN|PERSEN_DP|PERSEN_REFUND)\s*=/,
+        `${relatif} masih menyimpan salinan tarifnya sendiri`
+      );
+    }
+  });
+
+  it('CheckoutForm tidak lagi memaku 50000, 0.11, atau 0.60', () => {
+    // Bentuk lamanya: `const adminFee = 50000`, `subTotalSewa * 0.11`, dan
+    // `grandTotal * 0.60`. Ketiganya harus sama persis dengan route penagih,
+    // dan tidak ada yang memeriksanya — `tsc` tetap hijau saat keduanya beda.
+    const kode = kodeSaja(path.join(akar, 'src', 'components', 'CheckoutForm.tsx'));
+    assert.doesNotMatch(kode, /\b50000\b/);
+    assert.doesNotMatch(kode, /\*\s*0\.11\b/);
+    assert.doesNotMatch(kode, /\*\s*0\.6(0)?\b/);
+    // Dan memang memakai penggantinya.
+    assert.match(kode, /persenAngka\(\s*subTotalSewa\s*,\s*PERSEN_PPN\s*\)/);
+    assert.match(kode, /persenAngka\(\s*grandTotal\s*,\s*PERSEN_DP\s*\)/);
+  });
+
+  it('CheckoutForm tidak mengimpor money.ts maupun pembayaran.ts', () => {
+    // Keduanya mengimpor `@prisma/client`; dari komponen 'use client' itu
+    // berarti runtime Prisma ikut ke bundel browser.
+    const kode = kodeSaja(path.join(akar, 'src', 'components', 'CheckoutForm.tsx'));
+    assert.doesNotMatch(kode, /from\s*['"]@\/lib\/money['"]/);
+    assert.doesNotMatch(kode, /from\s*['"]@\/lib\/pembayaran['"]/);
+    assert.doesNotMatch(kode, /from\s*['"]@prisma\/client['"]/);
+  });
+
+  it('nominal yang MENGIKAT tetap lewat money.ts, bukan persenAngka', () => {
+    // `persenAngka` bekerja pada `number`. Dipakai pada nominal yang disimpan,
+    // ia membuang jaminan presisi Decimal yang dijaga `money.ts`.
+    for (const relatif of [
+      'src/app/api/booking/create/route.ts',
+      'src/app/api/booking/request-refund/route.ts',
+      'src/app/dashboard/DashboardWrapper.tsx',
+    ]) {
+      const kode = kodeSaja(path.join(akar, relatif));
+      assert.doesNotMatch(kode, /persenAngka\(/, `${relatif} memakai helper pratinjau`);
+    }
+  });
+});

@@ -12,6 +12,7 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { bacaBadan } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
+import { BIAYA_ADMIN, PERSEN_DP, PERSEN_PPN, persenAngka } from '@/lib/tarif';
 
 interface CheckoutProps {
   billboard: {
@@ -78,23 +79,31 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   // billboard Rp 300 juta seharga Rp 1 dengan satu perintah `curl`.
   //
   // Karena itu payload di handlePayment TIDAK BOLEH memuat nominal apa pun
-  // lagi. Tarif di bawah wajib sama persis dengan konstanta di route tersebut
-  // (PERSEN_PPN, BIAYA_ADMIN, PERSEN_DP) — kalau berbeda, pembeli melihat satu
-  // angka di layar lalu ditagih angka lain.
+  // lagi.
+  //
+  // Tarifnya sekarang DIIMPOR dari `src/lib/tarif.ts`, berkas yang sama yang
+  // dibaca route di atas — dulu `11`, `50000`, dan `0.60` ditulis ulang di sini
+  // sebagai angka telanjang, dengan komentar yang hanya MEMINTA keduanya tetap
+  // sama. Permintaan itu tidak diperiksa siapa pun: satu tarif dinaikkan di
+  // route dan tidak di sini, dan pembeli melihat satu angka di layar lalu
+  // ditagih angka lain.
+  //
+  // `tarif.ts` sengaja nol impor, jadi membacanya dari Client Component ini
+  // tidak menarik runtime Prisma ke bundel browser.
   // ==========================================================================
   const pricePerMonth = billboard.price;
-  const adminFee = 50000;
+  const adminFee = BIAYA_ADMIN;
 
   // Dibulatkan ke rupiah utuh di setiap langkah, meniru pembulatan server.
-  // Tanpa ini PPN 11% dan DP 60% meninggalkan pecahan sen yang membuat angka
-  // di layar meleset dari angka yang tercatat di database.
+  // Tanpa ini PPN dan DP meninggalkan pecahan sen yang membuat angka di layar
+  // meleset dari angka yang tercatat di database.
   const bulatkan = (n: number) => Math.round(n);
 
   const subTotalSewa = bulatkan(pricePerMonth * duration);
-  const ppn = bulatkan(subTotalSewa * 0.11);
+  const ppn = persenAngka(subTotalSewa, PERSEN_PPN);
   const grandTotal = bulatkan(subTotalSewa + ppn + adminFee);
 
-  const mustPayNow = paymentType === 'full' ? grandTotal : bulatkan(grandTotal * 0.60);
+  const mustPayNow = paymentType === 'full' ? grandTotal : persenAngka(grandTotal, PERSEN_DP);
 
   const handlePayment = async () => {
       const userRole = session?.user?.role;

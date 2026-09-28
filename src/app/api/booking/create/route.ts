@@ -8,6 +8,7 @@ import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
 import { addMonths, isBefore, startOfDay } from "date-fns";
 import { PaymentStatus, PaymentTujuan, Prisma } from "@prisma/client";
 import { jumlah, kali, keAngka, keDecimal, kurang, persen, rupiah } from "@/lib/money";
+import { BIAYA_ADMIN, PERSEN_DP, PERSEN_PPN } from "@/lib/tarif";
 import { adalahBentrokTanggal } from "@/lib/db-error";
 import { bacaIdentitasPenyewa } from "@/lib/identitas-penyewa";
 import {
@@ -17,7 +18,7 @@ import {
 } from "@/lib/transisi-status";
 
 // ============================================================================
-// TARIF — satu-satunya tempat angka ini ditetapkan untuk sisi server.
+// TARIF — nilainya dari `src/lib/tarif.ts`, penerapannya di sini.
 //
 // Sebelumnya tarif hanya hidup di `CheckoutForm.tsx`, yaitu di BROWSER PEMBELI.
 // Route ini menerima `totalPrice` dan `dpAmount` jadi dari sana dan menyimpannya
@@ -29,16 +30,12 @@ import {
 // Sekarang seluruh nominal dihitung di sini dari `billboard.price` yang dibaca
 // langsung dari database. Nilai uang yang dikirim browser DIABAIKAN SEPENUHNYA
 // — tidak dibaca, tidak dibandingkan, tidak dipakai sebagai cadangan.
+//
+// Angkanya sendiri dipindahkan ke `src/lib/tarif.ts` supaya pratinjau di
+// `CheckoutForm.tsx` membaca tarif yang SAMA, bukan salinannya. Dua salinan
+// tidak menghasilkan galat apa pun — hanya pembeli yang melihat satu angka di
+// layar lalu ditagih angka lain.
 // ============================================================================
-
-/** Persentase PPN yang ditagihkan di atas harga sewa. */
-const PERSEN_PPN = 11;
-
-/** Biaya administrasi tetap per pesanan, dalam rupiah. */
-const BIAYA_ADMIN = 50_000;
-
-/** Porsi yang harus dibayar di muka bila pembeli memilih DP. */
-const PERSEN_DP = 60;
 
 /** Durasi sewa yang masih dianggap wajar, dalam bulan. */
 const DURASI_MIN = 1;

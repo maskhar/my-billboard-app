@@ -18,16 +18,17 @@ import {
   uangMasuk,
 } from '@/lib/pembayaran';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
-
 /**
  * Bagian dari uang masuk yang dikembalikan bila pesanan direfund.
  *
- * Disalin dari `src/app/api/booking/request-refund/route.ts` semata untuk
- * menampilkan PERKIRAAN kepada pembeli sebelum ia mengajukan. Nominal yang
- * mengikat tetap dihitung server saat pengajuan diproses; angka di layar ini
- * tidak pernah menjadi dasar penulisan apa pun.
+ * Dibaca dari `src/lib/tarif.ts`, TIDAK disalin lagi. Angka di layar ini hanya
+ * PERKIRAAN untuk pembeli sebelum ia mengajukan; nominal yang mengikat tetap
+ * dihitung server di `src/app/api/booking/request-refund/route.ts`, yang membaca
+ * tarif yang sama. Dulu angkanya ditulis ulang di sini — dan salinan yang
+ * menyimpang berarti pembeli dijanjikan satu porsi lalu menerima porsi lain,
+ * tanpa satu pun galat yang muncul.
  */
-const PERSEN_REFUND = 90;
+import { PERSEN_REFUND } from '@/lib/tarif';
 
 // Status yang dianggap "Aktif / Berjalan".
 //
