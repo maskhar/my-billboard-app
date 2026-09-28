@@ -34,10 +34,23 @@
 // disetujui: pelunasan yang terlambat ditandai "terlambat" dan tagihannya tetap
 // bisa dibayar. Penegak otomatis di sini akan membatalkan pesanan yang uang
 // pokoknya sudah masuk.
+//
+// SAPUAN KEDUA: TOKEN RESET SANDI
+// -------------------------------
+// Menumpang jadwal yang sama, dengan alasan yang sama seperti sapuan tagihan
+// menumpang di `sapuPesananKedaluwarsa`: ini satu-satunya pekerjaan latar yang
+// benar-benar dijalankan, dan menambah jadwal kedua berarti menambah satu lagi
+// yang harus dipasang dan diawasi.
+//
+// Keduanya berdiri sendiri: kegagalan salah satu tidak boleh menghentikan yang
+// lain. Sapuan pesanan melepas tanggal billboard yang terkunci — pekerjaan yang
+// menahan pendapatan. Sapuan token hanya merapikan tabel kredensial. Yang kedua
+// gagal bukan alasan yang pertama tidak jalan.
 
 import { NextResponse } from 'next/server';
 import { timingSafeEqual } from 'node:crypto';
 import { sapuPesananKedaluwarsa } from '@/lib/transisi-status';
+import { sapuTokenResetKedaluwarsa } from '@/lib/sapu-token-reset';
 
 /** Nama header yang dikirim penjadwal Vercel saat `CRON_SECRET` terpasang. */
 const NAMA_HEADER = 'authorization';
@@ -97,8 +110,23 @@ export async function GET(req: Request): Promise<NextResponse> {
   // database sedang mati tidak memperbaiki apa pun.
   const dihanguskan = await sapuPesananKedaluwarsa();
 
+  // Ditangkap di sini, bukan dibiarkan naik: tabel kredensial yang tidak
+  // terapikan adalah kerapian, sementara jawaban 500 membuat penjadwal mengulang
+  // seluruh sapuan — termasuk yang di atas, yang sudah berhasil.
+  let tokenTerhapus = 0;
+  try {
+    tokenTerhapus = await sapuTokenResetKedaluwarsa();
+    if (tokenTerhapus > 0) {
+      console.log(`⌛ [SWEEPER] ${tokenTerhapus} token reset kedaluwarsa dihapus.`);
+    }
+  } catch {
+    // Tanpa objek galatnya: pesan Prisma bisa memuat cuplikan query, dan query
+    // di tabel ini menyebut kolom `tokenHash`.
+    console.error('[SWEEPER] gagal menyapu token reset kedaluwarsa.');
+  }
+
   return NextResponse.json(
-    { status: 'ok', dihanguskan },
+    { status: 'ok', dihanguskan, tokenTerhapus },
     { status: 200, headers: TANPA_SIMPAN }
   );
 }

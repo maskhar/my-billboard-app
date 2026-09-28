@@ -10529,9 +10529,10 @@ describe('GET /api/cron/sweep', () => {
   const JALUR_VERCEL = path.join(__dirname, '..', 'vercel.json');
   const RAHASIA = 'a'.repeat(64);
 
-  /** Muat route dengan penyapu palsu yang mencatat pemanggilannya. */
-  function muatRoute(hasilSapuan = 0) {
+  /** Muat route dengan kedua penyapu palsu yang mencatat pemanggilannya. */
+  function muatRoute(hasilSapuan = 0, { hasilToken = 0, tokenMelempar = false } = {}) {
     const panggilan = [];
+    const panggilanToken = [];
     const route = muatDenganModulPalsu(JALUR_ROUTE_CRON, {
       'next/server': {
         NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
@@ -10542,8 +10543,15 @@ describe('GET /api/cron/sweep', () => {
           return hasilSapuan;
         },
       },
+      '@/lib/sapu-token-reset': {
+        sapuTokenResetKedaluwarsa: async () => {
+          panggilanToken.push(true);
+          if (tokenMelempar) throw new Error('tabel PasswordResetToken hilang');
+          return hasilToken;
+        },
+      },
     });
-    return { route, panggilan };
+    return { route, panggilan, panggilanToken };
   }
 
   function permintaan(headerAuth) {
@@ -10712,6 +10720,66 @@ describe('GET /api/cron/sweep', () => {
       );
       assert.ok(fs.existsSync(jalurBerkas), `route untuk jadwal ${jadwal.path} tidak ada`);
     }
+  });
+
+  it('menyapu token reset kedaluwarsa di sapuan yang sama', async () => {
+    // Indeks `PasswordResetToken_expiresAt_idx` dibuat untuk penyapu ini, dengan
+    // komentar yang menyebutnya. Indeks tanpa pembaca adalah biaya tulis pada
+    // setiap penerbitan tautan tanpa satu pun manfaat.
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilanToken } = muatRoute(0, { hasilToken: 7 });
+
+    const response = await route.GET(permintaan(`Bearer ${RAHASIA}`));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.tokenTerhapus, 7);
+    assert.equal(panggilanToken.length, 1);
+  });
+
+  it('tidak menyapu token bila rahasianya salah', async () => {
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilanToken } = muatRoute(0, { hasilToken: 7 });
+
+    await tanpaLog(() => route.GET(permintaan(`Bearer ${'b'.repeat(64)}`)));
+
+    assert.deepEqual(panggilanToken, []);
+  });
+
+  it('sapuan token yang gagal tidak membatalkan sapuan pesanan', async () => {
+    // Kedua pekerjaan ini berdiri sendiri. Sapuan pesanan melepas tanggal
+    // billboard yang terkunci; kegagalan merapikan tabel kredensial tidak boleh
+    // membuat penjadwal menerima 500 dan mengulang sapuan yang sudah berhasil.
+    process.env.CRON_SECRET = RAHASIA;
+    const { route, panggilan } = muatRoute(3, { tokenMelempar: true });
+
+    const response = await tanpaLog(() => route.GET(permintaan(`Bearer ${RAHASIA}`)));
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.dihanguskan, 3, 'sapuan pesanan ikut hilang dari jawaban');
+    assert.equal(body.tokenTerhapus, 0);
+    assert.deepEqual(panggilan, [undefined]);
+  });
+
+  it('galat sapuan token tidak mencatat pesan Prisma-nya', async () => {
+    // Pesan Prisma bisa memuat cuplikan query, dan query di tabel ini menyebut
+    // kolom `tokenHash`.
+    process.env.CRON_SECRET = RAHASIA;
+    const { route } = muatRoute(0, { tokenMelempar: true });
+
+    const tercatat = [];
+    const errorAsli = console.error;
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    try {
+      await route.GET(permintaan(`Bearer ${RAHASIA}`));
+    } finally {
+      console.error = errorAsli;
+    }
+
+    const semua = tercatat.join('\n');
+    assert.ok(tercatat.length > 0, 'kegagalan harus meninggalkan jejak untuk operator');
+    assert.doesNotMatch(semua, /PasswordResetToken hilang|tokenHash/);
   });
 
   it('.env.example menyebut CRON_SECRET dan batas AI global tanpa nilai', () => {
@@ -20397,5 +20465,130 @@ describe('halaman reset sandi', () => {
       assert.match(kode, /pesanGalat/, relReset(jalur));
       assert.equal(/as any/.test(kode), false, `${relReset(jalur)}: memakai as any`);
     }
+  });
+});
+
+// ===========================================================================
+// PENYAPU TOKEN RESET: HANYA YANG SUDAH LAMA MATI
+// ===========================================================================
+
+const JALUR_SAPU_TOKEN = path.join(__dirname, '..', 'src', 'lib', 'sapu-token-reset.ts');
+
+describe('src/lib/sapu-token-reset.ts', () => {
+  /**
+   * Modul ini punya parameter default `prisma.passwordResetToken`, jadi
+   * `require` langsung akan menarik client Prisma dan gagal. Yang dipalsukan
+   * hanya jalur import itu — fungsinya sendiri asli, dan tabel palsu di bawah
+   * tetap diserahkan sebagai argumen seperti yang dilakukan route cron.
+   */
+  function muatSapu() {
+    return muatDenganModulPalsu(JALUR_SAPU_TOKEN, {
+      '@/lib/prisma': { prisma: { passwordResetToken: { deleteMany: async () => ({ count: 0 }) } } },
+    });
+  }
+
+  /** Tabel palsu yang mencatat argumen `deleteMany` dan mengembalikan `count`. */
+  function tabelPalsu(count = 0, melempar = false) {
+    const panggilan = [];
+    return {
+      panggilan,
+      tabel: {
+        async deleteMany(args) {
+          panggilan.push(args);
+          if (melempar) throw new Error('database mati');
+          return { count };
+        },
+      },
+    };
+  }
+
+  it('tenggang simpan 30 hari, dihitung dari expiresAt', async () => {
+    const { TENGGANG_SIMPAN_TOKEN_RESET_MS, sapuTokenResetKedaluwarsa } = muatSapu();
+    assert.equal(TENGGANG_SIMPAN_TOKEN_RESET_MS, 30 * 24 * 60 * 60 * 1000);
+
+    const sekarang = new Date('2026-09-29T10:00:00.000Z');
+    const { tabel, panggilan } = tabelPalsu(4);
+    const count = await sapuTokenResetKedaluwarsa(tabel, sekarang);
+
+    assert.equal(count, 4);
+    assert.equal(panggilan.length, 1);
+    const batas = panggilan[0].where.expiresAt.lt;
+    assert.ok(batas instanceof Date);
+    assert.equal(batas.getTime(), sekarang.getTime() - TENGGANG_SIMPAN_TOKEN_RESET_MS);
+  });
+
+  it('menyaring HANYA lewat expiresAt — tidak menyentuh usedAt maupun userId', async () => {
+    // Menyapu berdasarkan `usedAt` akan menghapus baris yang masih BERLAKU hanya
+    // karena sudah ditukar — dan baris itu justru satu-satunya jejak bahwa sandi
+    // sebuah akun pernah diganti lewat email, beserta `asalIp` peminta. Itu yang
+    // dibaca saat pemilik akun melaporkan akunnya diambil orang.
+    const { sapuTokenResetKedaluwarsa } = muatSapu();
+    const { tabel, panggilan } = tabelPalsu();
+    await sapuTokenResetKedaluwarsa(tabel, new Date());
+
+    assert.deepStrictEqual(Object.keys(panggilan[0].where), ['expiresAt']);
+    assert.deepStrictEqual(Object.keys(panggilan[0].where.expiresAt), ['lt']);
+  });
+
+  it('batasnya `lt`, bukan `lte` atau `gt`', async () => {
+    // `gt` akan menghapus setiap baris yang MASIH berlaku — mematikan tautan yang
+    // sedang berada di kotak masuk seseorang, yang lalu mengira sistemnya rusak.
+    const { sapuTokenResetKedaluwarsa } = muatSapu();
+    const { tabel, panggilan } = tabelPalsu();
+    await sapuTokenResetKedaluwarsa(tabel, new Date());
+
+    const syarat = panggilan[0].where.expiresAt;
+    assert.ok('lt' in syarat, 'batas waktu bukan `lt`');
+    assert.equal('gt' in syarat, false);
+    assert.equal('gte' in syarat, false);
+  });
+
+  it('memakai deleteMany, bukan updateMany', async () => {
+    // Baris ini kredensial yang sudah tidak bisa ditukar, bukan bukti uang.
+    // Berbeda dari `Payment`, tidak ada status "tertutup" yang perlu dibaca
+    // siapa pun setelahnya.
+    const kode = fs
+      .readFileSync(JALUR_SAPU_TOKEN, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+
+    assert.match(kode, /deleteMany/);
+    assert.equal(/updateMany/.test(kode), false);
+  });
+
+  it('galat database dibiarkan naik — pemanggil yang memutuskan', async () => {
+    // Berbeda dari `sapuPesananKedaluwarsa` yang menelan galatnya sendiri karena
+    // menumpang permintaan pembeli, fungsi ini dipanggil satu tempat saja dan
+    // tempat itu (route cron) sudah punya `try` sendiri. Menelan di dua lapis
+    // berarti kegagalannya tidak terlihat di lapis mana pun.
+    const { sapuTokenResetKedaluwarsa } = muatSapu();
+    const { tabel } = tabelPalsu(0, true);
+
+    await assert.rejects(() => sapuTokenResetKedaluwarsa(tabel, new Date()), /database mati/);
+  });
+
+  it('indeks [expiresAt] yang dibuat untuk penyapu ini benar-benar ada', () => {
+    // Indeks tanpa pembaca adalah biaya tulis pada setiap penerbitan tautan
+    // tanpa manfaat; pembaca tanpa indeks adalah pemindaian tabel penuh setiap
+    // jam. Keduanya harus tetap berpasangan.
+    const skema = fs.readFileSync(path.join(__dirname, '..', 'prisma', 'schema.prisma'), 'utf8');
+    const model = /model PasswordResetToken \{[\s\S]*?\n\}/.exec(skema);
+    assert.ok(model, 'model PasswordResetToken tidak ada di skema');
+    assert.match(model[0], /@@index\(\[expiresAt\]\)/);
+  });
+
+  it('vercel.json menjadwalkan sapuan minimal sekali sehari', () => {
+    // Tenggang 30 hari hanya berarti bila penyapunya benar-benar jalan. Jadwal
+    // yang terlalu jarang membuat tenggangnya menjadi angka hiasan.
+    const konfigurasi = JSON.parse(
+      fs.readFileSync(path.join(__dirname, '..', 'vercel.json'), 'utf8')
+    );
+    const sapuan = konfigurasi.crons.find((j) => j.path === '/api/cron/sweep');
+    assert.ok(sapuan, 'jadwal /api/cron/sweep hilang dari vercel.json');
+    // Kolom pertama menit, kedua jam. Jam bernilai `*` berarti tiap jam.
+    const [, jam] = sapuan.schedule.split(' ');
+    assert.notEqual(jam, undefined);
   });
 });
