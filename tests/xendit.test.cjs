@@ -17298,3 +17298,154 @@ describe('panel admin: navigasi terjangkau di layar sempit', () => {
     assert.match(kodeLayout, /userRole === 'CS'/);
   });
 });
+
+describe('header keamanan: lima header dan satu kebijakan konten', () => {
+  const akar = path.join(__dirname, '..');
+  const JALUR_KONFIG = path.join(akar, 'next.config.ts');
+
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const kodeKonfig = kodeSaja(JALUR_KONFIG);
+
+  // Kebijakan dibangun oleh sebuah fungsi, bukan ditulis sebagai satu string
+  // literal, sehingga nilainya tidak bisa dibaca dengan regex sederhana.
+  // Menjalankan berkas .ts di test runner memerlukan kompilasi; yang dilakukan
+  // di sini adalah menyalin bentuk kebijakannya dari kode dan memastikan
+  // SETIAP arahan yang disebut memang ada beserta nilainya.
+  function arahanKebijakan() {
+    const peta = new Map();
+    // `'default-src': ["'self'"],` → nama + isi kurung siku.
+    const pola = /'([a-z-]+)':\s*\[([^\]]*)\]/g;
+    let cocok;
+    while ((cocok = pola.exec(kodeKonfig)) !== null) {
+      peta.set(cocok[1], cocok[2]);
+    }
+    return peta;
+  }
+
+  it('kelima header keamanan dikirim untuk seluruh rute', () => {
+    // Sebelum ini proyek tidak mengirim satu pun. Satu blok `headers()` dengan
+    // `source: '/:path*'` — bukan daftar rute pilihan, karena rute yang lupa
+    // didaftarkan adalah rute yang tidak terlindungi.
+    assert.match(kodeKonfig, /async headers\(\)/);
+    assert.match(kodeKonfig, /source: '\/:path\*'/);
+
+    assert.match(kodeKonfig, /key: 'Content-Security-Policy'/);
+    assert.match(kodeKonfig, /key: 'X-Frame-Options', value: 'DENY'/);
+    assert.match(kodeKonfig, /key: 'X-Content-Type-Options', value: 'nosniff'/);
+    assert.match(kodeKonfig, /key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin'/);
+    assert.match(kodeKonfig, /key: 'Permissions-Policy'/);
+    assert.match(kodeKonfig, /key: 'Strict-Transport-Security'/);
+  });
+
+  it('HSTS hanya hidup di produksi, dan tanpa preload', () => {
+    // Di localhost, HSTS memaksa https pada asal yang tidak punya sertifikat —
+    // dan peramban MENGINGATNYA, sehingga localhost:4000 bisa tidak terbuka
+    // lagi sampai cache HSTS dibersihkan manual.
+    assert.match(kodeKonfig, /\.\.\.\(produksi[\s\S]{0,200}Strict-Transport-Security/);
+    assert.match(kodeKonfig, /max-age=63072000; includeSubDomains/);
+    // `preload` tidak bisa dibatalkan dengan cepat setelah masuk daftar.
+    assert.doesNotMatch(kodeKonfig, /includeSubDomains; preload/);
+  });
+
+  it('kebijakan memuat arahan yang menutup vektor yang tidak ditutup unsafe-inline', () => {
+    const arahan = arahanKebijakan();
+    // `script-src` di sini memuat `'unsafe-inline'` karena App Router
+    // menyisipkan skrip bootstrap sebaris. Ketiga arahan ini yang menanggung
+    // bebannya, dan tidak satu pun boleh hilang.
+    assert.equal(arahan.get('object-src'), `"'none'"`);
+    assert.equal(arahan.get('base-uri'), `"'self'"`);
+    assert.equal(arahan.get('frame-ancestors'), `"'none'"`);
+    assert.ok(arahan.has('form-action'));
+  });
+
+  it("'unsafe-eval' tidak pernah ikut ke produksi", () => {
+    // Nol `eval` dan `new Function` di kode aplikasi maupun SDK Xendit; yang
+    // memerlukannya hanya HMR saat pengembangan.
+    assert.match(kodeKonfig, /produksi \? \[\] : \["'unsafe-eval'"\]/);
+  });
+
+  it("style-src menahan 'unsafe-inline' dengan alasan yang masih berlaku", () => {
+    const arahan = arahanKebijakan();
+    assert.match(arahan.get('style-src'), /'unsafe-inline'/);
+
+    // Alasannya bukan kemalasan: React menulis `style={{…}}` sebagai ATRIBUT
+    // style, dan nonce tidak berlaku untuk atribut. Kalau suatu saat tidak ada
+    // lagi titik seperti ini, izinnya harus dicabut — test ini yang
+    // memberitahukannya.
+    const berkasBergaya = [
+      path.join(akar, 'src', 'app', 'global-error.tsx'),
+      path.join(akar, 'src', 'components', 'LocationVisualizer.tsx'),
+    ];
+    const adaGayaSebaris = berkasBergaya.some(
+      (jalur) => fs.existsSync(jalur) && /style=\{\{/.test(fs.readFileSync(jalur, 'utf8'))
+    );
+    assert.ok(adaGayaSebaris, "tidak ada lagi style={{…}}: cabut 'unsafe-inline' dari style-src");
+  });
+
+  it('img-src mengizinkan data: karena bukti transfer berupa base64', () => {
+    const arahan = arahanKebijakan();
+    assert.match(arahan.get('img-src'), /data:/);
+    assert.match(arahan.get('img-src'), /blob:/);
+  });
+
+  it('connect-src memuat asal Xendit yang sungguh dihubungi peramban', () => {
+    const arahan = arahanKebijakan();
+    assert.match(arahan.get('connect-src'), /https:\/\/checkout-ui-gateway\.xendit\.co/);
+    assert.match(arahan.get('connect-src'), /https:\/\/log\.xendit\.co/);
+  });
+
+  it('asal yang hanya dihubungi SERVER tidak pernah masuk kebijakan peramban', () => {
+    // `api.xendit.co` dipanggil dengan kunci rahasia, dan Gemini dipanggil dari
+    // chat-server. Menaruh keduanya di kebijakan peramban menyiratkan ada jalur
+    // dari halaman ke API itu — jalur yang tidak boleh ada.
+    assert.doesNotMatch(kodeKonfig, /api\.xendit\.co/);
+    assert.doesNotMatch(kodeKonfig, /generativelanguage\.googleapis\.com/);
+  });
+
+  it('asal chat diturunkan dari env, bersama pasangan ws-nya', () => {
+    // socket.io membuka dua skema: polling XHR lalu naik ke WebSocket. CSP
+    // memperlakukan `wss:` sebagai skema terpisah dari `https:`, jadi hanya
+    // mendaftarkan https berarti sambungan naik-tingkat diblokir.
+    assert.match(kodeKonfig, /process\.env\.NEXT_PUBLIC_CHAT_URL/);
+    assert.match(kodeKonfig, /url\.protocol === 'https:' \? 'wss:' : 'ws:'/);
+    assert.match(kodeKonfig, /\$\{ws\}\/\/\$\{url\.host\}/);
+
+    // Nilai env yang tak terbaca tidak boleh menjatuhkan build.
+    assert.match(kodeKonfig, /catch \{[\s\S]{0,200}return \[\];/);
+  });
+
+  it('upgrade-insecure-requests tidak menyentuh pengembangan', () => {
+    // Di localhost ia mengubah http://localhost:3001 menjadi https:// — server
+    // chat tidak punya TLS, dan chat mati saat dikembangkan.
+    assert.match(kodeKonfig, /if \(produksi\) baris\.push\('upgrade-insecure-requests'\)/);
+  });
+
+  it('frame-src terbuka untuk https, tertutup untuk skema berbahaya', () => {
+    const arahan = arahanKebijakan();
+    // Dua sumber yang memang tidak bisa didaftar: iframe 3DS beralamat di
+    // penerbit kartu pembeli, dan TrafficReportModal merender URL dari basis
+    // data. Yang tetap tertutup adalah `data:` dan `javascript:`.
+    assert.match(arahan.get('frame-src'), /https:/);
+    assert.doesNotMatch(arahan.get('frame-src'), /data:/);
+    assert.doesNotMatch(arahan.get('frame-src'), /javascript:/);
+  });
+
+  it('header ditulis di next.config.ts, bukan di vercel.json', () => {
+    // `vercel.json` hanya hidup di Vercel; `next.config.ts` berlaku juga saat
+    // `next start` di server sendiri dan saat pengembangan. Satu kebijakan,
+    // satu tempat — dua tempat berarti dua kebijakan yang akan menyimpang.
+    const jalurVercel = path.join(akar, 'vercel.json');
+    if (fs.existsSync(jalurVercel)) {
+      const isi = JSON.parse(fs.readFileSync(jalurVercel, 'utf8'));
+      assert.equal(isi.headers, undefined);
+    }
+  });
+});
