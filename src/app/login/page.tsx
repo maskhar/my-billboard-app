@@ -11,6 +11,22 @@ import Navbar from '@/components/Navbar';
 // Chrome bukan logo Google, dan mengimpornya membuat pembaca menyangka
 // tombolnya masih memakai ikon yang salah.
 
+// Bentuknya sama dengan `src/app/register/page.tsx` dan
+// `src/app/sewakan-tempat/FormSewakanTempat.tsx` — tiga formulir publik yang
+// sebelumnya memakai tiga kelas isian berbeda.
+//
+// Yang diperbaiki: `focus:ring-utero` tanpa `ring-2`. Tailwind mengambil lebar
+// cincin dari `ring-{n}`, jadi kelas warna sendirian menghasilkan cincin
+// selebar nol — penanda fokus yang tidak terlihat sama sekali, di atas
+// `outline-none` yang sudah membuang penanda bawaan peramban. Pada halaman
+// login, pengguna papan tombol karena itu tidak bisa tahu kolom mana yang
+// sedang aktif saat mengetik sandinya.
+const KELAS_ISIAN =
+  'bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg block w-full p-2.5 font-semibold ' +
+  'outline-none focus:ring-2 focus:ring-utero focus:border-utero transition';
+
+const KELAS_LABEL = 'block mb-1 text-sm font-bold text-gray-700';
+
 export default function LoginPage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -101,19 +117,19 @@ export default function LoginPage() {
 
                   <form className="space-y-4" onSubmit={handleLogin}>
                       <div>
-                          <label className="block mb-1 text-sm font-bold text-gray-700">Email</label>
-                          <input type="email" name="email" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none font-semibold" placeholder="nama@email.com" />
+                          <label htmlFor="masuk-email" className={KELAS_LABEL}>Email</label>
+                          <input id="masuk-email" type="email" name="email" autoComplete="email" className={KELAS_ISIAN} placeholder="nama@email.com" />
                       </div>
                       <div>
-                          <label className="block mb-1 text-sm font-bold text-gray-700">Password</label>
-                          <input type="password" name="password" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none font-semibold" placeholder="••••••••" />
+                          <label htmlFor="masuk-sandi" className={KELAS_LABEL}>Password</label>
+                          <input id="masuk-sandi" type="password" name="password" autoComplete="current-password" className={KELAS_ISIAN} placeholder="••••••••" />
                       </div>
-                      
-                      <button type="submit" disabled={loading} className="w-full text-white bg-utero hover:bg-red-700 font-bold rounded-lg text-sm px-5 py-3 text-center transition shadow-lg shadow-red-100 disabled:bg-gray-400 disabled:shadow-none">
+
+                      <button type="submit" disabled={loading} className="w-full text-white bg-utero hover:bg-red-700 font-bold rounded-lg text-sm px-5 py-3 text-center transition shadow-lg shadow-red-100 outline-none focus:ring-2 focus:ring-utero focus:ring-offset-2 disabled:bg-gray-400 disabled:shadow-none">
                           {loading ? 'Memproses...' : 'Login Sekarang'}
                       </button>
                       <p className="text-sm font-light text-gray-500 text-center">
-                          Belum punya akun? <Link href="/register" className="font-bold text-utero hover:underline">Daftar dulu</Link>
+                          Belum punya akun? <Link href="/register" className="font-bold text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero">Daftar dulu</Link>
                       </p>
                   </form>
               </div>

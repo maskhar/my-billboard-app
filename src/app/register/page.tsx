@@ -9,6 +9,32 @@ import { useToast } from '@/components/ui/Toast';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
+// TIGA CACAT YANG DITAMBAL DI SINI, dan ketiganya sudah dijelaskan di
+// `src/app/sewakan-tempat/FormSewakanTempat.tsx` — berkas itu menolak
+// menirunya dari sini dan menuliskan alasannya. Kelas dan bentuk isian di
+// bawah mengikuti berkas itu supaya kedua formulir publik tidak menyimpang:
+//
+//   1. `outline-none` TANPA pengganti. Yang ada sebelumnya `focus:ring-utero`
+//      saja — Tailwind memerlukan `ring-2` untuk lebar cincinnya, jadi
+//      `ring-utero` sendirian hanya menyetel warna cincin yang lebarnya nol.
+//      Hasilnya penanda fokus yang benar-benar tidak terlihat, dan pengguna
+//      papan tombol kehilangan jejak posisinya di formulir pendaftaran.
+//   2. `type="number"` untuk nomor telepon. Spinner naik-turun tidak berarti
+//      apa pun pada nomor telepon, roda tetikus mengubah nilainya tanpa
+//      disadari, dan `0` di depan hilang di beberapa peramban — padahal setiap
+//      nomor WhatsApp Indonesia dimulai dengan `0`.
+//   3. `<label>` tanpa `htmlFor`. Labelnya tidak bisa diklik untuk memfokuskan
+//      isiannya, dan pembaca layar menyebut kolomnya tanpa nama.
+//
+// `autoComplete` ikut ditambahkan: tanpa `new-password` pada kolom sandi,
+// pengelola sandi peramban mengisinya dengan sandi yang SUDAH ADA alih-alih
+// menawarkan yang baru.
+const KELAS_ISIAN =
+  'bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg block w-full p-2.5 ' +
+  'outline-none focus:ring-2 focus:ring-utero focus:border-utero transition';
+
+const KELAS_LABEL = 'block mb-2 text-sm font-medium text-gray-900';
+
 export default function RegisterPage() {
   const router = useRouter();
   const toast = useToast();
@@ -90,27 +116,27 @@ export default function RegisterPage() {
 
                   <form className="space-y-4 md:space-y-6" onSubmit={handleRegister}>
                       <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-900">Nama Lengkap</label>
-                          <input type="text" name="name" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none" placeholder="Risma..." required />
+                          <label htmlFor="daftar-nama" className={KELAS_LABEL}>Nama Lengkap</label>
+                          <input id="daftar-nama" type="text" name="name" autoComplete="name" className={KELAS_ISIAN} placeholder="Risma..." required />
                       </div>
                       <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-900">Email</label>
-                          <input type="email" name="email" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none" placeholder="nama@email.com" required />
+                          <label htmlFor="daftar-email" className={KELAS_LABEL}>Email</label>
+                          <input id="daftar-email" type="email" name="email" autoComplete="email" className={KELAS_ISIAN} placeholder="nama@email.com" required />
                       </div>
                       <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-900">No. WhatsApp</label>
-                          <input type="number" name="phone" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none" placeholder="08..." required />
+                          <label htmlFor="daftar-telepon" className={KELAS_LABEL}>No. WhatsApp</label>
+                          <input id="daftar-telepon" type="tel" name="phone" inputMode="tel" autoComplete="tel" className={KELAS_ISIAN} placeholder="08..." required />
                       </div>
                       <div>
-                          <label className="block mb-2 text-sm font-medium text-gray-900">Password</label>
-                          <input type="password" name="password" className="bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg focus:ring-utero focus:border-utero block w-full p-2.5 outline-none" placeholder="••••••••" required />
+                          <label htmlFor="daftar-sandi" className={KELAS_LABEL}>Password</label>
+                          <input id="daftar-sandi" type="password" name="password" autoComplete="new-password" className={KELAS_ISIAN} placeholder="••••••••" required />
                       </div>
-                      
-                      <button type="submit" disabled={loading} className="w-full text-white bg-utero hover:bg-red-700 font-medium rounded-lg text-sm px-5 py-2.5 text-center transition">
+
+                      <button type="submit" disabled={loading} className="w-full text-white bg-utero hover:bg-red-700 font-medium rounded-lg text-sm px-5 py-2.5 text-center transition outline-none focus:ring-2 focus:ring-utero focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed">
                           {loading ? 'Sedang Mendaftar...' : 'Daftar Sekarang'}
                       </button>
                       <p className="text-sm font-light text-gray-500">
-                          Sudah punya akun? <Link href="/login" className="font-medium text-utero hover:underline">Login disini</Link>
+                          Sudah punya akun? <Link href="/login" className="font-medium text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero">Login disini</Link>
                       </p>
                   </form>
               </div>

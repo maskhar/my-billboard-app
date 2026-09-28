@@ -4,6 +4,17 @@ import { Search, MapPin, MonitorPlay, Calendar, SlidersHorizontal, X } from 'luc
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
+// Empat isian di berkas ini memakai `outline-none` TANPA pengganti apa pun —
+// bukan `focus:ring-utero` yang lebarnya nol seperti di halaman login, tapi
+// benar-benar tidak ada. Penanda fokus bawaan peramban dibuang dan tidak ada
+// yang menggantikannya, jadi pengguna papan tombol menelusuri bilah pencarian
+// utama di halaman depan tanpa satu pun petunjuk kolom mana yang aktif.
+//
+// Penggantinya cincin di dalam (`ring-inset`), bukan cincin di luar seperti
+// pada formulir: isian di sini duduk rapat di dalam satu pil putih tanpa
+// batas masing-masing, dan cincin luar akan menembus tepi pil itu.
+const KELAS_FOKUS = 'outline-none focus:ring-2 focus:ring-inset focus:ring-utero rounded-lg';
+
 const SearchFilter = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -42,7 +53,7 @@ const SearchFilter = () => {
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                         placeholder="Cari titik di kota / wilayah ..." 
-                        className="w-full text-sm font-semibold text-gray-700 placeholder-gray-500 outline-none bg-transparent"
+                        className={`w-full text-sm font-semibold text-gray-700 placeholder-gray-500 bg-transparent ${KELAS_FOKUS}`}
                     />
                 </div>
                 <button 
@@ -112,7 +123,7 @@ const SearchFilter = () => {
                         onChange={(e) => setQuery(e.target.value)} 
                         onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
                         placeholder="Mau pasang di mana?" 
-                        className="outline-none text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300" 
+                        className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`}
                     />
                 </div>
             </div>
@@ -124,7 +135,7 @@ const SearchFilter = () => {
                     <select 
                         value={type} 
                         onChange={(e) => setType(e.target.value)} 
-                        className="outline-none text-sm text-gray-800 font-bold bg-transparent w-full -ml-1 cursor-pointer truncate"
+                        className={`text-sm text-gray-800 font-bold bg-transparent w-full -ml-1 cursor-pointer truncate ${KELAS_FOKUS}`}
                     >
                         <option>Semua</option>
                         <option>Videotron</option>
@@ -138,7 +149,7 @@ const SearchFilter = () => {
             <div className="w-[180px] px-6 py-3 hover:bg-gray-50/50 cursor-pointer transition group">
                 <div className="flex flex-col">
                     <label className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><Calendar size={10} /> Mulai Tayang</label>
-                    <input type="text" placeholder="Kapan?" className="outline-none text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300" onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} onChange={(e) => setDate(e.target.value)} />
+                    <input type="text" placeholder="Kapan?" className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`} onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} onChange={(e) => setDate(e.target.value)} />
                 </div>
             </div>
 

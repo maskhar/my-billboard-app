@@ -189,7 +189,14 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
 
       {isOpen && (
         <div
-          className="origin-top-left absolute left-0 mt-1 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-20 focus:outline-none"
+          // `focus:outline-none` dibuang dari sini: wadah ini tidak punya
+          // `tabIndex`, jadi ia tidak pernah menerima fokus dan kelas itu tidak
+          // pernah berlaku. Yang dilakukannya hanya satu: membuat pembaca
+          // berikutnya menyangka penanda fokus di menu ini memang sengaja
+          // dimatikan, lalu menirunya ke tombol `Pilihan` di dalamnya — yang
+          // BETUL-BETUL bisa difokus dan masih mengandalkan penanda bawaan
+          // peramban.
+          className="origin-top-left absolute left-0 mt-1 w-48 rounded-md shadow-lg bg-white ring-1 ring-black ring-opacity-5 z-20"
           role="menu" aria-orientation="vertical"
         >
           <div className="py-1" role="none">

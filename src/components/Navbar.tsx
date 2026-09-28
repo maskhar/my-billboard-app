@@ -187,7 +187,10 @@ const Navbar = () => {
                 onClick={() => setIsOpen(!isOpen)}
                 aria-expanded={isOpen}
                 aria-label={isOpen ? 'Tutup menu' : 'Buka menu'}
-                className="p-2 rounded-md text-gray-600 hover:text-utero hover:bg-gray-100 transition focus:outline-none"
+                // `focus:outline-none` sebelumnya berdiri sendiri: penanda
+                // fokus bawaan dibuang tanpa pengganti, dan tombol ini adalah
+                // satu-satunya jalan ke seluruh menu di layar ponsel.
+                className="p-2 rounded-md text-gray-600 hover:text-utero hover:bg-gray-100 transition outline-none focus:ring-2 focus:ring-utero"
             >
               {/* Ikon saja tidak punya nama yang terbaca: pembaca layar
                   mengumumkannya sebagai "tombol" tanpa keterangan apa pun. */}

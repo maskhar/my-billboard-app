@@ -42,9 +42,19 @@ type InputFieldProps = AtributInput & {
   onChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 };
 
+// `focus:ring-indigo-500` berdiri sendiri di sini, tanpa `focus:ring-2`.
+// Tailwind mengambil LEBAR cincin dari `ring-{n}`, bukan dari kelas warnanya:
+// tanpa `ring-2` yang tersetel hanya `--tw-ring-color`, dan cincinnya selebar
+// nol — tidak terlihat sama sekali. Digabung dengan `focus:outline-none` di
+// baris yang sama, penanda fokus bawaan peramban dibuang dan tidak ada yang
+// menggantikannya. Cacat yang sama pernah ada di halaman login dan daftar.
+//
+// Berkas ini dipakai SELURUH form admin dan pengaturan akun, jadi satu kelas
+// yang salah di sini menghilangkan penanda fokus di banyak halaman sekaligus.
+// Warna indigo dipertahankan apa adanya — yang kurang cuma lebarnya.
 const KELAS_INPUT =
   'mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md ' +
-  'shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 ' +
+  'shadow-sm placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 ' +
   'focus:border-indigo-500 sm:text-sm disabled:bg-gray-100 disabled:text-gray-500';
 
 export function InputField({ label, id, value, onChange, type = 'text', ...sisa }: InputFieldProps) {
@@ -85,9 +95,10 @@ type SelectFieldProps = AtributSelect & {
   children: ReactNode;
 };
 
+// Sama seperti `KELAS_INPUT`: `focus:ring-2` yang hilang, bukan warnanya.
 const KELAS_SELECT =
   'mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 ' +
-  'focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md';
+  'focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md';
 
 export function SelectField({ label, id, value, onChange, children, ...sisa }: SelectFieldProps) {
   return (

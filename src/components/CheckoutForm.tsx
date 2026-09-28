@@ -356,7 +356,13 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                             value={penyewa.email}
                             readOnly
                             aria-describedby="catatanEmail"
-                            className="w-full mt-1 border border-gray-200 bg-gray-100 text-gray-500 rounded-lg p-2.5 outline-none cursor-not-allowed"
+                            // `readOnly` — BUKAN `disabled` — jadi kolom ini
+                            // tetap dijangkau Tab dan isinya tetap bisa disalin.
+                            // `outline-none` sendirian karena itu membuang
+                            // penanda fokus pada kolom yang benar-benar bisa
+                            // difokus, dan pengguna papan tombol kehilangan
+                            // jejaknya di tengah formulir pemesanan.
+                            className="w-full mt-1 border border-gray-200 bg-gray-100 text-gray-500 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-gray-400 cursor-not-allowed"
                         />
                         <p id="catatanEmail" className="text-xs text-gray-400 mt-1">
                             Invoice dikirim ke alamat akun Anda. Alamat ini tidak dapat diubah.
@@ -386,7 +392,12 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                                 value={npwp}
                                 onChange={(e) => setNpwp(e.target.value)}
                                 maxLength={30}
-                                className="w-full mt-1 border border-utero/30 bg-red-50 rounded-lg p-2.5 outline-none text-gray-800 font-bold"
+                                // Empat kolom di atas punya `focus:border-utero`
+                                // sebagai pengganti `outline-none`; kolom NPWP
+                                // ini tidak — batasnya `border-utero/30` baik
+                                // sedang difokus maupun tidak, jadi tidak ada
+                                // satu pun perubahan tampilan saat fokus masuk.
+                                className="w-full mt-1 border border-utero/30 bg-red-50 rounded-lg p-2.5 outline-none focus:ring-2 focus:ring-utero focus:border-utero text-gray-800 font-bold"
                                 placeholder="09.254.294.3-407.000"
                             />
                             <p className="text-xs text-gray-500 mt-1">15 digit (NPWP lama) atau 16 digit (NIK).</p>

@@ -19304,3 +19304,200 @@ describe('src/lib/transisi-status.ts — peta transisi sebagai perilaku', () => 
     assert.deepStrictEqual(terasing, [], 'status ini tidak bisa dicapai dari PENDING_PAYMENT');
   });
 });
+
+// =============================================================================
+// PENANDA FOKUS: `outline-none` tidak boleh berdiri sendiri
+// =============================================================================
+//
+// Dua cacat yang tidak pernah terlihat di layar pengembang — keduanya nyata dan
+// keduanya sudah pernah terjadi di repo ini:
+//
+//   1. `outline-none` (atau `focus:outline-none`) TANPA pengganti. Penanda
+//      fokus bawaan peramban dibuang dan tidak ada yang menggantikannya.
+//      Pengguna papan tombol menelusuri formulir tanpa tahu kolom mana yang
+//      aktif. Ditemukan di bilah pencarian halaman depan, tombol menu mobile,
+//      peta hero, dan dua kolom di formulir checkout.
+//
+//   2. `focus:ring-<warna>` TANPA `focus:ring-<angka>`. Tailwind mengambil
+//      LEBAR cincin dari `ring-{n}`; kelas warna sendirian hanya menyetel
+//      `--tw-ring-color` pada cincin selebar nol. Ini lebih berbahaya daripada
+//      cacat pertama karena kodenya TERLIHAT seperti sudah punya pengganti.
+//      Ditemukan di halaman login, halaman daftar, dan `FormField.tsx` — yang
+//      terakhir dipakai seluruh form admin sekaligus.
+//
+// Keduanya lolos dari `tsc` dan `eslint`: bagi keduanya ini cuma teks di dalam
+// string. Hanya tes ini yang menangkapnya.
+describe('penanda fokus tidak pernah dibuang tanpa pengganti', () => {
+  const AKAR_SRC_FOKUS = path.join(__dirname, '..', 'src');
+
+  // Pengecualian, satu-satunya, dengan alasan yang harus tetap benar:
+  // wadah drawer admin ber-`tabIndex={-1}` dan difokuskan oleh kode semata-mata
+  // agar pembaca layar mulai membaca dari dalam dialog. Tidak ada pengguna
+  // papan tombol yang berhenti di sana, jadi kotak fokus selebar drawer hanya
+  // membingungkan. Tombol dan tautan DI DALAMNYA tetap punya penanda bawaan.
+  const DIKECUALIKAN = new Set(['app/admin/_components/AdminShell.tsx']);
+
+  function berkasFokus(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) {
+        berkasFokus(penuh, hasil);
+        continue;
+      }
+      if (/\.(ts|tsx)$/.test(entri.name)) hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  function relFokus(jalur) {
+    return path.relative(AKAR_SRC_FOKUS, jalur).replace(/\\/g, '/');
+  }
+
+  // Unit pemeriksaannya BARIS, bukan berkas.
+  //
+  // Bukan berkas: satu berkas bisa punya sepuluh kelas isian, dan `ring-2` pada
+  // salah satunya tidak menolong sembilan lainnya.
+  //
+  // Bukan literal string hasil parse: membuang komentar `//` dari seluruh
+  // berkas memotong `"https://..."` di tengah tanda kutip dan membuat pemindai
+  // literal kehilangan sinkron sampai akhir berkas. Membuang BARIS yang memang
+  // komentar jauh lebih aman, dan kelas Tailwind memang selalu ditulis dalam
+  // satu baris — termasuk yang dirangkai dengan `+` antar baris, karena setiap
+  // penggalannya berdiri sendiri.
+  function barisKode(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris, i) => ({ nomor: i + 1, teks: baris }))
+      .filter(({ teks }) => !/^\s*(\/\/|\*)/.test(teks));
+  }
+
+  // Apa pun yang membuat fokus TERLIHAT lagi setelah garis bawaan dibuang:
+  // cincin selebar bukan-nol, perubahan warna batas, perubahan bayangan, atau
+  // garis luar yang digambar ulang. `focus-visible:` dihitung sama dengan
+  // `focus:` — ia bahkan lebih tepat, karena tidak muncul pada klik tetikus.
+  const PENGGANTI =
+    /focus(-visible)?:(ring-\d|border-|shadow|outline-(?!none)|bg-|ring-offset-\d)/;
+
+  it('tidak ada `outline-none` tanpa pengganti yang terlihat', () => {
+    const pelanggar = [];
+
+    for (const jalur of berkasFokus(AKAR_SRC_FOKUS)) {
+      if (DIKECUALIKAN.has(relFokus(jalur))) continue;
+
+      for (const { nomor, teks } of barisKode(jalur)) {
+        if (!/(^|[\s'"`])(focus:)?outline-none/.test(teks)) continue;
+        if (PENGGANTI.test(teks)) continue;
+        pelanggar.push(`${relFokus(jalur)}:${nomor}`);
+      }
+    }
+
+    assert.deepStrictEqual(
+      pelanggar,
+      [],
+      'baris ini membuang penanda fokus bawaan peramban tanpa menggantinya; ' +
+        'pengguna papan tombol tidak bisa melihat kontrol mana yang aktif'
+    );
+  });
+
+  it('tidak ada `focus:ring-<warna>` tanpa `focus:ring-<angka>` (cincin selebar nol)', () => {
+    const pelanggar = [];
+
+    for (const jalur of berkasFokus(AKAR_SRC_FOKUS)) {
+      for (const { nomor, teks } of barisKode(jalur)) {
+        // `ring-offset-2` mengatur JARAK cincin, `ring-inset` posisinya, dan
+        // `ring-\d` lebarnya. Yang dicari di sini hanya nama warna.
+        const punyaWarna = /focus(-visible)?:ring-(?!\d|offset-|inset(\s|$|['"`]))[a-z]/.test(teks);
+        if (!punyaWarna) continue;
+        if (/focus(-visible)?:ring-\d/.test(teks)) continue;
+        pelanggar.push(`${relFokus(jalur)}:${nomor}`);
+      }
+    }
+
+    assert.deepStrictEqual(
+      pelanggar,
+      [],
+      'kelas warna cincin tanpa `ring-{n}` menghasilkan cincin selebar nol: ' +
+        'kodenya terlihat punya penanda fokus, layarnya tidak menampilkan apa pun'
+    );
+  });
+
+  it('pemindainya memang menangkap kedua cacat (bukan tes yang selalu hijau)', () => {
+    // Tanpa ini, satu regex yang salah ketik membuat kedua tes di atas lulus
+    // selamanya tanpa memeriksa apa pun.
+    const tanpaPengganti = 'className="p-2 rounded-md outline-none"';
+    const adaPengganti = 'className="p-2 rounded-md outline-none focus:ring-2 focus:ring-utero"';
+    assert.ok(/(^|[\s'"`])(focus:)?outline-none/.test(tanpaPengganti));
+    assert.equal(PENGGANTI.test(tanpaPengganti), false, 'pengganti palsu terdeteksi');
+    assert.ok(PENGGANTI.test(adaPengganti), 'pengganti asli tidak terdeteksi');
+
+    const cincinNol = 'className="outline-none focus:ring-utero"';
+    const cincinLebar = 'className="outline-none focus:ring-2 focus:ring-utero"';
+    const polaWarna = /focus(-visible)?:ring-(?!\d|offset-|inset(\s|$|['"`]))[a-z]/;
+    assert.ok(polaWarna.test(cincinNol), 'warna cincin tidak terdeteksi');
+    assert.ok(polaWarna.test(cincinLebar));
+    assert.equal(/focus(-visible)?:ring-\d/.test(cincinNol), false);
+    assert.ok(/focus(-visible)?:ring-\d/.test(cincinLebar));
+
+    // `ring-offset-2` dan `ring-inset` BUKAN warna dan BUKAN lebar.
+    assert.equal(polaWarna.test('focus:ring-offset-2'), false, 'ring-offset disangka warna');
+    assert.equal(polaWarna.test('focus:ring-inset'), false, 'ring-inset disangka warna');
+    assert.equal(/focus(-visible)?:ring-\d/.test('focus:ring-offset-2'), false, 'ring-offset disangka lebar');
+  });
+
+  it('setiap `<label>` di formulir publik menunjuk isiannya lewat `htmlFor`', () => {
+    // `type="number"` untuk nomor telepon dan `<label>` tanpa `htmlFor` adalah
+    // dua cacat yang sudah dijelaskan panjang lebar di
+    // `src/app/sewakan-tempat/FormSewakanTempat.tsx`. Keduanya sempat hidup di
+    // halaman daftar sampai diperbaiki; tes ini menahannya di sana.
+    const halaman = [
+      path.join(AKAR_SRC_FOKUS, 'app', 'register', 'page.tsx'),
+      path.join(AKAR_SRC_FOKUS, 'app', 'login', 'page.tsx'),
+    ];
+
+    for (const jalur of halaman) {
+      // Lewat `barisKode`, bukan `readFileSync` langsung: header kedua berkas
+      // ini MENJELASKAN cacatnya dengan menulis "`<label>` tanpa `htmlFor`" di
+      // dalam komentar, dan pemindai yang membaca mentah menuduh komentar itu
+      // sebagai pelanggaran. Tes gagal pertama kali persis karena ini.
+      const isi = barisKode(jalur)
+        .map(({ teks }) => teks)
+        .join('\n');
+      const label = [...isi.matchAll(/<label\b[^>]*>/g)];
+      assert.ok(label.length > 0, `${relFokus(jalur)}: tidak ada <label> sama sekali`);
+      for (const cocok of label) {
+        assert.match(
+          cocok[0],
+          /htmlFor=/,
+          `${relFokus(jalur)}: <label> tanpa htmlFor — tidak bisa diklik, dan ` +
+            'pembaca layar menyebut kolomnya tanpa nama'
+        );
+      }
+    }
+  });
+
+  it('kolom nomor telepon tidak pernah `type="number"`', () => {
+    // Spinner naik-turun tidak berarti apa pun pada nomor telepon, roda tetikus
+    // mengubah nilainya tanpa disadari, dan `0` di depan hilang di beberapa
+    // peramban — padahal setiap nomor WhatsApp Indonesia dimulai dengan `0`.
+    const pelanggar = [];
+
+    for (const jalur of berkasFokus(AKAR_SRC_FOKUS)) {
+      // Alasan yang sama dengan tes `<label>` di atas: komentar di berkas ini
+      // mengutip `type="number"` untuk menjelaskan kenapa ia TIDAK dipakai.
+      const isi = barisKode(jalur)
+        .map(({ teks }) => teks)
+        .join('\n');
+      for (const cocok of isi.matchAll(/<input\b[^>]*>/g)) {
+        const tag = cocok[0];
+        if (!/type=["']number["']/.test(tag)) continue;
+        if (!/name=["'](phone|telepon|whatsapp|wa)["']/i.test(tag)) continue;
+        pelanggar.push(relFokus(jalur));
+      }
+    }
+
+    assert.deepStrictEqual(pelanggar, [], 'nomor telepon bukan bilangan yang dihitung');
+  });
+});

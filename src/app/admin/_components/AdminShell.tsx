@@ -223,6 +223,14 @@ export default function AdminShell({ children, menus, nama, peran }: Props) {
             aria-modal="true"
             aria-label="Menu panel admin"
             tabIndex={-1}
+            // `outline-none` DIPERTAHANKAN di sini, dan ini satu-satunya
+            // pemakaian tanpa pengganti yang memang benar di seluruh `src/`:
+            // `tabIndex={-1}` membuat wadah ini tidak bisa dijangkau Tab, dan
+            // fokusnya dipindah ke sini oleh kode (baris 189) semata-mata
+            // supaya pembaca layar mulai membaca dari dalam dialog. Tidak ada
+            // pengguna papan tombol yang "berhenti" di kotak ini, jadi kotak
+            // fokus setebal layar di seputar drawer hanya akan membingungkan.
+            // Tombol dan tautan DI DALAMNYA tetap memakai penanda bawaan.
             className="relative w-72 max-w-[85vw] bg-[#0F172A] text-white flex flex-col h-full shadow-2xl outline-none"
           >
             <div className="p-6 border-b border-gray-800 flex items-center justify-between">

@@ -28,7 +28,12 @@ const HeroMap = ({ billboards }: HeroMapProps) => {
         zoom={13} 
         scrollWheelZoom={true} 
         zoomControl={false} // 2. MATIKAN Zoom Bawaan (Kiri Atas)
-        className="h-full w-full outline-none"
+        // Leaflet memasang `tabindex="0"` pada `.leaflet-container` supaya
+        // petanya bisa digeser dengan tombol panah. Jadi wadah ini BENAR-BENAR
+        // menerima fokus papan tombol — dan `outline-none` sendirian membuang
+        // satu-satunya petunjuk bahwa fokus sedang berada di peta, tepat pada
+        // kontrol yang tombol panahnya baru berfungsi setelah difokuskan.
+        className="h-full w-full outline-none focus:ring-2 focus:ring-inset focus:ring-utero"
       >
         <TileLayer
           attribution='&copy; OpenStreetMap'
