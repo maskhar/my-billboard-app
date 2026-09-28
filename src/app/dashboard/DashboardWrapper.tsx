@@ -1,11 +1,11 @@
 // src/app/dashboard/DashboardWrapper.tsx
-import { BookingStatus, Prisma } from '@prisma/client';
+import { BookingStatus, PaymentStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/lib/auth";
 import { redirect } from 'next/navigation';
 import DashboardClientPage from './DashboardClientPage'; // Impor komponen client yang baru kita buat
-import { jumlah, keAngka, kurang, lebihBesar, lebihKecil, persen, uangUntukClient } from '@/lib/money';
+import { keAngka, kurang, lebihBesar, lebihKecil, persen, uangUntukClient } from '@/lib/money';
 import {
   masihAdaSisa,
   periksaKelayakanSesi,
@@ -16,7 +16,6 @@ import {
   tenggatPelunasan,
   tenggatPelunasanLewat,
   uangMasuk,
-  uangMasukSemua,
 } from '@/lib/pembayaran';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
 
@@ -42,27 +41,34 @@ const PERSEN_REFUND = 90;
 // sendirinya, tapi tidak ke salinan ini: pelanggan lalu membuka dashboard dan
 // pesanannya yang masih berjalan sudah pindah ke tab "Riwayat", seolah sudah
 // selesai. Tidak ada galat, hanya dua daftar yang diam-diam berbeda.
-const activeStatuses: readonly string[] = STATUS_MENGUNCI_TANGGAL;
+const activeStatuses: readonly BookingStatus[] = STATUS_MENGUNCI_TANGGAL;
 
-export default async function DashboardWrapper() {
-  const session = await getServerSession(authOptions);
-  
-  if (!session) {
-      redirect('/login');
-  }
+/**
+ * Pesanan terbaru yang dimuat per tab.
+ *
+ * Tanpa batas, halaman ini mengambil SELURUH pesanan yang pernah dibuat akun
+ * ini — beserta seluruh baris `Payment` dan `AdditionalCharge` masing-masing —
+ * lalu menanamkan semuanya ke HTML sebagai props komponen client. Pembeli baru
+ * tidak merasakannya; penyewa yang sudah tiga tahun memesan tiap bulan
+ * membuka halaman yang payload-nya tumbuh selamanya dan tidak pernah membaca
+ * pesanan di bawah baris ke-50 pada tab mana pun.
+ *
+ * Dibatasi PER TAB, bukan sekali untuk keduanya: satu `take` di query gabungan
+ * yang diurutkan `createdAt desc` akan terpakai habis oleh riwayat lama pada
+ * akun yang ramai, dan pesanan yang sedang berjalan — satu-satunya yang perlu
+ * ditindak — justru hilang dari layar.
+ */
+const PESANAN_TERBARU = 50;
 
-  // KOLOM DIPILIH SATU PER SATU, BUKAN `include: { billboard: true }`.
-  //
-  // Sebelumnya seluruh baris Booking dan Billboard dikirim ke komponen client,
-  // lalu disebar dengan `...b`. Artinya setiap kolom baru pada kedua tabel ikut
-  // menyeberang ke browser dengan sendirinya — termasuk kolom yang tidak pernah
-  // ditampilkan. Pada tabel pembayaran kolom seperti itu bukan hal sepele:
-  // id sesi provider, id customer, dan payload webhook tidak boleh pernah
-  // sampai ke browser. Daftar di bawah adalah tepat apa yang dipakai layar.
-  const myBookings = await prisma.booking.findMany({
-      where: { userId: session.user.id },
-      orderBy: { createdAt: 'desc' },
-      select: {
+// KOLOM DIPILIH SATU PER SATU, BUKAN `include: { billboard: true }`.
+//
+// Sebelumnya seluruh baris Booking dan Billboard dikirim ke komponen client,
+// lalu disebar dengan `...b`. Artinya setiap kolom baru pada kedua tabel ikut
+// menyeberang ke browser dengan sendirinya — termasuk kolom yang tidak pernah
+// ditampilkan. Pada tabel pembayaran kolom seperti itu bukan hal sepele:
+// id sesi provider, id customer, dan payload webhook tidak boleh pernah
+// sampai ke browser. Daftar di bawah adalah tepat apa yang dipakai layar.
+const PILIH_PESANAN = {
         id: true,
         status: true,
         expiresAt: true,
@@ -110,8 +116,68 @@ export default async function DashboardWrapper() {
         // pembayarannya pada baris Payment bertujuan TAMBAHAN. Keduanya berada
         // DI LUAR `totalPrice` dan tidak pernah dicampur ke pokok.
         additionalCharges: { select: { amount: true } },
-      },
-  });
+} as const;
+
+export default async function DashboardWrapper() {
+  const session = await getServerSession(authOptions);
+
+  if (!session) {
+      redirect('/login');
+  }
+
+  const userId = session.user.id;
+
+  // Dua query, satu per tab, masing-masing dengan batasnya sendiri. Keduanya
+  // dijalankan bersamaan: tidak ada yang membutuhkan hasil yang lain.
+  //
+  // TOTAL PENGELUARAN TIDAK LAGI DIHITUNG DARI BARIS-BARIS INI. Dulu ia
+  // menjumlahkan `payments` dari seluruh pesanan yang terambil, dan itu hanya
+  // benar selama tidak ada batas. Dengan `take`, menjumlahkan baris yang
+  // terambil berarti angka "Total Pengeluaran" ikut mengecil begitu pesanan
+  // ke-51 lahir — pembeli melihat uang yang pernah ia setorkan hilang dari
+  // layarnya. Jadi agregatnya dipindah ke database, yang memang tidak dibatasi.
+  const [
+    pesananAktif,
+    pesananRiwayat,
+    jumlahAktif,
+    jumlahRiwayat,
+    agregatMasuk,
+    agregatRefund,
+  ] = await Promise.all([
+    prisma.booking.findMany({
+      where: { userId, status: { in: [...activeStatuses] } },
+      orderBy: { createdAt: 'desc' },
+      take: PESANAN_TERBARU,
+      select: PILIH_PESANAN,
+    }),
+    prisma.booking.findMany({
+      where: { userId, status: { notIn: [...activeStatuses] } },
+      orderBy: { createdAt: 'desc' },
+      take: PESANAN_TERBARU,
+      select: PILIH_PESANAN,
+    }),
+    // Jumlah SEBENARNYA per tab, dihitung database. Tanpa ini angka pada tab
+    // dan pada kartu "Pesanan Aktif" ikut terjepit `take` dan berhenti di 50 —
+    // pembeli dengan 60 pesanan berjalan membaca "50" dan menyangka sepuluh
+    // pesanannya lenyap.
+    prisma.booking.count({ where: { userId, status: { in: [...activeStatuses] } } }),
+    prisma.booking.count({ where: { userId, status: { notIn: [...activeStatuses] } } }),
+    // Seluruh `Payment PAID` milik akun ini, TERMASUK `TAMBAHAN` — pembeli
+    // memang membayarnya. Ini padanan `uangMasukSemua`, dijalankan di database.
+    // `PENDING` sengaja tidak ikut: tagihan yang belum dibayar bukan uang.
+    prisma.payment.aggregate({
+      where: { status: PaymentStatus.PAID, booking: { userId } },
+      _sum: { jumlah: true },
+    }),
+    // Hanya `REFUNDED` yang dihitung: pesanan di tengah alur refund
+    // (REVIEW_REFUND, WAITING_BANK, PROCESS_REFUND) belum menerima uangnya,
+    // jadi mengurangkannya berarti mengaku sudah membayar sesuatu yang belum
+    // dikirim.
+    prisma.booking.aggregate({
+      where: { userId, status: BookingStatus.REFUNDED },
+      _sum: { refundAmount: true },
+    }),
+  ]);
 
   // Nominal uang di database bertipe Decimal — sebuah objek, bukan angka.
   // Next.js mengubah setiap prop menjadi JSON sebelum menyeberangkannya ke
@@ -127,7 +193,7 @@ export default async function DashboardWrapper() {
   // pesanan membuat dua kartu bisa menilai tenggat yang sama secara berbeda.
   const sekarang = new Date();
 
-  const siapkanPesanan = (b: (typeof myBookings)[number]) => {
+  const siapkanPesanan = (b: (typeof pesananAktif)[number]) => {
     const pokokMasuk = uangMasuk(b.payments);
     const sisaPokok = sisaTagihan(b.totalPrice, b.payments);
 
@@ -220,8 +286,8 @@ export default async function DashboardWrapper() {
     };
   };
 
-  const activeOrders = myBookings.filter(b => activeStatuses.includes(b.status)).map(siapkanPesanan);
-  const historyOrders = myBookings.filter(b => !activeStatuses.includes(b.status)).map(siapkanPesanan);
+  const activeOrders = pesananAktif.map(siapkanPesanan);
+  const historyOrders = pesananRiwayat.map(siapkanPesanan);
 
   // TOTAL PENGELUARAN
   // -----------------
@@ -242,19 +308,16 @@ export default async function DashboardWrapper() {
   //
   // Sekarang: seluruh `Payment PAID` (termasuk `TAMBAHAN` — pembeli memang
   // membayarnya), dikurangi refund yang sudah benar-benar selesai ditransfer.
-  const seluruhPembayaran = myBookings.flatMap((b) => b.payments);
-  const totalDibayar = uangMasukSemua(seluruhPembayaran);
-
-  // Hanya `REFUNDED` yang dihitung: pesanan di tengah alur refund
-  // (REVIEW_REFUND, WAITING_BANK, PROCESS_REFUND) belum menerima uangnya, jadi
-  // mengurangkannya berarti mengaku sudah membayar sesuatu yang belum dikirim.
-  const totalRefundSelesai = jumlah(
-    ...myBookings
-      .filter((b) => b.status === BookingStatus.REFUNDED)
-      .map((b) => b.refundAmount ?? new Prisma.Decimal(0))
+  // Keduanya dijumlahkan database, atas SELURUH riwayat akun — bukan atas 100
+  // baris yang kebetulan muat di layar.
+  //
+  // `_sum` mengembalikan `null` bila tidak ada satu pun baris yang cocok, dan
+  // itu memang berarti nol; `keDecimal` lewat `?? 0` menjaganya tetap Decimal
+  // sehingga pengurangan di bawah tidak pernah menyentuh aritmetika biasa.
+  const selisih = kurang(
+    agregatMasuk._sum.jumlah ?? 0,
+    agregatRefund._sum.refundAmount ?? 0
   );
-
-  const selisih = kurang(totalDibayar, totalRefundSelesai);
   const totalSpent = keAngka(lebihBesar(selisih, 0) ? selisih : 0);
 
   // Hanya nama dan email yang ditampilkan kartu profil. Objek sesi NextAuth
@@ -270,6 +333,11 @@ export default async function DashboardWrapper() {
         }}
         activeOrders={activeOrders}
         historyOrders={historyOrders}
+        // Jumlah seluruhnya, terpisah dari panjang array: yang dikirim hanya 50
+        // terbaru per tab, sedangkan angka ini menghitung semuanya.
+        jumlahAktif={jumlahAktif}
+        jumlahRiwayat={jumlahRiwayat}
+        batasPerTab={PESANAN_TERBARU}
         totalSpent={totalSpent}
     />
   );

@@ -21,29 +21,52 @@ type DashboardPageProps = {
   session: SesiUntukDashboard;
   activeOrders: PesananUntukKartu[];
   historyOrders: PesananUntukKartu[];
+  /**
+   * Jumlah SELURUH pesanan per tab, dihitung server.
+   *
+   * Sengaja terpisah dari `activeOrders.length`: array-nya hanya memuat
+   * `batasPerTab` pesanan terbaru, sedangkan angka ini menghitung semuanya.
+   * Memakai panjang array berarti akun dengan 60 pesanan berjalan membaca "50"
+   * dan menyangka sepuluh pesanannya lenyap.
+   */
+  jumlahAktif: number;
+  jumlahRiwayat: number;
+  /** Batas pesanan yang dimuat per tab; dipakai untuk memberi tahu ada sisa. */
+  batasPerTab: number;
   totalSpent: number;
 };
 
 // ====================================================================
 // KOMPONEN UTAMA DASHBOARD BARU (CLIENT)
 // ====================================================================
-export default function DashboardClientPage({ session, activeOrders, historyOrders, totalSpent }: DashboardPageProps) {
+export default function DashboardClientPage({
+  session,
+  activeOrders,
+  historyOrders,
+  jumlahAktif,
+  jumlahRiwayat,
+  batasPerTab,
+  totalSpent,
+}: DashboardPageProps) {
 
   return (
     <DashboardLayout>
       <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8">
 
         <div className="md:col-span-2 lg:col-span-3">
-           <OrderTabs 
-              activeOrders={activeOrders} 
+           <OrderTabs
+              activeOrders={activeOrders}
               historyOrders={historyOrders}
+              jumlahAktif={jumlahAktif}
+              jumlahRiwayat={jumlahRiwayat}
+              batasPerTab={batasPerTab}
            />
         </div>
 
         <div className="md:col-span-1 lg:col-span-1">
-           <ProfileCard 
-              session={session} 
-              activeOrderCount={activeOrders.length}
+           <ProfileCard
+              session={session}
+              activeOrderCount={jumlahAktif}
               totalSpent={totalSpent}
            />
         </div>
@@ -101,17 +124,34 @@ const ProfileCard = ({ session, activeOrderCount, totalSpent }: ProfileCardProps
 type OrderTabsProps = {
   activeOrders: PesananUntukKartu[];
   historyOrders: PesananUntukKartu[];
+  jumlahAktif: number;
+  jumlahRiwayat: number;
+  batasPerTab: number;
 };
 
-const OrderTabs = ({ activeOrders, historyOrders }: OrderTabsProps) => {
+const OrderTabs = ({
+  activeOrders,
+  historyOrders,
+  jumlahAktif,
+  jumlahRiwayat,
+  batasPerTab,
+}: OrderTabsProps) => {
   const [activeTab, setActiveTab] = useState('active');
 
+  // `count` memakai angka dari server, BUKAN panjang `data`: data-nya dipotong
+  // pada `batasPerTab`, jumlahnya tidak.
   const tabs = [
-    { id: 'active', label: 'Sedang Berjalan', icon: Briefcase, count: activeOrders.length, data: activeOrders },
-    { id: 'history', label: 'Riwayat Transaksi', icon: History, count: historyOrders.length, data: historyOrders }
+    { id: 'active', label: 'Sedang Berjalan', icon: Briefcase, count: jumlahAktif, data: activeOrders },
+    { id: 'history', label: 'Riwayat Transaksi', icon: History, count: jumlahRiwayat, data: historyOrders }
   ];
 
-  const currentTabData = tabs.find(tab => tab.id === activeTab)?.data || [];
+  const tabSekarang = tabs.find(tab => tab.id === activeTab);
+  const currentTabData = tabSekarang?.data || [];
+
+  // Ada pesanan yang tidak dimuat? Dikatakan terang-terangan. Daftar yang
+  // dipotong tanpa keterangan terbaca sebagai daftar lengkap, dan pesanan yang
+  // tidak terlihat dianggap tidak ada.
+  const adaYangBelumDimuat = (tabSekarang?.count ?? 0) > currentTabData.length;
 
   return (
     <div className="bg-white p-2 rounded-2xl shadow-sm border border-gray-100">
@@ -145,6 +185,12 @@ const OrderTabs = ({ activeOrders, historyOrders }: OrderTabsProps) => {
             ) : (
                 <div className="space-y-4">
                     {currentTabData.map((order) => <BookingCard key={order.id} order={order} />)}
+                    {adaYangBelumDimuat && (
+                      <p className="text-center text-sm text-gray-500 pt-2">
+                        Menampilkan {batasPerTab} pesanan terbaru dari {tabSekarang?.count}.
+                        Hubungi kami bila Anda perlu pesanan yang lebih lama.
+                      </p>
+                    )}
                 </div>
             )}
         </div>

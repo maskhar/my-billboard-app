@@ -19,8 +19,6 @@ import {
   PublishStatus,
   DesignStatus,
   DesignOption,
-  ChatSender,
-  ChatSessionStatus,
 } from '@prisma/client';
 
 /**
@@ -46,9 +44,13 @@ export const sahBillboardStatus = (v: unknown) => nilaiEnumSah(BillboardStatus, 
 export const sahPublishStatus = (v: unknown) => nilaiEnumSah(PublishStatus, v);
 export const sahDesignStatus = (v: unknown) => nilaiEnumSah(DesignStatus, v);
 export const sahDesignOption = (v: unknown) => nilaiEnumSah(DesignOption, v);
-export const sahChatSender = (v: unknown) => nilaiEnumSah(ChatSender, v);
-export const sahChatSessionStatus = (v: unknown) => nilaiEnumSah(ChatSessionStatus, v);
 
+// `ChatSender` dan `ChatSessionStatus` TIDAK punya pintasan di sini, dan itu
+// bukan kelalaian: keduanya tidak pernah datang dari request. Pengirim pesan
+// ditentukan server dari sesi yang memanggil, dan status percakapan hanya
+// bergerak lewat route tutup/buka yang menuliskan nilainya sendiri. Pintasan
+// yang tidak dipanggil siapa pun hanya memberi kesan ada gerbang yang menjaga
+// pintu yang sebenarnya tidak ada.
 export {
   Role,
   BookingStatus,
@@ -56,6 +58,4 @@ export {
   PublishStatus,
   DesignStatus,
   DesignOption,
-  ChatSender,
-  ChatSessionStatus,
 };

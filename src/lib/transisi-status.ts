@@ -16,7 +16,7 @@
 // dan `payment/notify`. Kalau sebuah tombol baru butuh perpindahan yang belum
 // terdaftar, tambahkan di sini — jangan lewati pemeriksaannya.
 
-import { addHours, isAfter } from 'date-fns';
+import { addHours } from 'date-fns';
 import { BookingStatus } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { sapuTagihanKedaluwarsa, tutupTagihanMenganggur } from '@/lib/tutup-tagihan';
@@ -299,13 +299,4 @@ export async function sapuPesananKedaluwarsa(billboardId?: string): Promise<numb
     console.error('🔥 [SWEEPER] Gagal menyapu pesanan kedaluwarsa:', error);
     return 0;
   }
-}
-
-/**
- * Apakah pesanan ini sudah melewati tenggat bayarnya?
- * Dipakai tampilan yang perlu tahu tanpa menunggu sapuan berjalan.
- */
-export function sudahLewatTenggat(expiresAt: Date | string | null | undefined): boolean {
-  if (!expiresAt) return false;
-  return isAfter(new Date(), new Date(expiresAt));
 }

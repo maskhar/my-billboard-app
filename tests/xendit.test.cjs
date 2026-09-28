@@ -12217,3 +12217,177 @@ describe('pemasangan kehadiran', () => {
     assert.match(kode, /isOnline:\s*boolean;/);
   });
 });
+
+// ===========================================================================
+// KODE MATI YANG DIBUANG, DAN BATAS MUAT DASHBOARD PEMBELI
+// ===========================================================================
+describe('kode mati dibuang dan dashboard pembeli dibatasi', () => {
+  function kodeSajaA4(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split('\n')
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  const JALUR_WRAPPER = path.join(
+    __dirname, '..', 'src', 'app', 'dashboard', 'DashboardWrapper.tsx'
+  );
+  const JALUR_CLIENT = path.join(
+    __dirname, '..', 'src', 'app', 'dashboard', 'DashboardClientPage.tsx'
+  );
+  const JALUR_ENUM_GUARD = path.join(__dirname, '..', 'src', 'lib', 'enum-guard.ts');
+  const JALUR_TRANSISI = path.join(__dirname, '..', 'src', 'lib', 'transisi-status.ts');
+
+  // Kode mati bukan sekadar berkas yang tidak terpakai. `dummy-data.ts` memuat
+  // dua billboard lengkap dengan harga dan gambar; selama ia ada, satu impor
+  // yang salah sasaran cukup untuk menampilkan billboard yang tidak pernah
+  // dijual. Pintasan enum yang nol pemanggil memberi kesan ada gerbang yang
+  // menjaga pintu yang sebenarnya tidak dijaga siapa pun.
+  it('src/lib/dummy-data.ts sudah tidak ada', () => {
+    assert.strictEqual(
+      fs.existsSync(path.join(__dirname, '..', 'src', 'lib', 'dummy-data.ts')),
+      false
+    );
+  });
+
+  it('tidak ada satu pun berkas yang mengimpor dummy-data', () => {
+    const akar = path.join(__dirname, '..', 'src');
+    const temuan = [];
+    (function jelajah(dir) {
+      for (const isi of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, isi.name);
+        if (isi.isDirectory()) { jelajah(penuh); continue; }
+        if (!/\.(ts|tsx)$/.test(isi.name)) continue;
+        if (/dummy-data|dummyBillboards/.test(fs.readFileSync(penuh, 'utf8'))) {
+          temuan.push(penuh);
+        }
+      }
+    })(akar);
+    assert.deepStrictEqual(temuan, []);
+  });
+
+  it('pintasan enum chat yang nol pemanggil sudah dibuang', () => {
+    const kode = kodeSajaA4(JALUR_ENUM_GUARD);
+    assert.doesNotMatch(kode, /sahChatSender/);
+    assert.doesNotMatch(kode, /sahChatSessionStatus/);
+    // Impor dan re-export-nya ikut keluar: enum yang tidak dipakai di file ini
+    // hanya membuat `@prisma/client` tampak dibutuhkan lebih dari sebenarnya.
+    assert.doesNotMatch(kode, /ChatSender/);
+    assert.doesNotMatch(kode, /ChatSessionStatus/);
+  });
+
+  it('pintasan enum yang memang dipakai request tetap ada', () => {
+    const kode = kodeSajaA4(JALUR_ENUM_GUARD);
+    for (const nama of [
+      'sahRole', 'sahBookingStatus', 'sahBillboardStatus',
+      'sahPublishStatus', 'sahDesignStatus', 'sahDesignOption',
+    ]) {
+      assert.match(kode, new RegExp(`export const ${nama}\\b`));
+    }
+    // Mesin di belakang keenam pintasan itu. Pernah tercatat sebagai kode mati
+    // oleh inventaris yang hanya mencari pemanggil dari file lain.
+    assert.match(kode, /export function nilaiEnumSah\b/);
+  });
+
+  it('sudahLewatTenggat dibuang tanpa menyentuh isi TRANSISI_SAH', () => {
+    const kode = kodeSajaA4(JALUR_TRANSISI);
+    assert.doesNotMatch(kode, /sudahLewatTenggat/);
+    // `isAfter` hanya dipakai fungsi itu, jadi impornya ikut keluar —
+    // kalau tertinggal ia menjadi peringatan lint yang baru.
+    assert.doesNotMatch(kode, /isAfter/);
+    // Gerbang: mesin status TIDAK boleh berubah karena pembersihan kode mati.
+    assert.match(kode, /export const TRANSISI_SAH/);
+    assert.match(kode, /addHours/);
+    assert.match(kode, /export const STATUS_MENGUNCI_TANGGAL/);
+  });
+
+  // ------------------------------------------------------------------
+  // BATAS MUAT DASHBOARD PEMBELI
+  // ------------------------------------------------------------------
+  it('kedua query pesanan pembeli punya take', () => {
+    const kode = kodeSajaA4(JALUR_WRAPPER);
+    assert.match(kode, /const PESANAN_TERBARU = \d+;/);
+    const take = kode.match(/take: PESANAN_TERBARU/g) || [];
+    assert.strictEqual(take.length, 2);
+    // Tidak ada `findMany` pesanan yang lolos tanpa batas.
+    const findMany = kode.match(/prisma\.booking\.findMany\(/g) || [];
+    assert.strictEqual(findMany.length, 2);
+  });
+
+  it('tab dipisah di query, bukan difilter setelah diambil', () => {
+    const kode = kodeSajaA4(JALUR_WRAPPER);
+    // Satu `take` atas query gabungan akan terpakai habis oleh riwayat lama,
+    // dan pesanan yang masih berjalan justru hilang dari layar. Jadi
+    // pemisahannya ada di `where`.
+    assert.match(kode, /status:\s*\{\s*in:\s*\[\.\.\.activeStatuses\]\s*\}/);
+    assert.match(kode, /status:\s*\{\s*notIn:\s*\[\.\.\.activeStatuses\]\s*\}/);
+    assert.doesNotMatch(kode, /activeStatuses\.includes/);
+    assert.doesNotMatch(kode, /myBookings/);
+  });
+
+  it('total pengeluaran dihitung database, bukan dari baris yang terambil', () => {
+    const kode = kodeSajaA4(JALUR_WRAPPER);
+    // Menjumlahkan `payments` dari baris yang terambil hanya benar selama tidak
+    // ada batas. Dengan `take`, angka "Total Pengeluaran" akan mengecil begitu
+    // pesanan ke-51 lahir — uang yang pernah disetor pembeli hilang dari layar.
+    assert.match(kode, /prisma\.payment\.aggregate\(/);
+    assert.match(kode, /_sum:\s*\{\s*jumlah:\s*true\s*\}/);
+    assert.match(kode, /status:\s*PaymentStatus\.PAID/);
+    assert.match(kode, /prisma\.booking\.aggregate\(/);
+    assert.match(kode, /_sum:\s*\{\s*refundAmount:\s*true\s*\}/);
+    assert.match(kode, /status:\s*BookingStatus\.REFUNDED/);
+    assert.doesNotMatch(kode, /flatMap\(\(b\) => b\.payments\)/);
+    assert.doesNotMatch(kode, /uangMasukSemua/);
+  });
+
+  it('agregat yang kosong diperlakukan nol lewat money.ts, bukan aritmetika biasa', () => {
+    const kode = kodeSajaA4(JALUR_WRAPPER);
+    // `_sum` mengembalikan `null` bila tidak ada baris yang cocok. Pengurangan
+    // tetap lewat `kurang()` supaya nominal tidak pernah menjadi number.
+    assert.match(kode, /kurang\(\s*agregatMasuk\._sum\.jumlah \?\? 0,\s*agregatRefund\._sum\.refundAmount \?\? 0\s*\)/);
+    assert.doesNotMatch(kode, /new Prisma\.Decimal/);
+  });
+
+  it('jumlah pesanan per tab dihitung server, bukan panjang array', () => {
+    const kodeWrapper = kodeSajaA4(JALUR_WRAPPER);
+    const hitung = kodeWrapper.match(/prisma\.booking\.count\(/g) || [];
+    assert.strictEqual(hitung.length, 2);
+    assert.match(kodeWrapper, /jumlahAktif=\{jumlahAktif\}/);
+    assert.match(kodeWrapper, /jumlahRiwayat=\{jumlahRiwayat\}/);
+    assert.match(kodeWrapper, /batasPerTab=\{PESANAN_TERBARU\}/);
+
+    // Panjang array sekarang adalah panjang HALAMAN, bukan jumlah pesanan.
+    // Akun dengan 60 pesanan berjalan tidak boleh membaca "50".
+    const kodeClient = kodeSajaA4(JALUR_CLIENT);
+    assert.match(kodeClient, /count: jumlahAktif/);
+    assert.match(kodeClient, /count: jumlahRiwayat/);
+    assert.match(kodeClient, /activeOrderCount=\{jumlahAktif\}/);
+    assert.doesNotMatch(kodeClient, /activeOrders\.length/);
+    assert.doesNotMatch(kodeClient, /historyOrders\.length/);
+  });
+
+  it('daftar yang dipotong mengatakannya, tidak berpura-pura lengkap', () => {
+    const kode = kodeSajaA4(JALUR_CLIENT);
+    // Daftar yang dipotong tanpa keterangan terbaca sebagai daftar lengkap,
+    // dan pesanan yang tidak terlihat dianggap tidak ada.
+    assert.match(kode, /adaYangBelumDimuat/);
+    assert.match(kode, /> currentTabData\.length/);
+    assert.match(kode, /Menampilkan \{batasPerTab\} pesanan terbaru/);
+  });
+
+  it('props dashboard tetap angka jadi, tanpa Decimal atau kolom provider', () => {
+    const kode = kodeSajaA4(JALUR_WRAPPER);
+    for (const rahasia of [
+      'providerSessionId', 'providerReferenceId', 'providerPaymentId',
+      'callbackPayload', 'components_sdk_key',
+    ]) {
+      assert.doesNotMatch(kode, new RegExp(rahasia));
+    }
+    // Nominal tetap diubah menjadi angka di batas server.
+    assert.match(kode, /uangUntukClient\(/);
+    assert.match(kode, /keAngka\(/);
+  });
+});
