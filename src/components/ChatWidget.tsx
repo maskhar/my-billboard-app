@@ -175,6 +175,30 @@ export default function ChatWidget() {
         );
     });
 
+    // Pesan gagal terkirim.
+    //
+    // `handleSend` menampilkan gelembung pesan lebih dulu, sebelum server
+    // menjawab apa pun (optimistic). Itu membuat pengiriman terasa cepat, tapi
+    // sebelumnya juga membuat kegagalan TIDAK TERLIHAT: kalau `sendMessage` di
+    // chat-server melempar — database menolak, sesinya terhapus — ia hanya
+    // mencatat ke log servernya sendiri. Gelembungnya tetap terpampang, dan
+    // pengunjung menunggu jawaban atas pertanyaan yang tidak pernah tersimpan
+    // dan tidak pernah dilihat petugas.
+    //
+    // Sesinya TIDAK dihapus, berbeda dari `authError`: kegagalan menulis satu
+    // pesan tidak berarti sesinya tidak sah. Yang dilakukan hanya memberi tahu
+    // agar pengunjung tahu perlu mengirim ulang.
+    socketRef.current.on('pesanGagal', (masuk: unknown) => {
+        const g = masuk !== null && typeof masuk === 'object'
+            ? (masuk as { message?: unknown })
+            : {};
+        setError(
+            typeof g.message === 'string' && g.message.trim() !== ''
+                ? g.message
+                : 'Pesan gagal terkirim. Coba kirim ulang sebentar lagi.'
+        );
+    });
+
     return () => {
       socketRef.current?.disconnect();
     };
@@ -261,6 +285,10 @@ export default function ChatWidget() {
         };
         setMessages(prev => [...prev, tempMessage]);
         setInput("");
+        // Galat pengiriman sebelumnya dibersihkan: membiarkannya terpampang di
+        // atas percakapan yang sudah jalan lagi membuat pengunjung menyangka
+        // kirimannya yang BARU juga gagal.
+        setError('');
         socketRef.current.emit('sendMessage', { 
             sessionId,
             sender: 'USER',
