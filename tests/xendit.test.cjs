@@ -2611,8 +2611,9 @@ describe('POST /api/booking/create', () => {
     const kode = fs
       .readFileSync(JALUR_ROUTE_BOOKING, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     // Token JWT dibuat saat login dan tidak ikut berubah saat nama diperbarui
@@ -2734,8 +2735,9 @@ describe('CheckoutForm & halaman checkout', () => {
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -4446,8 +4448,9 @@ describe('urutan tagihan tidak ditulis ulang di luar pembayaran.ts', () => {
   function kodeSaja(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -6626,8 +6629,9 @@ describe('tidak ada alamat email mentah di log', () => {
   function kodeSaja(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -6743,8 +6747,9 @@ describe('semua judul surat lewat judulSurat', () => {
   function tanpaKomentar(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -6786,8 +6791,9 @@ describe('pemanggil sendEmail mengamankan nilai pengguna', () => {
   function kodeSaja(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -7521,8 +7527,9 @@ describe('batas serialisasi props client', () => {
   function kodeSaja(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -7737,8 +7744,9 @@ describe('semua penulis kolom URL memakai urlBuktiSah', () => {
   function kodeTanpaKomentar(sumber) {
     return sumber
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -8148,8 +8156,9 @@ describe('route unggah berkas dibatasi lajunya', () => {
     return fs
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -8469,8 +8478,9 @@ describe('penjagaan pengenal terpasang di sumbernya, bukan hanya lolos test', ()
     return fs
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -8657,8 +8667,9 @@ describe('POST /api/register dibatasi lajunya', () => {
     const kode = fs
       .readFileSync(JALUR_ROUTE_REGISTER, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     const posisiBatas = kode.indexOf('rateLimit({');
@@ -8857,8 +8868,9 @@ describe('pintu login: pembatas, pesan seragam, dan waktu jawaban', () => {
     const kode = fs
       .readFileSync(path.join(__dirname, '..', 'src', 'lib', 'auth.ts'), 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     assert.match(kode, /from ['"]@\/lib\/asal-permintaan['"]/);
@@ -9301,8 +9313,9 @@ describe('POST /api/user/update-profile', () => {
         'utf8'
       )
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     assert.match(kode, /from ['"]@\/lib\/identitas-penyewa['"]/);
@@ -9317,8 +9330,9 @@ describe('POST /api/user/update-profile', () => {
       .readFileSync(path.join(__dirname, '..', 'src', 'app', 'dashboard', 'settings', 'page.tsx'), 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     const select = kodeHalaman.match(/select:\s*\{[^}]*\}/);
@@ -9336,8 +9350,9 @@ describe('POST /api/user/update-profile', () => {
       )
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
     // Isian nomor dulu opsional, padahal gerbang pembayaran menuntutnya.
@@ -9509,8 +9524,9 @@ describe('halaman detail order admin — params Promise dan jawaban yang diperik
       .readFileSync(jalur, 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -9684,8 +9700,9 @@ describe('identitas penjual satu sumber, bukan tiga isi berbeda', () => {
     if (tsx) isi = isi.replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '');
     return isi
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -9783,8 +9800,9 @@ describe('src/lib/mail.ts — transport SMTP', () => {
     return fs
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -9847,8 +9865,9 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
       .readFileSync(jalur, 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -9939,8 +9958,9 @@ describe('batas galat: kegagalan database tidak lagi tampil sebagai "tidak ada"'
       .readFileSync(jalur, 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -10068,8 +10088,9 @@ describe('StatusChanger: menu pengubah status memakai tombol, bukan tautan palsu
       .readFileSync(jalur, 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -10199,8 +10220,9 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
       .readFileSync(path.join(SRC, ...bagian), 'utf8')
       .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -10605,8 +10627,9 @@ describe('gerbang tipe dan lint', () => {
     return fs
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -10698,8 +10721,9 @@ describe('alamatChat()', () => {
     return fs
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -10873,8 +10897,9 @@ describe('temuan lint yang sudah dibereskan', () => {
   function kodeSajaLint(jalur) {
     return fs
       .readFileSync(jalur, 'utf8')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -12227,8 +12252,9 @@ describe('kode mati dibuang dan dashboard pembeli dibatasi', () => {
       .readFileSync(jalur, 'utf8')
       .replace(/\/\*[\s\S]*?\*\//g, '')
       .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
-      .split('\n')
-      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
   }
 
@@ -12389,5 +12415,208 @@ describe('kode mati dibuang dan dashboard pembeli dibatasi', () => {
     // Nominal tetap diubah menjadi angka di batas server.
     assert.match(kode, /uangUntukClient\(/);
     assert.match(kode, /keAngka\(/);
+  });
+});
+
+// ===================================================================
+// FASE A1-1: form billboard admin bertipe, dan `status` yang hilang
+// ===================================================================
+describe('form billboard admin bertipe dan status tidak lagi hilang', () => {
+  const JALUR_FORM = 'src/app/admin/(dashboard)/billboards/form/page.tsx';
+  const JALUR_TIPE = 'src/lib/tipe-billboard.ts';
+
+  // Assertion di bawah memeriksa KODE, bukan komentar. Tanpa pembuangan ini
+  // sebuah komentar yang menyebut `any` atau `...data` akan membuat test lulus
+  // (atau gagal) karena kalimat, bukan karena kode.
+  // Dipisah dengan `/\r?\n/`, BUKAN `'\n'`. Berkas di repo ini berakhiran CRLF,
+  // dan `.` di regex JS tidak cocok dengan `\r` — jadi `//.*$` tidak pernah
+  // cocok pada baris yang masih menyisakan `\r`, dan seluruh komentar lolos.
+  // Akibatnya assertion di bawah membaca komentar sebagai kode: sebuah komentar
+  // yang menyebut `any` membuat test ini gagal walau kodenya bersih.
+  const kodeSajaA1 = (jalur) => {
+    const isi = fs.readFileSync(path.join(__dirname, '..', jalur), 'utf8');
+    return isi
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  };
+
+  it('berkas tipe billboard sisi client ada dan tidak mengimpor @prisma/client', () => {
+    const jalurPenuh = path.join(__dirname, '..', JALUR_TIPE);
+    assert.ok(fs.existsSync(jalurPenuh), `${JALUR_TIPE} harus ada`);
+
+    const kode = kodeSajaA1(JALUR_TIPE);
+
+    // Client Component yang mengimpor nilai dari `@prisma/client` menarik
+    // runtime Prisma ke bundle browser. Itu sebabnya status ditulis sebagai
+    // union teks di berkas ini, bukan diambil dari objek enum.
+    assert.doesNotMatch(
+      kode,
+      /from\s+['"]@prisma\/client['"]/,
+      'tipe sisi client tidak boleh mengimpor @prisma/client'
+    );
+  });
+
+  it('tipe FormBillboard menyatakan `status` dan seluruh kolom yang dibaca route', () => {
+    const kode = kodeSajaA1(JALUR_TIPE);
+
+    assert.match(kode, /export type FormBillboard = \{/);
+
+    // Daftar ini tepat apa yang `update/route.ts` dan `create/route.ts` baca
+    // dari body. Satu nama yang hilang dari tipe berarti kolomnya tidak pernah
+    // sampai ke server.
+    const wajib = [
+      'title', 'slug', 'sku', 'address', 'type', 'price', 'lat', 'lng',
+      'status', 'publishStatus', 'mainImage', 'sizeH', 'sizeW',
+      'orientation', 'sides', 'lighting', 'material', 'smartsucoUrl',
+      'gallery', 'adminOptions',
+    ];
+    const blok = kode.split('export type FormBillboard = {')[1].split('};')[0];
+    for (const nama of wajib) {
+      assert.match(blok, new RegExp(`\\b${nama}\\s*:`), `FormBillboard harus punya ${nama}`);
+    }
+
+    // `desc` sudah dibuang: tidak ada kolom itu di `model Billboard`, tidak ada
+    // input untuknya, dan tidak ada route yang membacanya.
+    assert.doesNotMatch(blok, /\bdesc\s*:/, 'FormBillboard tidak boleh punya `desc`');
+  });
+
+  it('status dan publikasi punya penjaga nilai, bukan cast', () => {
+    const kode = kodeSajaA1(JALUR_TIPE);
+
+    assert.match(kode, /export function sahStatusBillboard\(nilai: unknown\)/);
+    assert.match(kode, /nilai is StatusBillboard/);
+    assert.match(kode, /export function sahStatusPublikasi\(nilai: unknown\)/);
+    assert.match(kode, /nilai is StatusPublikasi/);
+
+    // Casing enum ini SENGAJA begini — sama dengan schema Prisma.
+    assert.match(kode, /'Available'/);
+    assert.match(kode, /'Booked'/);
+  });
+
+  it('form tidak lagi memuat satu pun `any`', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // Delapan belas `any` di berkas ini adalah kumpulan terbesar di seluruh
+    // repo, dan salah satunya menyembunyikan bug `status` yang hilang.
+    assert.doesNotMatch(kode, /\bany\b/, 'form billboard tidak boleh memuat `any`');
+    assert.doesNotMatch(kode, /useState<any>/);
+  });
+
+  it('state awal form menyatakan `status`, kolom yang dulu hilang', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // INI BUG YANG DIPERBAIKI. Nilai awal `status` dulu tidak ada sama sekali,
+    // sementara JSX merender `<select name="status" value={form.status}>`.
+    // React memperlakukan `value={undefined}` sebagai input TAK TERKENDALI:
+    // select-nya menampilkan "Available" sedangkan state-nya `undefined`.
+    // Pada form EDIT nilainya tertutupi karena status dari database ikut
+    // dimuat; pada billboard BARU ia lolos hanya karena `create/route.ts`
+    // memberi default. `update/route.ts` tidak punya default — ia memeriksa
+    // `sahBillboardStatus(body.status)` dan menjawab 400.
+    assert.match(kode, /const FORM_KOSONG: FormBillboard = \{/);
+    const blok = kode.split('const FORM_KOSONG: FormBillboard = {')[1].split('};')[0];
+    assert.match(blok, /status:\s*'Available'/, 'state awal wajib menyetel status');
+    assert.match(blok, /publishStatus:\s*'DRAFT'/);
+    assert.doesNotMatch(blok, /\bdesc\s*:/, 'state awal tidak boleh punya `desc`');
+  });
+
+  it('select status dan publikasi keduanya terkendali oleh state', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // Kedua `<select>` harus membaca state — dan state-nya harus punya
+    // kuncinya, yang diperiksa test di atas.
+    assert.match(kode, /name="status"\s+value=\{form\.status\}/);
+    assert.match(kode, /name="publishStatus"\s+value=\{form\.publishStatus\}/);
+  });
+
+  it('data dari API disalin kolom per kolom, bukan di-spread mentah', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // `{ ...prev, ...data }` menyalin SELURUH jawaban API ke state, dan state
+    // itulah yang dikirim balik sebagai payload POST — termasuk `history`
+    // (sepuluh baris berikut `snapshot` masing-masing) dan setiap kolom baru
+    // yang nanti ditambahkan ke tabel Billboard.
+    assert.doesNotMatch(kode, /\.\.\.prev,\s*\.\.\.data/, 'jangan spread jawaban API ke state');
+    assert.doesNotMatch(kode, /\.\.\.data\b/);
+
+    // Nilai status dari database diperiksa, bukan dipercaya: nilai asing
+    // membuat `<select>` kembali tak terkendali dan payload-nya ditolak 400.
+    assert.match(kode, /sahStatusBillboard\(data\.status\)/);
+    assert.match(kode, /sahStatusPublikasi\(data\.publishStatus\)/);
+  });
+
+  it('harga dari API diubah menjadi angka sebelum masuk state', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // `Decimal` diserialisasi `res.json()` menjadi teks (`"15000000"`), dan
+    // `<input type="number">` menolaknya diam-diam.
+    assert.match(kode, /price:\s*Number\(data\.price \?\? 0\) \|\| 0/);
+  });
+
+  it('checklist fasilitas tidak lagi dimutasi di tempat', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // Dulu: `const newOpts = [...form.adminOptions]` lalu
+    // `newOpts[index].included = !newOpts[index].included`. Salinan array-nya
+    // dangkal, jadi objek opsinya dimutasi — state lama dan baru menunjuk
+    // objek yang sama, dan daftarnya dibaca di luar updater.
+    assert.doesNotMatch(kode, /newOpts\[index\]\.included\s*=/);
+    assert.doesNotMatch(kode, /\[\.\.\.form\.adminOptions\]/);
+    assert.match(kode, /p\.adminOptions\.map\(/);
+    assert.match(kode, /\{ \.\.\.opt, included: !opt\.included \}/);
+  });
+
+  it('handleChange bertipe event React dan dipersempit ke kolom teks', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    assert.match(kode, /React\.ChangeEvent<HTMLInputElement \| HTMLTextAreaElement \| HTMLSelectElement>/);
+
+    // `name` dibatasi ke kolom teks: `gallery`, `adminOptions`, dan `price`
+    // punya penyetelnya sendiri, dan satu `name` yang salah tulis di JSX
+    // dulunya bisa menimpa array galeri dengan sebuah string.
+    assert.match(kode, /type KolomTeksForm = Exclude<\s*keyof FormBillboard/);
+    assert.match(kode, /'gallery' \| 'adminOptions' \| 'price'/);
+  });
+
+  it('riwayat revisi bertipe, dan rollback menerima baris riwayat', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    assert.match(kode, /useState<BarisRiwayatBillboard\[\]>\(\[\]\)/);
+    assert.match(kode, /handleRollback = async \(historyItem: BarisRiwayatBillboard\)/);
+
+    // `data.history` dari API bisa tidak berbentuk array; `.map()` di JSX
+    // melempar bila bukan.
+    assert.match(kode, /Array\.isArray\(data\.history\)/);
+  });
+
+  it('entri specs yang cacat tidak lagi menjatuhkan form', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+
+    // `arrayDariJson` menjamin `specs` adalah ARRAY, bukan bahwa tiap
+    // elemennya punya `label` dan `value` bertipe teks. Satu entri
+    // `{ label: "Ukuran" }` tanpa `value` membuat `.replace()` melempar dan
+    // form-nya gagal terbuka — admin tidak bisa memperbaiki data yang cacat
+    // justru karena data itu cacat.
+    assert.match(kode, /typeof s\.value === 'string'/);
+    assert.match(kode, /arrayDariJson<BarisSpesifikasi>/);
+  });
+
+  it('impor ikon yang tidak dirender sudah dibuang', () => {
+    const kode = kodeSajaA1(JALUR_FORM);
+    const imporIkon = kode.match(/import \{([^}]*)\} from 'lucide-react'/);
+    assert.ok(imporIkon, 'impor lucide-react harus ada');
+
+    for (const mati of ['LinkIcon', 'Wand2', 'Lightbulb', 'Clock', 'Plus']) {
+      assert.ok(
+        !imporIkon[1].includes(mati),
+        `${mati} tidak dirender dan tidak boleh diimpor`
+      );
+    }
+    // Yang benar-benar dipakai tetap ada.
+    for (const hidup of ['ArrowLeft', 'Save', 'Loader2', 'Ruler', 'ExternalLink', 'X', 'History', 'RotateCcw']) {
+      assert.ok(imporIkon[1].includes(hidup), `${hidup} dirender dan harus tetap diimpor`);
+    }
   });
 });
