@@ -4,17 +4,30 @@
 import { Trash2, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
 export default function DeleteBillboardBtn({ id, title }: { id: string, title: string }) {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
 
   const handleDelete = async () => {
-      // Konfirmasi agar tidak sengaja kepencet
-      const isSure = confirm(`Yakin mau menghapus "${title}"?\nData yang dihapus tidak bisa dikembalikan.`);
-      if (!isSure) return;
+      const setuju = await konfirmasi({
+          judul: `Hapus billboard "${title}"?`,
+          pesan:
+              'Data billboard beserta seluruh riwayat revisinya dihapus permanen ' +
+              'dan tidak bisa dikembalikan.\n\n' +
+              'Penghapusan akan ditolak server bila billboard ini masih punya ' +
+              'pesanan aktif atau pesanan yang menunggu pembayaran.',
+          labelSetuju: 'Hapus Permanen',
+          labelTolak: 'Jangan Hapus',
+          nada: 'bahaya',
+      });
+      if (!setuju) return;
 
       setLoading(true);
 
@@ -43,14 +56,18 @@ export default function DeleteBillboardBtn({ id, title }: { id: string, title: s
           //      mati" — dan itulah justru pesan yang paling sering hilang.
           const jawaban = await bacaJawaban(res);
           if (res.ok) {
-              alert(jawaban.pesan ?? "✅ Data berhasil dihapus.");
+              // Emoji "✅"/"❌" dilepas: nada toast sudah membawa warna dan ikonnya
+              // sendiri, dan `role="alert"` pada toast galat membuat pembaca layar
+              // menyebutkannya tanpa perlu karakter tambahan yang dibacakan
+              // sebagai "tanda centang putih tebal".
+              toast.sukses(jawaban.pesan ?? 'Billboard berhasil dihapus.');
               router.refresh();
           } else {
-              alert("❌ Gagal: " + alasanPenolakan(res, jawaban));
+              toast.galat('Gagal menghapus: ' + alasanPenolakan(res, jawaban));
           }
       } catch (galat) {
           console.error('Gagal menghapus billboard:', galat);
-          alert(pesanGalat(galat, "Terjadi kesalahan sistem."));
+          toast.galat(pesanGalat(galat, 'Server tidak dapat dihubungi. Billboard TIDAK dihapus.'));
       } finally {
           setLoading(false);
       }

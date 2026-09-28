@@ -10,6 +10,8 @@ import {
 import Link from 'next/link';
 import { rupiah } from '@/lib/money';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 
 /**
  * Kolom pesanan yang benar-benar dibaca komponen ini.
@@ -96,6 +98,8 @@ export default function OrderActions({
   sisaPokok: number;
 }) {
   const router = useRouter();
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
   const [loading, setLoading] = useState(false);
 
   // STATE MODALS
@@ -124,14 +128,19 @@ export default function OrderActions({
           });
           const jawaban = await bacaJawaban(res);
           if (!res.ok) {
-              alert('Gagal memperbarui status: ' + alasanPenolakan(res, jawaban));
+              toast.galat('Gagal memperbarui status: ' + alasanPenolakan(res, jawaban));
               return;
           }
           setShowTransferModal(false);
           setShowInstallModal(false);
           router.refresh();
-      } catch {
-          alert('Error Server: status tidak berubah.');
+      } catch (galat) {
+          // Dicatat, bukan ditelan. `catch` di sini menangkap `fetch` yang
+          // melempar — jaringan mati, permintaan dibatalkan — dan tanpa satu
+          // baris log tidak ada cara tahu itu terjadi setelah admin melapor
+          // "tombolnya tidak jalan".
+          console.error('Gagal memperbarui status pesanan:', galat);
+          toast.galat('Server tidak dapat dihubungi. Status tidak berubah.');
       } finally {
           setLoading(false);
       }
@@ -144,16 +153,34 @@ export default function OrderActions({
   ) => {
       const file = e.target.files?.[0];
       if (file) {
-          if (file.size > 2 * 1024 * 1024) { alert("Max 2MB"); return; }
+          if (file.size > 2 * 1024 * 1024) {
+              toast.galat('Berkas melebihi 2 MB. Perkecil dulu gambarnya, lalu unggah lagi.');
+              return;
+          }
           const reader = new FileReader();
           reader.onloadend = () => setter(reader.result as string);
           reader.readAsDataURL(file);
       }
   };
 
-  const handleForceCancel = () => {
-      const reason = prompt("Alasan Pembatalan Paksa?");
-      if(reason) updateStatus('WAITING_BANK', { reason });
+  const handleForceCancel = async () => {
+      const reason = await konfirmasi({
+          judul: 'Batalkan paksa pesanan yang sedang tayang?',
+          pesan:
+              'Pesanan ini sudah ACTIVE. Membatalkannya memindahkannya ke alur ' +
+              'pengembalian dana: pembeli diminta mengisi rekening, lalu Anda ' +
+              'mentransfer pengembaliannya.',
+          labelSetuju: 'Batalkan Paksa',
+          labelTolak: 'Jangan',
+          nada: 'bahaya',
+          isian: {
+              label: 'Alasan pembatalan paksa',
+              placeholder: 'mis. billboard rusak tertimpa pohon',
+              panjang: true,
+          },
+      });
+      if (typeof reason !== 'string') return;
+      updateStatus('WAITING_BANK', { reason });
   };
 
   // Tombol "Tolak" dulu selalu mengirim `CANCELLED`, baik pesanannya sudah
@@ -167,22 +194,38 @@ export default function OrderActions({
   // menurut ledger `Payment PAID` — dihitung server, dikirim sebagai
   // `adaUangMasuk`. Pesanan yang belum dibayar benar-benar dibatalkan, pesanan
   // yang sudah dibayar masuk ke alur refund yang sudah ada.
-  const handleReject = () => {
+  const handleReject = async () => {
       const sudahDibayar = adaUangMasuk;
 
-      const reason = prompt(
-          sudahDibayar
-              ? 'Pesanan ini SUDAH DIBAYAR. Menolaknya berarti dananya harus dikembalikan.\n\nAlasan penolakan?'
-              : 'Alasan tolak?'
-      );
-      if (!reason) return;
+      const reason = await konfirmasi({
+          judul: sudahDibayar ? 'Tolak pesanan yang sudah dibayar?' : 'Tolak pesanan ini?',
+          pesan: sudahDibayar
+              ? 'Pesanan ini SUDAH DIBAYAR. Menolaknya berarti dananya harus dikembalikan ' +
+                'ke pembeli.'
+              : 'Pesanan belum dibayar, jadi penolakan langsung membatalkannya. Alasannya ' +
+                'dikirimkan ke pembeli.',
+          labelSetuju: 'Lanjutkan',
+          nada: sudahDibayar ? 'bahaya' : 'biasa',
+          isian: {
+              label: sudahDibayar ? 'Alasan penolakan' : 'Alasan tolak',
+              placeholder: 'mis. tanggal bentrok dengan pemasangan lain',
+              panjang: true,
+          },
+      });
+      if (typeof reason !== 'string') return;
 
       if (sudahDibayar) {
-          if (!confirm(
-              'Pesanan akan masuk alur pengembalian dana: pembeli diminta mengisi ' +
-              'rekening, lalu Anda mentransfer 90% dari uang yang sudah diterima ' +
-              '(dipotong biaya admin 10%).\n\nLanjutkan?'
-          )) return;
+          // Langkah KEDUA, sengaja terpisah dari pengisian alasan: yang disetujui
+          // di sini bukan penolakannya, melainkan konsekuensi uangnya.
+          const setuju = await konfirmasi({
+              judul: 'Masuk alur pengembalian dana',
+              pesan:
+                  'Pembeli akan diminta mengisi rekening, lalu Anda mentransfer 90% dari ' +
+                  'uang yang sudah diterima (dipotong biaya admin 10%).',
+              labelSetuju: 'Mulai Pengembalian Dana',
+              nada: 'bahaya',
+          });
+          if (!setuju) return;
           updateStatus('WAITING_BANK', { reason });
           return;
       }
@@ -204,23 +247,30 @@ export default function OrderActions({
   const handleCatatPembayaran = async () => {
       const nominal = Number(nominalCatat);
       if (!Number.isFinite(nominal) || nominal <= 0) {
-          return alert("Nominal pembayaran harus angka lebih dari nol.");
+          toast.galat('Nominal pembayaran harus angka lebih dari nol.');
+          return;
       }
       if (!Number.isInteger(nominal)) {
-          return alert("Nominal harus rupiah bulat, tanpa pecahan sen.");
+          toast.galat('Nominal harus rupiah bulat, tanpa pecahan sen.');
+          return;
       }
       if (nominal > sisaPokok) {
-          return alert(
+          toast.galat(
               `Nominal ${rupiah(nominal)} melebihi sisa tagihan pokok ${rupiah(sisaPokok)}.`
           );
+          return;
       }
 
-      if (!confirm(
-          `Catat pembayaran masuk sebesar ${rupiah(nominal)}?\n\n` +
-          `Nominal ini akan tercatat sebagai uang yang sudah diterima perusahaan ` +
-          `dan menjadi batas atas pengembalian dana bila pesanan ini direfund. ` +
-          `Pastikan uangnya benar-benar sudah ada di rekening.`
-      )) return;
+      const setuju = await konfirmasi({
+          judul: `Catat pembayaran masuk ${rupiah(nominal)}?`,
+          pesan:
+              'Nominal ini akan tercatat sebagai uang yang sudah diterima perusahaan dan ' +
+              'menjadi batas atas pengembalian dana bila pesanan ini direfund. Pastikan ' +
+              'uangnya benar-benar sudah ada di rekening.',
+          labelSetuju: 'Catat Pembayaran',
+          nada: 'bahaya',
+      });
+      if (!setuju) return;
 
       setLoading(true);
       try {
@@ -235,16 +285,17 @@ export default function OrderActions({
           });
           const jawaban = await bacaJawaban(res);
           if (!res.ok) {
-              alert('Gagal mencatat pembayaran: ' + alasanPenolakan(res, jawaban));
+              toast.galat('Gagal mencatat pembayaran: ' + alasanPenolakan(res, jawaban));
               return;
           }
-          alert(jawaban.pesan ?? 'Pembayaran tercatat.');
+          toast.sukses(jawaban.pesan ?? 'Pembayaran tercatat.');
           setShowCatatModal(false);
           setNominalCatat("");
           setKeteranganCatat("");
           router.refresh();
-      } catch {
-          alert('Error Server: pembayaran tidak tercatat.');
+      } catch (galat) {
+          console.error('Gagal mencatat pembayaran manual:', galat);
+          toast.galat('Server tidak dapat dihubungi. Pembayaran TIDAK tercatat.');
       } finally {
           setLoading(false);
       }
@@ -259,9 +310,9 @@ export default function OrderActions({
   // `Payment PAID` (422 `UANG_BELUM_TERCATAT`), jadi jalurnya diperiksa di sini
   // lebih dulu — supaya admin diberi tahu langkah yang benar, bukan sekadar
   // ditolak setelah menekan `confirm()`.
-  const handleApprovePayment = () => {
+  const handleApprovePayment = async () => {
       if (order.status === 'PENDING_PAYMENT' && !adaUangMasuk) {
-          alert(
+          toast.galat(
               'Pesanan ini belum punya pembayaran yang tercatat, jadi belum bisa ' +
               'dipindahkan ke tahap produksi.\n\n' +
               'Bila uangnya sudah diterima di luar gerbang pembayaran (mis. transfer ' +
@@ -272,7 +323,12 @@ export default function OrderActions({
           return;
       }
 
-      if(!confirm('Verifikasi pembayaran diterima?')) return;
+      const setuju = await konfirmasi({
+          judul: 'Verifikasi pembayaran diterima?',
+          pesan: 'Pesanan akan dipindahkan ke tahap berikutnya sesuai pilihan desain pembeli.',
+          labelSetuju: 'Verifikasi',
+      });
+      if (!setuju) return;
       // Jika user pilih "Jasa Desain", langsung masuk Produksi.
       // Jika user "Upload Sendiri", masuk status menunggu desain / review desain.
       if (order.designOption === 'service') {
@@ -285,20 +341,33 @@ export default function OrderActions({
   };
 
   // 2. VERIFIKASI DESAIN & MULAI CETAK
-  const handleStartPrinting = () => {
-      if(!confirm("File desain sudah OK? Mulai proses cetak?")) return;
+  const handleStartPrinting = async () => {
+      const setuju = await konfirmasi({
+          judul: 'Mulai proses cetak?',
+          pesan: 'Pastikan file desain dari pembeli sudah diperiksa dan layak cetak.',
+          labelSetuju: 'Mulai Cetak',
+      });
+      if (!setuju) return;
       updateStatus('IN_PRODUCTION');
   };
 
   // 3. MULAI PEMASANGAN
-  const handleStartInstall = () => {
-      if(!confirm("Banner sudah dicetak? Mulai pengiriman & pemasangan?")) return;
+  const handleStartInstall = async () => {
+      const setuju = await konfirmasi({
+          judul: 'Mulai pengiriman & pemasangan?',
+          pesan: 'Pastikan banner sudah selesai dicetak.',
+          labelSetuju: 'Kirim & Pasang',
+      });
+      if (!setuju) return;
       updateStatus('INSTALLATION');
   };
 
   // 4. SELESAI TAYANG (Upload Bukti)
   const handleFinishInstall = () => {
-      if(!installData) return alert("Wajib upload foto bukti tayang!");
+      if (!installData) {
+          toast.galat('Wajib unggah foto bukti tayang sebelum pesanan diaktifkan.');
+          return;
+      }
       updateStatus('ACTIVE', { installationProof: installData });
   };
 
@@ -312,9 +381,12 @@ export default function OrderActions({
   // Hanya URL http/https yang diterima: `refundProof` dirender sebagai `src`
   // gambar di dashboard pelanggan, dan server menolak skema lain — termasuk
   // `data:` hasil unggah berkas.
-  const handleFinishRefund = () => {
+  const handleFinishRefund = async () => {
       const bukti = proofData.trim();
-      if (!bukti) return alert("Wajib isi tautan bukti transfer.");
+      if (!bukti) {
+          toast.galat('Wajib isi tautan bukti transfer.');
+          return;
+      }
 
       let sah = false;
       try {
@@ -324,13 +396,19 @@ export default function OrderActions({
           sah = false;
       }
       if (!sah) {
-          return alert("Tautan bukti transfer harus berupa URL http:// atau https://.");
+          toast.galat('Tautan bukti transfer harus berupa URL http:// atau https://.');
+          return;
       }
 
-      if (!confirm(
-          `Tandai refund SELESAI sebesar ${rupiah(nominalRefund)}?\n\n` +
-          `Pastikan transfer sudah benar-benar dilakukan — status REFUNDED tidak bisa dibatalkan.`
-      )) return;
+      const setuju = await konfirmasi({
+          judul: `Tandai refund SELESAI sebesar ${rupiah(nominalRefund)}?`,
+          pesan:
+              'Pastikan transfer sudah benar-benar dilakukan. Status REFUNDED tidak bisa ' +
+              'dibatalkan.',
+          labelSetuju: 'Tandai Selesai',
+          nada: 'bahaya',
+      });
+      if (!setuju) return;
 
       updateStatus('REFUNDED', { refundProof: bukti });
   };

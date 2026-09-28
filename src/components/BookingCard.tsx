@@ -25,6 +25,8 @@ import { useRouter } from 'next/navigation';
 import { angkaRupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 
 /**
  * Bentuk pesanan yang BOLEH menyeberang ke browser.
@@ -109,7 +111,9 @@ export type PesananUntukKartu = {
 
 export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const router = useRouter();
-  
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
+
   // STATE UI & LOGIC
   const [loading, setLoading] = useState(false);
   
@@ -193,13 +197,14 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
       const jawaban = await bacaJawaban(res);
       if (res.ok) {
         setModalType('NONE');
-        alert('✅ Desain Berhasil Dikirim!');
+        toast.sukses('Desain berhasil dikirim.');
         router.refresh();
       } else {
-        alert('Upload Gagal: ' + alasanPenolakan(res, jawaban));
+        toast.galat('Gagal mengirim desain: ' + alasanPenolakan(res, jawaban));
       }
-    } catch {
-      alert('Error Server');
+    } catch (galat) {
+      console.error('Gagal mengirim desain:', galat);
+      toast.galat('Server tidak dapat dihubungi. Desain belum terkirim.');
     }
     setLoading(false);
   };
@@ -215,7 +220,8 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
     if (!file) return;
     if (file.size > 10 * 1024 * 1024) {
       kotak.value = '';
-      return alert('File terlalu besar! Maksimal 10MB.');
+      toast.galat('Berkas terlalu besar. Maksimal 10 MB.');
+      return;
     }
 
     setLoading(true);
@@ -229,7 +235,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
       const res = await fetch('/api/upload/design', { method: 'POST', body: formData });
       const jawaban = await bacaJawaban(res);
       if (!res.ok) {
-        alert('Upload Gagal: ' + alasanPenolakan(res, jawaban));
+        toast.galat('Unggahan gagal: ' + alasanPenolakan(res, jawaban));
         return;
       }
       // `url` diperiksa, tidak diteruskan buta. Respons 200 tanpa `url` —
@@ -239,12 +245,13 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
       // tautan tidak sah. Pembeli membaca itu sebagai "berkas saya salah" dan
       // mencoba berkas lain berulang kali, padahal unggahannya sudah berhasil.
       if (!jawaban.url) {
-        alert('Berkas terunggah, tapi server tidak memulangkan tautannya. Muat ulang halaman untuk memeriksa.');
+        toast.galat('Berkas terunggah, tapi server tidak memulangkan tautannya. Muat ulang halaman untuk memeriksa.');
         return;
       }
       await handleDesignSubmit(jawaban.url);
-    } catch {
-      alert('Error Server');
+    } catch (galat) {
+      console.error('Gagal mengunggah berkas desain:', galat);
+      toast.galat('Server tidak dapat dihubungi. Berkas belum terunggah.');
     } finally {
       // `finally`, bukan sebaris setelah `try`: jalur `return` di dalam blok
       // di atas melewatinya, dan tombol unggah tertinggal berputar selamanya.
@@ -254,13 +261,25 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   };
 
   const handleLinkSubmit = async () => {
-    if (!linkInput) return alert('Masukkan Link!');
+    if (!linkInput) {
+      toast.galat('Tautan desain masih kosong.');
+      return;
+    }
     await handleDesignSubmit(linkInput);
   };
 
   // D. Batalkan Pesanan (Fase Pending)
   const handleCancelPending = async () => {
-      if(!confirm("Yakin mau membatalkan pesanan?")) return;
+      const setuju = await konfirmasi({
+          judul: 'Batalkan pesanan ini?',
+          pesan:
+              'Slot tanggal yang Anda pesan akan dilepas kembali dan bisa diambil orang ' +
+              'lain. Pembatalan tidak bisa diurungkan.',
+          labelSetuju: 'Batalkan Pesanan',
+          labelTolak: 'Jangan Batalkan',
+          nada: 'bahaya',
+      });
+      if (!setuju) return;
       setLoading(true);
       try {
         const res = await fetch('/api/booking/cancel', {
@@ -270,12 +289,14 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
         });
         const jawaban = await bacaJawaban(res);
         if (!res.ok) {
-          alert('Gagal membatalkan: ' + alasanPenolakan(res, jawaban));
+          toast.galat('Gagal membatalkan: ' + alasanPenolakan(res, jawaban));
           return;
         }
+        toast.sukses('Pesanan dibatalkan.');
         router.refresh();
-      } catch {
-        alert('Error Server');
+      } catch (galat) {
+        console.error('Gagal membatalkan pesanan:', galat);
+        toast.galat('Server tidak dapat dihubungi. Pesanan TIDAK dibatalkan.');
       } finally {
         setLoading(false);
       }
@@ -306,14 +327,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
         });
         const jawaban = await bacaJawaban(res);
         if (!res.ok) {
-            alert("Gagal mengirim permintaan: " + alasanPenolakan(res, jawaban));
+            toast.galat('Gagal mengirim permintaan: ' + alasanPenolakan(res, jawaban));
             return;
         }
-        alert("Permintaan dikirim. Menunggu persetujuan Admin.");
+        toast.sukses('Permintaan dikirim. Menunggu persetujuan admin.');
         setModalType('NONE');
         router.refresh();
-      } catch {
-        alert('Error Server');
+      } catch (galat) {
+        console.error('Gagal mengirim permintaan refund:', galat);
+        toast.galat('Server tidak dapat dihubungi. Permintaan belum terkirim.');
       } finally {
         setLoading(false);
       }
@@ -337,14 +359,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
         });
         const jawaban = await bacaJawaban(res);
         if (!res.ok) {
-            alert("Gagal menyimpan rekening: " + alasanPenolakan(res, jawaban));
+            toast.galat('Gagal menyimpan rekening: ' + alasanPenolakan(res, jawaban));
             return;
         }
-        alert("Rekening disimpan. Dana diproses Admin.");
+        toast.sukses('Rekening disimpan. Dana diproses admin.');
         setModalType('NONE');
         router.refresh();
-      } catch {
-        alert('Error Server');
+      } catch (galat) {
+        console.error('Gagal menyimpan rekening refund:', galat);
+        toast.galat('Server tidak dapat dihubungi. Rekening belum tersimpan.');
       } finally {
         setLoading(false);
       }

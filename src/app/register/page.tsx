@@ -5,11 +5,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+import { useToast } from '@/components/ui/Toast';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
 export default function RegisterPage() {
   const router = useRouter();
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -49,7 +51,12 @@ export default function RegisterPage() {
         const jawaban = await bacaJawaban(res);
 
         if (res.ok) {
-            alert(jawaban.pesan ?? "Pendaftaran Berhasil! Silakan Login.");
+            // `alert` di sini MEMBEKUKAN tab sampai OK ditekan, jadi navigasi ke
+            // halaman login di baris berikutnya tertunda tepat pada saat calon
+            // pengguna paling ingin dilanjutkan. Toast tidak menahan apa pun, dan
+            // tetap terbaca di halaman login karena `ToastProvider` dipasang di
+            // layout akar.
+            toast.sukses(jawaban.pesan ?? 'Pendaftaran berhasil. Silakan masuk.');
             router.push('/login'); // Arahkan ke login
         } else {
             // "Email sudah terpakai" dan "Password terlalu pendek" menuntut

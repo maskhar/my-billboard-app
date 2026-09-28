@@ -9581,9 +9581,13 @@ describe('halaman detail order admin — params Promise dan jawaban yang diperik
     // halaman dan klien tidak pernah menerima bukti tayangnya.
     assert.match(simpan[0], /if\s*\(!res\.ok\)/);
     const posisiPeriksa = simpan[0].indexOf('!res.ok');
-    const posisiAlertSukses = simpan[0].search(/alert\((?![`'"]Gagal)(?!\s*['"`]Pilih)/);
+    // `alert(...)` sudah diganti `toast.sukses(...)` (A3), jadi yang dicari
+    // sekarang pengumuman berhasil lewat toast. Urutannya tetap yang diuji:
+    // pemeriksaan `res.ok` harus mendahuluinya.
+    const posisiSukses = simpan[0].indexOf('toast.sukses(');
+    assert.ok(posisiSukses !== -1, 'pengumuman berhasil tidak ditemukan');
     assert.ok(
-      posisiPeriksa < posisiAlertSukses,
+      posisiPeriksa < posisiSukses,
       'res.ok harus diperiksa sebelum keberhasilan diumumkan'
     );
     // Bentuk lama membuang hasil `fetch` seluruhnya: `await fetch(...)` tanpa
@@ -9923,9 +9927,10 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
     assert.ok(simpan, 'handleSave tidak ditemukan');
     assert.match(simpan[0], /if\s*\(!res\.ok\)/);
     assert.match(simpan[0], /const res = await fetch\(/);
-    // Badan galat bisa bukan JSON (mis. halaman 500 dari proxy). Tanpa
-    // `.catch`, `json()` melempar dan alert-nya tidak pernah muncul.
-    assert.match(simpan[0], /await res\.json\(\)\.catch\(\(\) => null\)/);
+    // Badan galat bisa bukan JSON (mis. halaman 500 dari proxy). Penjaganya
+    // sekarang datang dari `bacaJawaban`, yang sekaligus membuang tipe `any`
+    // yang dulu dibawa `res.json().catch(() => null)`.
+    assert.match(simpan[0], /await bacaJawaban\(res\)/);
   });
 
   it('handleSave membersihkan loading di finally', () => {
@@ -9939,7 +9944,9 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
     const uji = kode.match(/const handleTestAI = useCallback\(async \(\) => \{[\s\S]*?\}, \[[^\]]*\]\);/);
     assert.ok(uji, 'handleTestAI tidak ditemukan');
     assert.match(uji[0], /if\s*\(!res\.ok\)/);
-    assert.match(uji[0], /await res\.json\(\)\.catch\(\(\) => null\)/);
+    // `bacaBadan`, bukan `bacaJawaban`: penangan ini perlu `aiResult`, dan
+    // `bacaJawaban` hanya membaca `message`/`url`.
+    assert.match(uji[0], /await bacaBadan\(res\)/);
     assert.match(uji[0], /finally\s*\{[\s\S]*?setAiLoading\(false\)/);
   });
 
@@ -9947,7 +9954,12 @@ describe('halaman pengaturan admin — jawaban server diperiksa sebelum dipercay
     // Bentuk lama `fetch(...).then(r => r.json()).catch(() => null)` menelan
     // badan 401 sebagai data sah, jadi pratinjau ter-mask bisa ditimpa nilai
     // kosong padahal key-nya masih tersimpan.
-    assert.match(kode, /resSegar\.ok\s*\?/);
+    // Gerbangnya kini `if (resSegar.ok) { ... }`, bukan ekspresi ternary:
+    // badannya perlu dua langkah (baca, lalu periksa bentuknya) karena
+    // `bacaBadan` memulangkan `{}` pada badan yang tidak terbaca — dan menulis
+    // `{}` ke state akan mengosongkan pratinjau key yang masih tersimpan.
+    assert.match(kode, /if \(resSegar\.ok\)/);
+    assert.match(kode, /'siteName' in isiSegar/);
     assert.doesNotMatch(kode, /\.then\(r\s*=>\s*r\.json\(\)\)/);
   });
 
@@ -10169,10 +10181,13 @@ describe('StatusChanger: menu pengubah status memakai tombol, bukan tautan palsu
     );
     // Balasan 500 berbadan HTML membuat `await res.json()` melempar; lemparannya
     // mendarat di `catch` dan mencetak pesan generik, menutupi keterangan asli.
-    assert.match(fungsi, /await res\.json\(\)\.catch\(\(\) => null\)/);
+    assert.match(fungsi, /await bacaJawaban\(res\)/);
     assert.doesNotMatch(fungsi, /await res\.json\(\);/);
     assert.match(fungsi, /if \(!res\.ok\)/);
-    assert.match(fungsi, /data\?\.message/);
+    // Dulu `data?.message` bertipe `any`. Pesan penolakan kini diambil lewat
+    // `alasanPenolakan`, yang selalu punya teks cadangan menyebut status HTTP —
+    // jadi "Gagal: undefined" tidak mungkin lagi terbaca.
+    assert.match(fungsi, /alasanPenolakan\(res, jawaban\)/);
   });
 
   it('loading dibereskan langsung di finally, tanpa setTimeout kosmetik', () => {
@@ -10955,7 +10970,16 @@ describe('temuan lint yang sudah dibereskan', () => {
     const jalur = akar('src', 'app', 'admin', '(dashboard)', 'billboards', 'form', 'page.tsx');
     const kode = kodeSajaLint(jalur);
     assert.match(kode, /useState\(Boolean\(billboardId\)\)/);
-    assert.doesNotMatch(kode, /setFetching\(true\)/);
+
+    // Yang dilarang adalah `setFetching(true)` DI DALAM effect-nya, bukan di
+    // seluruh berkas: `handleRollback` dan `handleSubmit` memanggilnya dari
+    // penangan peristiwa, bersama `setPemuatanKe`, untuk mengambil ulang data
+    // setelah penyimpanan. Itu bukan render berantai — ia dipicu klik, bukan
+    // render.
+    const mulaiEfek = kode.indexOf('useEffect(() => {');
+    const akhirEfek = kode.indexOf('const handleChange');
+    assert.ok(mulaiEfek !== -1 && akhirEfek > mulaiEfek, 'blok effect tidak ditemukan');
+    assert.doesNotMatch(kode.slice(mulaiEfek, akhirEfek), /setFetching\(true\)/);
   });
 
   it('LocationVisualizer memuat Leaflet lewat import dinamis', () => {
@@ -12827,10 +12851,10 @@ describe('form pengguna bertipe dan komponen isian disatukan', () => {
     // `await res.json()` tanpa penjaga melempar SyntaxError pada respons 500
     // yang berisi halaman HTML — galat itu menggantikan pesan server yang
     // sebenarnya, dan admin membaca "Unexpected token <".
-    assert.match(kode, /await res\.json\(\)\.catch\(\(\) => null\)/);
+    assert.match(kode, /await bacaJawaban\(res\)/);
     assert.ok(
       !/const errorData = await res\.json\(\);/.test(kode),
-      'res.json() tanpa .catch() masih ada'
+      'res.json() tanpa penjaga masih ada'
     );
   });
 
@@ -14197,5 +14221,465 @@ describe('A2: gambar, binding mati, dan dependensi effect', () => {
     assert.ok(baris, 'baris require node:test tidak ditemukan');
     assert.ok(!/\btest\b/.test(baris.slice(0, baris.indexOf('require'))));
     assert.match(baris, /describe, it, beforeEach, afterEach/);
+  });
+});
+
+// ============================================================================
+// A3 — `alert`/`confirm`/`prompt` bawaan peramban habis dari `src/`
+// ============================================================================
+//
+// KENAPA SUITE INI ADA
+// --------------------
+// Dialog bawaan peramban punya empat masalah yang tidak bisa ditambal:
+//
+//   1. `alert` MEMBEKUKAN seluruh tab sampai OK ditekan. Socket chat admin
+//      berhenti menerima pesan, dan `router.refresh()` yang sedang berjalan
+//      tertahan tepat pada saat ia paling dibutuhkan.
+//   2. Peramban boleh menekan dialog kedua dan seterusnya ("Jangan tampilkan
+//      lagi"). Sesudah itu `confirm()` memulangkan `false` tanpa pernah
+//      terlihat, jadi tombol berhenti bekerja tanpa satu pun tanda.
+//   3. Tampilannya tidak bisa diatur sama sekali, jadi tidak ada yang
+//      membedakan "tersimpan" dari "terhapus permanen".
+//   4. `alert(objek)` mencetak "[object Object]".
+//
+// BAHAYA MIGRASINYA
+// -----------------
+// `confirm()`/`prompt()` SINKRON dan memulangkan nilai. Penggantinya tidak
+// bisa: ia memulangkan `Promise`. Bila `await` terlupa, `Promise` selalu
+// truthy — penjaga hasilnya tidak pernah berhenti dan tindakan destruktifnya
+// berjalan tanpa pernah disetujui siapa pun. Tes "setiap pemanggilan didahului
+// `await`" di bawah adalah yang menahan itu.
+describe('A3: dialog bawaan peramban diganti Toast dan Konfirmasi', () => {
+  const AKAR_SRC_A3 = path.join(__dirname, '..', 'src');
+  const JALUR_TOAST = path.join(AKAR_SRC_A3, 'components', 'ui', 'Toast.tsx');
+  const JALUR_KONFIRMASI = path.join(AKAR_SRC_A3, 'components', 'ui', 'Konfirmasi.tsx');
+  const JALUR_PROVIDERS = path.join(AKAR_SRC_A3, 'components', 'Providers.tsx');
+  const JALUR_GLOBALS_CSS = path.join(AKAR_SRC_A3, 'app', 'globals.css');
+  const JALUR_BACA_JAWABAN = path.join(AKAR_SRC_A3, 'lib', 'baca-jawaban.ts');
+
+  // Komentar DIBUANG lebih dulu. Suite ini memindai bentuk cacat yang sudah
+  // diperbaiki, dan komentar yang MENJELASKAN perbaikannya menyebut bentuk
+  // cacat itu apa adanya — tanpa penghapus ini setiap penjelasan menjatuhkan
+  // tesnya sendiri.
+  function kodeSajaA3(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  function semuaBerkasA3(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) {
+        semuaBerkasA3(penuh, hasil);
+        continue;
+      }
+      if (/\.(ts|tsx)$/.test(entri.name)) hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  function rel(jalur) {
+    return path.relative(AKAR_SRC_A3, jalur).replace(/\\/g, '/');
+  }
+
+  // --- Tidak ada lagi dialog bawaan ----------------------------------------
+
+  it('nol `alert`/`confirm`/`prompt` bawaan di seluruh src/', () => {
+    const pelanggar = [];
+
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      const kode = kodeSajaA3(jalur);
+
+      // `(?<![.\w$])` menjaga agar `konfirmasi(`, `setConfirmPassword(`, dan
+      // `confirmPassword` TIDAK ikut tertangkap: yang dicari adalah pemanggilan
+      // fungsi global bernama persis `alert`, `confirm`, atau `prompt`.
+      for (const cocok of kode.matchAll(/(?<![.\w$])(alert|confirm|prompt)\s*\(/g)) {
+        pelanggar.push(rel(jalur) + ': ' + cocok[1]);
+      }
+      // Lewat `window.` sama buruknya, jadi diperiksa terpisah.
+      for (const cocok of kode.matchAll(/window\s*\.\s*(alert|confirm|prompt)\s*\(/g)) {
+        pelanggar.push(rel(jalur) + ': window.' + cocok[1]);
+      }
+    }
+
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'dialog bawaan membekukan tab dan bisa ditekan permanen oleh peramban'
+    );
+  });
+
+  it('nol `location.reload()` di seluruh src/', () => {
+    // Memuat ulang seluruh dokumen mengunduh kembali seluruh bundel JS dan
+    // membuang state komponen lain di layout — sidebar admin, notifikasi, dan
+    // koneksi socket chat ikut mati. `router.refresh()` (atau, untuk data yang
+    // diambil sendiri oleh Client Component, menaikkan kunci pemuatan) hanya
+    // mengambil ulang datanya.
+    const pelanggar = [];
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (/location\s*\.\s*reload\s*\(/.test(kodeSajaA3(jalur))) pelanggar.push(rel(jalur));
+    }
+    assert.deepEqual(pelanggar, [], 'muat ulang penuh membuang state seluruh halaman');
+  });
+
+  // --- Bahaya `await` yang terlupa -----------------------------------------
+
+  it('setiap pemanggilan `konfirmasi(` didahului `await`', () => {
+    // INI tes terpenting di suite ini. `Promise` selalu truthy, jadi penjaga
+    // hasil tanpa `await` TIDAK PERNAH berhenti: pesanan dibatalkan, billboard
+    // dihapus, dan pembayaran dicatat tanpa satu pun persetujuan.
+    const pelanggar = [];
+
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (jalur === JALUR_KONFIRMASI) continue; // definisinya sendiri
+      const kode = kodeSajaA3(jalur);
+
+      for (const cocok of kode.matchAll(/konfirmasi\s*\(/g)) {
+        const sebelum = kode.slice(Math.max(0, cocok.index - 40), cocok.index);
+        // Deklarasi hook-nya sendiri (`useKonfirmasi()`) bukan pemanggilan.
+        if (/useKonfirmasi\s*$/.test(sebelum)) continue;
+        if (!/\bawait\s+$/.test(sebelum)) {
+          pelanggar.push(rel(jalur) + ': ' + sebelum.trimStart());
+        }
+      }
+    }
+
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'tanpa `await`, Promise selalu truthy dan aksi destruktif lolos tanpa persetujuan'
+    );
+  });
+
+  it('setiap berkas yang meng-`await` konfirmasi punya fungsi `async`', () => {
+    // `await` di dalam fungsi non-`async` adalah galat sintaks, jadi `tsc`
+    // sudah menahannya. Tes ini menahan sisi lainnya: berkas yang meng-`await`
+    // tanpa satu pun fungsi `async` berarti penangannya belum diubah.
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (jalur === JALUR_KONFIRMASI) continue;
+      const kode = kodeSajaA3(jalur);
+      if (!/await\s+konfirmasi\s*\(/.test(kode)) continue;
+      assert.match(
+        kode,
+        /async\s*\(|async\s+function|async\s+\w+\s*\(/,
+        rel(jalur) + ': memakai await tanpa satu pun fungsi async'
+      );
+    }
+  });
+
+  it('pemanggil yang mengirim `isian` menjaga hasilnya dengan pemeriksaan tipe', () => {
+    // Kontrak `tanya()`: `true`/`false` tanpa `isian`; teks terpangkas atau
+    // `null` dengan `isian`. Pemanggil yang menjaga dengan truthiness KEBETULAN
+    // benar — teks kosong tidak pernah pulang karena `wajib` menahan tombolnya
+    // — tapi benar karena kebetulan, bukan karena tipenya. Begitu `wajib: false`
+    // dipakai suatu hari, teks kosong pulang dan penjaga itu membatalkan aksi
+    // yang sah.
+    const pelanggar = [];
+
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (jalur === JALUR_KONFIRMASI) continue;
+      const kode = kodeSajaA3(jalur);
+      let dari = 0;
+      for (;;) {
+        const mulai = kode.indexOf('await konfirmasi(', dari);
+        if (mulai === -1) break;
+        dari = mulai + 1;
+
+        const tutup = kode.indexOf('});', mulai);
+        if (tutup === -1) continue;
+        const blok = kode.slice(mulai, tutup);
+        if (!/\bisian\s*:/.test(blok)) continue;
+
+        const sesudah = kode.slice(tutup, tutup + 220);
+        if (!/typeof\s+\w+\s*!==\s*'string'/.test(sesudah)) pelanggar.push(rel(jalur));
+      }
+    }
+
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'hasil `isian` wajib dijaga dengan pemeriksaan tipe, bukan truthiness'
+    );
+  });
+
+  // --- Toast ---------------------------------------------------------------
+
+  it('toast galat TIDAK PERNAH hilang sendiri', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    const peta = kode.slice(kode.indexOf('UMUR_TOAST_MS'), kode.indexOf('MAKS_TOAST'));
+    // Pesan galat adalah satu-satunya yang menuntut tindakan. Membuatnya hilang
+    // setelah beberapa detik berarti pengguna yang sedang melihat ke tempat lain
+    // tidak pernah tahu aksinya gagal.
+    assert.match(peta, /galat:\s*null/);
+    assert.match(peta, /sukses:\s*\d+/);
+    assert.match(peta, /info:\s*\d+/);
+  });
+
+  it('dua wilayah aria-live terpisah, assertive untuk galat', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    // Satu wilayah `polite` untuk semuanya membuat galat menunggu antrean
+    // pembacaan; satu wilayah `assertive` untuk semuanya memotong pembacaan
+    // pengguna pada setiap "tersimpan". Karena itu dua.
+    assert.match(kode, /aria-live="assertive"/);
+    assert.match(kode, /aria-live="polite"/);
+    assert.match(kode, /role=\{toast\.nada === 'galat' \? 'alert' : 'status'\}/);
+  });
+
+  it('id toast monoton, bukan `Date.now()`', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    // Dua toast pada milidetik yang sama mendapat `key` React yang sama, dan
+    // React menganggapnya satu elemen: yang kedua tidak pernah muncul.
+    assert.match(kode, /idBerikut\s*=\s*useRef\(0\)/);
+    assert.match(kode, /idBerikut\.current\s*\+=\s*1/);
+    assert.ok(!/Date\.now\(\)/.test(kode), 'id berbasis waktu menabrakkan key React');
+  });
+
+  it('timer toast dibersihkan saat provider dilepas', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    assert.match(kode, /useEffect/);
+    assert.match(kode, /clearTimeout/);
+  });
+
+  it('teks toast tetap terbaca utuh: multi-baris dan kata panjang dipatahkan', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    // Pesan server memuat baris kedua (mis. nominal) dan bisa memuat satu kata
+    // sangat panjang (URL). Tanpa kedua kelas ini yang pertama menjadi satu
+    // baris panjang dan yang kedua meluber keluar kartunya.
+    assert.match(kode, /whitespace-pre-line/);
+    assert.match(kode, /break-words/);
+  });
+
+  it('useToast melempar di luar provider, bukan memulangkan no-op', () => {
+    const kode = kodeSajaA3(JALUR_TOAST);
+    const hook = kode.slice(kode.indexOf('export function useToast'));
+    // No-op yang diam membuat toast hilang tanpa jejak di komponen yang lupa
+    // dipasang di bawah provider — kegagalan yang hanya terlihat di produksi.
+    assert.match(hook, /throw new Error/);
+  });
+
+  // --- Konfirmasi ----------------------------------------------------------
+
+  it('Escape dan klik luar tetap MENYELESAIKAN promise-nya', () => {
+    const kode = kodeSajaA3(JALUR_KONFIRMASI);
+    // `Dialog` menutup sendiri pada Escape dan klik luar. Bila `onClose` tidak
+    // menjawab promise-nya, `await` di pemanggil menggantung SELAMANYA:
+    // tombolnya tetap berputar dan tidak ada aksi berikutnya yang bisa jalan.
+    assert.match(kode, /onClose=\{\(\) => jawab\(isian \? null : false\)\}/);
+    // Penyelesaiannya dipegang di ref, bukan hanya di state: `jawab` dipanggil
+    // dari penangan yang tidak ikut render ulang.
+    assert.match(kode, /tertundaRef\s*=\s*useRef/);
+  });
+
+  it('dialog kedua saat satu masih terbuka dijawab `null`, bukan menggantung', () => {
+    const kode = kodeSajaA3(JALUR_KONFIRMASI);
+    assert.match(kode, /if \(tertundaRef\.current\) return Promise\.resolve/);
+  });
+
+  it('`isian` wajib diisi secara bawaan', () => {
+    const kode = kodeSajaA3(JALUR_KONFIRMASI);
+    // Ketiga `prompt()` yang diganti semuanya mengirim alasan ke pembeli atau ke
+    // catatan pesanan. Alasan kosong membuat pembeli yang ditolak tidak tahu apa
+    // yang harus diperbaiki.
+    assert.match(kode, /isian\.wajib !== false/);
+    assert.match(kode, /bolehSetuju\s*=\s*!isian \|\| !wajib \|\| isi\.trim\(\) !== ''/);
+  });
+
+  it('useKonfirmasi melempar di luar provider', () => {
+    const kode = kodeSajaA3(JALUR_KONFIRMASI);
+    const hook = kode.slice(kode.indexOf('export function useKonfirmasi'));
+    // Konsekuensinya lebih berat daripada di `useToast`: no-op yang memulangkan
+    // penolakan membuat setiap aksi destruktif diam-diam tidak berjalan, dan
+    // no-op yang memulangkan persetujuan membuat semuanya berjalan tanpa
+    // seorang pun menekan apa pun.
+    assert.match(hook, /throw new Error/);
+  });
+
+  it('bahaya `await` yang terlupa tertulis di berkasnya sendiri', () => {
+    // Dibaca dari isi MENTAH: inilah satu-satunya tes di suite ini yang
+    // memeriksa komentar, karena yang dijaga adalah peringatan untuk pemelihara
+    // berikutnya, bukan kodenya.
+    const mentah = fs.readFileSync(JALUR_KONFIRMASI, 'utf8');
+    assert.match(mentah, /truthy/);
+    assert.match(mentah, /destruktif/);
+  });
+
+  // --- Providers -----------------------------------------------------------
+
+  it('ToastProvider membungkus KonfirmasiProvider, di dalam SessionProvider', () => {
+    const kode = kodeSajaA3(JALUR_PROVIDERS);
+    const iSession = kode.indexOf('<SessionProvider');
+    const iToast = kode.indexOf('<ToastProvider');
+    const iKonfirmasi = kode.indexOf('<KonfirmasiProvider');
+
+    assert.ok(iSession !== -1 && iToast !== -1 && iKonfirmasi !== -1);
+    // Urutannya bukan selera: toast yang melaporkan aksi yang BARU disetujui
+    // harus tergambar di atas dialog yang sedang menutup, dan itu menuntut
+    // `ToastProvider` berada di LUAR.
+    assert.ok(iSession < iToast, 'provider sesi harus paling luar');
+    assert.ok(iToast < iKonfirmasi, 'ToastProvider harus di luar KonfirmasiProvider');
+  });
+
+  it('Providers dipasang di layout akar, jadi toast selamat dari navigasi', () => {
+    const kode = kodeSajaA3(path.join(AKAR_SRC_A3, 'app', 'layout.tsx'));
+    // Beberapa alur menampilkan toast lalu langsung berpindah halaman. Bila
+    // provider-nya hidup di bawah satu halaman saja, toast itu ikut dilepas
+    // sebelum sempat terbaca.
+    assert.match(kode, /<Providers>/);
+  });
+
+  // --- Animasi yang dipakai dialog dan toast -------------------------------
+
+  it('setiap kelas animasi yang dipakai punya definisinya di globals.css', () => {
+    const css = fs.readFileSync(JALUR_GLOBALS_CSS, 'utf8');
+
+    // Nama-nama ini berasal dari plugin `tailwindcss-animate`, dan
+    // `tailwind.config.ts` di repo ini berbunyi `plugins: []`. Tailwind
+    // membuang kelas yang tidak dikenalnya TANPA memperingatkan apa pun, jadi
+    // dua belas pemakainya selama ini muncul memotong seketika.
+    for (const kelas of [
+      'animate-in',
+      'fade-in',
+      'zoom-in',
+      'zoom-in-95',
+      'slide-in-from-top-2',
+      'slide-in-from-bottom',
+      'slide-in-from-bottom-2',
+      'slide-in-from-bottom-4',
+      'slide-in-from-bottom-10',
+    ]) {
+      assert.ok(css.includes('.' + kelas + ' {'), 'kelas .' + kelas + ' tidak terdefinisi');
+    }
+
+    // Satu keyframe membaca KETIGA variabel, supaya kelasnya bisa digabung —
+    // `animate-in fade-in zoom-in` menjalankan keduanya, bukan yang terakhir
+    // menang.
+    assert.match(css, /@keyframes masuk/);
+    assert.match(css, /--mulai-opasitas/);
+    assert.match(css, /--mulai-skala/);
+    assert.match(css, /--mulai-y/);
+  });
+
+  it('gerak dikurangi menghasilkan keadaan akhir seketika', () => {
+    const css = fs.readFileSync(JALUR_GLOBALS_CSS, 'utf8');
+    // `motion-reduce:` dari Tailwind hanya berlaku pada elemen yang
+    // menuliskannya. Aturan global ini berlaku untuk semua pemakai
+    // `animate-in`, termasuk yang ditulis sebelum berkas ini disentuh.
+    assert.match(css, /@media \(prefers-reduced-motion: reduce\)/);
+    const blok = css.slice(css.indexOf('prefers-reduced-motion'));
+    assert.match(blok, /\.animate-in\s*\{\s*animation:\s*none;/);
+  });
+
+  // --- Pembacaan jawaban server -------------------------------------------
+
+  it('tidak ada lagi `res.json().catch(...)` mentah di src/', () => {
+    // Hasilnya bertipe `any`, jadi setiap salah tulis nama kolom lolos `tsc`
+    // dan pesan server yang sebenarnya tidak pernah terlihat — padahal itulah
+    // pesan yang paling dibutuhkan ("billboard masih punya pesanan aktif",
+    // "hanya SUPER_ADMIN boleh mengangkat SUPER_ADMIN").
+    //
+    // Dua berkas dikecualikan, dan keduanya BUKAN kelonggaran: cacatnya adalah
+    // `any`, bukan bentuk pemanggilannya, dan keduanya sudah menyempitkan
+    // tipenya sendiri lebih ketat daripada `bacaBadan`.
+    //
+    //   - `PaymentClient.tsx` menulis `const body: unknown = ...`, lalu
+    //     memeriksa delapan kolom sesi satu per satu sebelum menyerahkannya ke
+    //     SDK Xendit. `bacaBadan` memulangkan `{}` pada badan yang tidak
+    //     terbaca, dan `{}` di sana mustahil dibedakan dari sesi yang ditolak.
+    //   - `chat/suggest/route.ts` berjalan di SERVER dan membaca balasan Gemini,
+    //     bukan route repo ini. `bacaJawaban` membaca `message`/`url` yang tidak
+    //     ada di balasan Gemini, dan `.catch`-nya di sana mencatat galatnya.
+    const DIKECUALIKAN = [
+      'app/dashboard/order/[id]/payment/PaymentClient.tsx',
+      'app/api/admin/chat/suggest/route.ts',
+    ];
+
+    const pelanggar = [];
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (jalur === JALUR_BACA_JAWABAN) continue; // pembaca bersamanya sendiri
+      if (DIKECUALIKAN.includes(rel(jalur))) continue;
+      if (/\.json\(\)\s*\.catch\(/.test(kodeSajaA3(jalur))) pelanggar.push(rel(jalur));
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'pakai `bacaJawaban`/`bacaBadan` dari src/lib/baca-jawaban.ts'
+    );
+
+    // Pengecualian di atas berlaku HANYA selama keduanya masih menyempitkan
+    // tipenya sendiri. Tanpa penjaga ini, `unknown` bisa berubah menjadi `any`
+    // suatu hari dan pengecualiannya menjadi lubang yang sah menurut tes.
+    for (const relatif of DIKECUALIKAN) {
+      const kode = kodeSajaA3(path.join(AKAR_SRC_A3, ...relatif.split('/')));
+      assert.ok(!/\bany\b/.test(kode), relatif + ': pengecualian tidak boleh memuat any');
+    }
+  });
+
+  it('tidak ada `catch` tanpa pengikat yang melaporkan lewat toast', () => {
+    // `catch { toast.galat('Error Server'); }` membuang satu-satunya keterangan
+    // tentang APA yang gagal — jaringan mati, CORS, permintaan dibatalkan — dan
+    // tidak menyisakan jejak di console maupun di layar.
+    const pelanggar = [];
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      const kode = kodeSajaA3(jalur);
+      if (!/toast\.galat/.test(kode)) continue;
+      for (const cocok of kode.matchAll(/catch\s*\{([\s\S]{0,300}?)\n\s*\}/g)) {
+        if (/toast\.galat/.test(cocok[1])) pelanggar.push(rel(jalur));
+      }
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'catch tanpa pengikat membuang penyebabnya; pakai `catch (galat)` + console.error'
+    );
+  });
+
+  // --- Pesan konfirmasi menyebut konsekuensinya ----------------------------
+
+  it('setiap konfirmasi bernada `bahaya` punya label setuju sendiri', () => {
+    // "OK" tidak menyebutkan apa pun. Label yang menyebut aksinya ("Hapus
+    // Permanen", "Batalkan Paksa") adalah satu-satunya teks yang pasti dibaca
+    // orang yang sedang bergegas.
+    const pelanggar = [];
+    for (const jalur of semuaBerkasA3(AKAR_SRC_A3)) {
+      if (jalur === JALUR_KONFIRMASI) continue;
+      const kode = kodeSajaA3(jalur);
+      let dari = 0;
+      for (;;) {
+        const mulai = kode.indexOf('await konfirmasi(', dari);
+        if (mulai === -1) break;
+        dari = mulai + 1;
+        const tutup = kode.indexOf('});', mulai);
+        const blok = kode.slice(mulai, tutup === -1 ? mulai + 1200 : tutup);
+        if (/nada:\s*'bahaya'/.test(blok) && !/labelSetuju:/.test(blok)) {
+          pelanggar.push(rel(jalur));
+        }
+      }
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'aksi destruktif wajib punya label tombol yang menyebutkan aksinya'
+    );
+  });
+
+  it('rollback billboard menyebutkan revisi mana yang dipulihkan', () => {
+    // Pesan lamanya adalah sebuah template literal tanpa satu pun interpolasi,
+    // dan tidak menyebut revisi mana pun. Admin yang menekan "Restore" pada
+    // baris keempat dari sepuluh tidak punya cara memastikan baris itulah yang
+    // ditekannya.
+    const kode = kodeSajaA3(
+      path.join(AKAR_SRC_A3, 'app', 'admin', '(dashboard)', 'billboards', 'form', 'page.tsx')
+    );
+    const mulai = kode.indexOf('const handleRollback');
+    const blok = kode.slice(mulai, kode.indexOf('if (!setuju) return;', mulai));
+    assert.match(blok, /historyItem\.archivedAt/);
+    assert.match(blok, /historyItem\.changedBy/);
+    assert.match(blok, /DITIMPA/);
   });
 });

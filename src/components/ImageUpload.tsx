@@ -6,6 +6,7 @@ import { CldUploadWidget, type CloudinaryUploadWidgetResults } from 'next-cloudi
 // di berkas ini.
 import { Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { useToast } from '@/components/ui/Toast';
 
 interface ImageUploadProps {
     value: string;
@@ -24,6 +25,7 @@ interface ImageUploadProps {
 }
 
 export default function ImageUpload({ value, onChange, label = "Upload Gambar" }: ImageUploadProps) {
+    const toast = useToast();
     const [loading, setLoading] = useState(false);
     const [mounted, setMounted] = useState(false);
     
@@ -45,12 +47,12 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
     const onCloudUpload = (result: CloudinaryUploadWidgetResults) => {
         const info = result.info;
         if (typeof info !== 'object' || info === null) {
-            alert('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
+            toast.galat('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
             return;
         }
         const tautan = info.secure_url;
         if (typeof tautan !== 'string' || tautan.trim() === '') {
-            alert('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
+            toast.galat('Unggahan Cloudinary tidak memulangkan tautan gambar. Coba lagi.');
             return;
         }
         onChange(tautan);
@@ -86,7 +88,7 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
 
         if (file.size > 10 * 1024 * 1024) {
             kotak.value = '';
-            alert('File terlalu besar! Maksimal 10MB.');
+            toast.galat('Berkas terlalu besar. Maksimal 10 MB.');
             return;
         }
 
@@ -99,16 +101,17 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
             const jawaban = await bacaJawaban(res);
 
             if (!res.ok) {
-                alert('Gagal Upload Lokal: ' + alasanPenolakan(res, jawaban));
+                toast.galat('Unggahan gagal: ' + alasanPenolakan(res, jawaban));
                 return;
             }
             if (!jawaban.url) {
-                alert('Berkas terunggah, tapi server tidak memulangkan tautannya. Coba unggah ulang.');
+                toast.galat('Berkas terunggah, tapi server tidak memulangkan tautannya. Coba unggah ulang.');
                 return;
             }
             onChange(jawaban.url); // Simpan path lokal
-        } catch {
-            alert("Error sistem upload");
+        } catch (galat) {
+            console.error('Gagal mengunggah gambar ke server lokal:', galat);
+            toast.galat('Server tidak dapat dihubungi. Berkas belum terunggah.');
         } finally {
             // Di `finally`: setiap `return` lebih awal di atas melewati baris
             // ini bila ia diletakkan di akhir fungsi, dan area unggah

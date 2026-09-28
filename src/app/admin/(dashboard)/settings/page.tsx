@@ -31,9 +31,45 @@
 //      menyelamatkan apa pun. `pesanGalat` memeriksa bentuknya lebih dulu.
 import { useCallback, useEffect, useState } from 'react';
 import { AlertCircle, Save, Loader2, Bot, Key, Globe, CheckCircle2, Map } from 'lucide-react'; // Tambah icon Map
+import { useToast } from '@/components/ui/Toast';
+import { bacaBadan, bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
+// Bentuk yang dibaca dari GET /api/admin/settings, sudah tersempit.
+//
+// Dulu badannya dibaca `await res.json().catch(() => null)`, yang bertipe `any`:
+// `data.siteName`, `data.geminiApiKeyMasked`, dan setiap salah-tulis nama kolom
+// lolos dari `tsc`. Salah tulis `geminiApiKeyMaskd` akan selalu menghasilkan
+// `undefined`, jadi pratinjau key-nya hilang dari layar tanpa satu pun
+// peringatan — dan itulah satu-satunya petunjuk yang dimiliki admin tentang key
+// mana yang sekarang tersimpan.
+//
+// Nilai key-nya sendiri tidak ada di daftar ini dan memang tidak pernah
+// dikirim server: hanya penanda `*Set` dan pratinjau 4 karakter `*Masked`.
+type SetelanTerbaca = {
+  siteName: string;
+  siteDesc: string;
+  geminiApiKeySet: boolean;
+  geminiApiKeyMasked: string | null;
+  googleMapsApiKeySet: boolean;
+  googleMapsApiKeyMasked: string | null;
+};
+
+function bacaSetelan(isi: Record<string, unknown>): SetelanTerbaca {
+  const teks = (nilai: unknown) => (typeof nilai === 'string' ? nilai : '');
+  const teksAtauNull = (nilai: unknown) => (typeof nilai === 'string' ? nilai : null);
+  return {
+    siteName: teks(isi.siteName),
+    siteDesc: teks(isi.siteDesc),
+    geminiApiKeySet: isi.geminiApiKeySet === true,
+    geminiApiKeyMasked: teksAtauNull(isi.geminiApiKeyMasked),
+    googleMapsApiKeySet: isi.googleMapsApiKeySet === true,
+    googleMapsApiKeyMasked: teksAtauNull(isi.googleMapsApiKeyMasked),
+  };
+}
+
 export default function SettingsPage() {
+  const toast = useToast();
   const [loading, setLoading] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiResult, setAiResult] = useState("");
@@ -80,26 +116,32 @@ export default function SettingsPage() {
               // `res.ok` diperiksa LEBIH DULU. Badan 401 adalah JSON yang sah,
               // jadi tanpa gerbang ini ia terbaca sebagai setelan kosong.
               if (!res.ok) {
-                  const isi = await res.json().catch(() => null);
+                  const jawaban = await bacaJawaban(res);
                   throw new Error(
-                      isi?.message ||
+                      jawaban.pesan ??
                           (res.status === 401
                               ? 'Hanya SUPER_ADMIN yang boleh membuka pengaturan sistem.'
                               : `Gagal memuat pengaturan (${res.status}).`)
                   );
               }
-              const data = await res.json().catch(() => null);
-              if (!data) throw new Error('Jawaban server tidak bisa dibaca.');
+              // `bacaBadan` memulangkan `{}` pada badan yang tidak terbaca, dan
+              // `{}` mustahil dibedakan dari setelan yang memang kosong. Karena
+              // itu badannya dibaca sekali lagi di sini: `siteName` selalu ada
+              // di jawaban route ini, jadi ketidakhadirannya berarti badannya
+              // bukan setelan.
+              const isi = await bacaBadan(res);
+              if (!('siteName' in isi)) throw new Error('Jawaban server tidak bisa dibaca.');
+              const data = bacaSetelan(isi);
               if (dibatalkan) return;
               setForm({
-                  siteName: data.siteName || "",
-                  siteDesc: data.siteDesc || "",
+                  siteName: data.siteName,
+                  siteDesc: data.siteDesc,
               });
               setKeyStatus({
-                  geminiApiKeySet: !!data.geminiApiKeySet,
-                  geminiApiKeyMasked: data.geminiApiKeyMasked ?? null,
-                  googleMapsApiKeySet: !!data.googleMapsApiKeySet,
-                  googleMapsApiKeyMasked: data.googleMapsApiKeyMasked ?? null,
+                  geminiApiKeySet: data.geminiApiKeySet,
+                  geminiApiKeyMasked: data.geminiApiKeyMasked,
+                  googleMapsApiKeySet: data.googleMapsApiKeySet,
+                  googleMapsApiKeyMasked: data.googleMapsApiKeyMasked,
               });
           } catch (galatMuat) {
               if (!dibatalkan) setGalat(pesanGalat(galatMuat, 'Gagal memuat pengaturan.'));
@@ -140,34 +182,48 @@ export default function SettingsPage() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload)
           });
-          const json = await res.json().catch(() => null);
+          // Kedua jalur — sukses dan penolakan — hanya membutuhkan `message`,
+          // jadi pembaca bersama ini cukup dan `json?.message` bertipe `any`
+          // yang dulu ada di sini lenyap bersamanya.
+          const jawaban = await bacaJawaban(res);
           if (!res.ok) {
-              throw new Error(json?.message || `Gagal menyimpan (${res.status}).`);
+              throw new Error(alasanPenolakan(res, jawaban));
           }
 
-          alert(json?.message || "Pengaturan Berhasil Disimpan!");
+          toast.sukses(jawaban.pesan ?? 'Pengaturan sistem tersimpan.');
 
           // Muat ulang status key agar pratinjau ter-mask ikut diperbarui,
           // lalu kosongkan field input supaya nilai baru tidak tertinggal di DOM.
           const resSegar = await fetch('/api/admin/settings');
-          const segar = resSegar.ok ? await resSegar.json().catch(() => null) : null;
-          if (segar) {
-              setKeyStatus({
-                  geminiApiKeySet: !!segar.geminiApiKeySet,
-                  geminiApiKeyMasked: segar.geminiApiKeyMasked ?? null,
-                  googleMapsApiKeySet: !!segar.googleMapsApiKeySet,
-                  googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked ?? null,
-              });
+          if (resSegar.ok) {
+              const isiSegar = await bacaBadan(resSegar);
+              // Gerbang yang sama seperti di pemuatan awal: badan yang tidak
+              // terbaca memulangkan `{}`, dan menulisnya ke state akan MENGOSONGKAN
+              // pratinjau key yang sebenarnya masih tersimpan di database — admin
+              // lalu menyangka penyimpanannya menghapus key-nya.
+              if ('siteName' in isiSegar) {
+                  const segar = bacaSetelan(isiSegar);
+                  setKeyStatus({
+                      geminiApiKeySet: segar.geminiApiKeySet,
+                      geminiApiKeyMasked: segar.geminiApiKeyMasked,
+                      googleMapsApiKeySet: segar.googleMapsApiKeySet,
+                      googleMapsApiKeyMasked: segar.googleMapsApiKeyMasked,
+                  });
+              }
           }
           setNewKeys({ geminiApiKey: "", googleMapsApiKey: "" });
       } catch (galatSimpan) {
-          alert('Gagal menyimpan: ' + pesanGalat(galatSimpan, 'galat tidak diketahui'));
+          // Nilai API key TIDAK pernah ikut tercatat di sini: yang di-log adalah
+          // galatnya, dan galatnya hanya membawa pesan server atau pesan
+          // jaringan. Muatan permintaan tidak disentuh.
+          console.error('Gagal menyimpan pengaturan sistem:', galatSimpan);
+          toast.galat('Gagal menyimpan: ' + pesanGalat(galatSimpan, 'galat tidak diketahui'));
       } finally {
           // Di `finally`, bukan di baris terakhir fungsi: `await res.json()`
           // yang melempar dulu meninggalkan tombol berputar tanpa akhir.
           setLoading(false);
       }
-  }, [form, newKeys, loading]);
+  }, [form, newKeys, loading, toast]);
 
   // Key boleh diuji bila sudah tersimpan di server ATAU admin sedang mengetik
   // kandidat key baru. Bila field kosong, API memakai key tersimpan di database
@@ -175,7 +231,10 @@ export default function SettingsPage() {
   const bisaTestAI = keyStatus.geminiApiKeySet || newKeys.geminiApiKey.trim() !== "";
 
   const handleTestAI = useCallback(async () => {
-      if(!bisaTestAI) return alert("Masukkan API Key dulu!");
+      if (!bisaTestAI) {
+          toast.galat('Masukkan Gemini API Key dulu, atau simpan satu di server.');
+          return;
+      }
       if (aiLoading) return;
       setAiLoading(true); setAiResult("");
       const body: Record<string, string> = { action: 'TEST_AI' };
@@ -188,24 +247,31 @@ export default function SettingsPage() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(body)
           });
-          const json = await res.json().catch(() => null);
+          // `bacaBadan`, bukan `bacaJawaban`: jalur ini butuh `aiResult`, yang
+          // bukan salah satu dari dua kolom yang dibaca pembaca ringkas itu.
+          // Nilainya `unknown`, jadi pemeriksaan `typeof` di bawah wajib — dan
+          // itulah bedanya dengan `json?.aiResult` bertipe `any` yang dulu ada
+          // di sini.
+          const isi = await bacaBadan(res);
           if (!res.ok) {
-              throw new Error(json?.message || `Gagal menguji AI (${res.status}).`);
+              const pesan = typeof isi.message === 'string' ? isi.message : null;
+              throw new Error(pesan ?? `Gagal menguji AI (${res.status}).`);
           }
           // `aiResult` bisa tidak ada walaupun statusnya 200 (mis. proxy yang
           // memotong badan). Menyetel `undefined` membuat panel hasil hilang
           // tanpa keterangan, jadi turunkan ke pesan yang jujur.
           setAiResult(
-              typeof json?.aiResult === 'string' && json.aiResult !== ''
-                  ? json.aiResult
+              typeof isi.aiResult === 'string' && isi.aiResult !== ''
+                  ? isi.aiResult
                   : 'Server menjawab berhasil tanpa teks hasil.'
           );
       } catch (galatUji) {
-          alert('Gagal: ' + pesanGalat(galatUji, 'galat tidak diketahui'));
+          console.error('Gagal menguji Gemini API key:', galatUji);
+          toast.galat('Gagal menguji AI: ' + pesanGalat(galatUji, 'galat tidak diketahui'));
       } finally {
           setAiLoading(false);
       }
-  }, [bisaTestAI, aiLoading, newKeys]);
+  }, [bisaTestAI, aiLoading, newKeys, toast]);
 
   // Gagal memuat ditampilkan sebagai penolakan, BUKAN sebagai form kosong.
   // Form kosong adalah klaim ("belum ada setelan") yang halaman ini tidak

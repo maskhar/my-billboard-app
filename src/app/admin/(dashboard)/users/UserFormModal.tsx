@@ -5,6 +5,8 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, X } from 'lucide-react';
 import { InputField, SelectField } from '@/components/FormField';
+import { useToast } from '@/components/ui/Toast';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 import { OPSI_ROLE, sahRolePengguna, type RolePengguna } from '@/lib/tipe-pengguna';
 
@@ -31,6 +33,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
   const [formData, setFormData] = useState(FORM_KOSONG);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const toast = useToast();
 
   useEffect(() => {
     // Reset form when modal is opened
@@ -56,7 +59,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (formData.password !== formData.confirmPassword) {
-      alert('Password dan konfirmasi password tidak cocok.');
+      toast.galat('Password dan konfirmasinya tidak cocok.');
       return;
     }
     setLoading(true);
@@ -78,15 +81,20 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
         // `res.json()` melemparkan SyntaxError. Galat itu menggantikan pesan
         // server yang sebenarnya, jadi admin membaca "Unexpected token <"
         // untuk setiap kegagalan yang tidak sempat menulis badan JSON.
-        const hasil = await res.json().catch(() => null);
-        throw new Error(hasil?.message || 'Gagal membuat pengguna.');
+        // Penjaga itu sekarang hidup di `bacaJawaban`, satu tempat untuk
+        // seluruh repo, dan hasilnya bertipe — bukan `any` seperti
+        // `hasil?.message` yang dulu ada di sini.
+        const jawaban = await bacaJawaban(res);
+        throw new Error(alasanPenolakan(res, jawaban));
       }
 
-      alert('Pengguna baru berhasil dibuat.');
+      toast.sukses('Pengguna baru berhasil dibuat.');
       onClose(); // Close the modal on success
       router.refresh(); // Refresh the user list page
     } catch (error) {
-      alert(pesanGalat(error, 'Gagal membuat pengguna.'));
+      // Password tidak ikut tercatat: yang di-log hanya galatnya.
+      console.error('Gagal membuat pengguna baru:', error);
+      toast.galat(pesanGalat(error, 'Gagal membuat pengguna.'));
     } finally {
       setLoading(false);
     }

@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { InputField, SelectField } from '@/components/FormField';
+import { useToast } from '@/components/ui/Toast';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 import {
   OPSI_ROLE,
@@ -54,6 +56,7 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
 
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const toast = useToast();
 
   const handleBusinessSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -87,13 +90,19 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
       // data yang diubah" — dan admin dulu selalu membaca "Failed to update"
       // yang sama untuk semuanya.
       if (!res.ok) {
-        const hasil = await res.json().catch(() => null);
-        throw new Error(hasil?.message || 'Gagal menyimpan data bisnis.');
+        // `res.json().catch(() => null)` mentah membuat `hasil?.message`
+        // bertipe `any`, jadi salah tulis nama kolom lolos `tsc` dan pesan
+        // server yang berguna itu justru tidak pernah terlihat.
+        const jawaban = await bacaJawaban(res);
+        throw new Error(alasanPenolakan(res, jawaban));
       }
-      alert('Data bisnis berhasil disimpan.');
+      toast.sukses('Data bisnis berhasil disimpan.');
       router.refresh();
     } catch (error) {
-      alert(pesanGalat(error, 'Gagal menyimpan data bisnis.'));
+      // KTP dan NPWP tidak ikut tercatat: yang di-log hanya galatnya, dan
+      // galatnya hanya membawa pesan server.
+      console.error('Gagal menyimpan data bisnis pengguna:', error);
+      toast.galat(pesanGalat(error, 'Gagal menyimpan data bisnis.'));
     } finally {
       setLoading(false);
     }
@@ -118,8 +127,8 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
         }),
       });
       if (!res.ok) {
-        const hasil = await res.json().catch(() => null);
-        throw new Error(hasil?.message || 'Gagal menyimpan data akun.');
+        const jawaban = await bacaJawaban(res);
+        throw new Error(alasanPenolakan(res, jawaban));
       }
 
       // Kirim role hanya bila memang diubah, supaya penyimpanan biasa tidak
@@ -131,15 +140,19 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
           body: JSON.stringify({ userId: user.id, newRole: userAccount.role }),
         });
         if (!resRole.ok) {
-          const hasil = await resRole.json().catch(() => null);
-          throw new Error(hasil?.message || 'Gagal mengubah role.');
+          // Penolakan dari sini paling perlu dibaca utuh: "hanya SUPER_ADMIN
+          // boleh mengangkat SUPER_ADMIN" menuntut tindakan yang sama sekali
+          // berbeda dari "server mati".
+          const jawaban = await bacaJawaban(resRole);
+          throw new Error(alasanPenolakan(resRole, jawaban));
         }
       }
 
-      alert('Data akun berhasil disimpan.');
+      toast.sukses('Data akun berhasil disimpan.');
       router.refresh();
     } catch (error) {
-      alert(pesanGalat(error, 'Gagal menyimpan data akun.'));
+      console.error('Gagal menyimpan data akun pengguna:', error);
+      toast.galat(pesanGalat(error, 'Gagal menyimpan data akun.'));
     } finally {
       setLoading(false);
     }

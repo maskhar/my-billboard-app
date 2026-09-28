@@ -5,6 +5,8 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { InputField } from '@/components/FormField';
+import { useToast } from '@/components/ui/Toast';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
 // Halaman induk mengirim keempat kolom ini sebagai teks (`?? ''`), jadi tidak
@@ -31,6 +33,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
     const router = useRouter();
+    const toast = useToast();
 
     const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setProfileData({ ...profileData, [e.target.name]: e.target.value });
@@ -51,13 +54,17 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 body: JSON.stringify(profileData),
             });
             if (!res.ok) {
-                const error = await res.json().catch(() => null);
-                throw new Error(error?.message || 'Gagal memperbarui profil.');
+                // `res.json().catch(() => null)` mentah membuat `error?.message`
+                // bertipe `any`: setiap salah tulis nama kolom lolos `tsc` dan
+                // pesan server yang sebenarnya tidak pernah terlihat.
+                const jawaban = await bacaJawaban(res);
+                throw new Error(alasanPenolakan(res, jawaban));
             }
-            alert('Profil berhasil diperbarui.');
+            toast.sukses('Profil berhasil diperbarui.');
             router.refresh();
         } catch (error) {
-            alert(pesanGalat(error, 'Gagal memperbarui profil.'));
+            console.error('Gagal memperbarui profil pengguna:', error);
+            toast.galat(pesanGalat(error, 'Gagal memperbarui profil.'));
         } finally {
             setLoading(false);
         }
@@ -66,7 +73,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     const handlePasswordSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (passwordData.newPassword !== passwordData.confirmPassword) {
-            alert('Password baru dan konfirmasi tidak cocok.');
+            toast.galat('Password baru dan konfirmasinya tidak cocok.');
             return;
         }
         setPasswordLoading(true);
@@ -82,13 +89,17 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 }),
             });
             if (!res.ok) {
-                const error = await res.json().catch(() => null);
-                throw new Error(error?.message || 'Gagal mengubah password.');
+                const jawaban = await bacaJawaban(res);
+                throw new Error(alasanPenolakan(res, jawaban));
             }
-            alert('Password berhasil diubah.');
+            toast.sukses('Password berhasil diubah.');
             setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
         } catch (error) {
-            alert(pesanGalat(error, 'Gagal mengubah password.'));
+            // Tidak ada nilai password yang ikut tercatat: `error` di sini berasal
+            // dari `fetch` atau dari `throw` di atas, keduanya hanya membawa
+            // pesan server.
+            console.error('Gagal mengubah password:', error);
+            toast.galat(pesanGalat(error, 'Gagal mengubah password.'));
         } finally {
             setPasswordLoading(false);
         }

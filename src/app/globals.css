@@ -11,3 +11,93 @@
 .request-popup .leaflet-popup-content {
   margin: 0;
 }
+
+/* ===========================================================================
+   Animasi masuk: `animate-in`, `fade-in`, `zoom-in`, `slide-in-from-*`
+   ===========================================================================
+
+   Kelas-kelas ini sudah dipakai di dua belas tempat di seluruh aplikasi —
+   `TrafficReportModal`, `ChatWidget`, `SearchFilter`, empat overlay di
+   `BookingCard` — tapi TIDAK PERNAH TERDEFINISI. Nama-nama itu berasal dari
+   plugin `tailwindcss-animate`, dan `tailwind.config.ts` di repo ini berbunyi
+   `plugins: []`. Tailwind membuang kelas yang tidak dikenalnya tanpa
+   memperingatkan apa pun, jadi setiap modal itu selama ini muncul dengan
+   memotong seketika — tidak ada yang rusak, tapi juga tidak ada yang berjalan.
+   Dua belas nama kelas yang tidak berarti apa-apa.
+
+   Definisinya ditulis di sini, bukan dengan memasang plugin, karena
+   `package.json` memegang perubahan lokal yang tidak ikut di-commit di repo ini
+   dan menambah dependensi berarti menyentuhnya. Hanya kelas yang benar-benar
+   dipakai yang didefinisikan.
+
+   `animate-in` adalah pemicunya; `fade-in`/`zoom-in`/`slide-in-from-*`
+   menyetel variabel dari mana animasinya berangkat. Satu keyframe
+   (`masuk`) membaca ketiga variabel itu sekaligus, sehingga kelas-kelasnya bisa
+   digabung tanpa saling menimpa — `animate-in fade-in zoom-in` menjalankan
+   keduanya, bukan yang terakhir menang.
+   ------------------------------------------------------------------------- */
+
+@layer utilities {
+  .animate-in {
+    --mulai-opasitas: 1;
+    --mulai-skala: 1;
+    --mulai-x: 0px;
+    --mulai-y: 0px;
+    animation: masuk 200ms ease-out both;
+  }
+
+  .fade-in {
+    --mulai-opasitas: 0;
+  }
+
+  .zoom-in {
+    --mulai-skala: 0.95;
+  }
+
+  .zoom-in-95 {
+    --mulai-skala: 0.95;
+  }
+
+  .slide-in-from-top-2 {
+    --mulai-y: -0.5rem;
+  }
+
+  .slide-in-from-bottom {
+    --mulai-y: 1rem;
+  }
+
+  .slide-in-from-bottom-2 {
+    --mulai-y: 0.5rem;
+  }
+
+  .slide-in-from-bottom-4 {
+    --mulai-y: 1rem;
+  }
+
+  .slide-in-from-bottom-10 {
+    --mulai-y: 2.5rem;
+  }
+}
+
+@keyframes masuk {
+  from {
+    opacity: var(--mulai-opasitas, 1);
+    transform: translate3d(var(--mulai-x, 0), var(--mulai-y, 0), 0)
+      scale(var(--mulai-skala, 1));
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+}
+
+/* Pengguna yang meminta gerak dikurangi lewat setelan sistemnya mendapatkan
+   keadaan AKHIR seketika, bukan animasi yang dipercepat. `motion-reduce:` dari
+   Tailwind hanya berlaku pada elemen yang menuliskannya; aturan di bawah
+   berlaku untuk kedua belas pemakai `animate-in` sekaligus, termasuk yang
+   ditulis sebelum berkas ini disentuh. */
+@media (prefers-reduced-motion: reduce) {
+  .animate-in {
+    animation: none;
+  }
+}

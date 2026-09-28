@@ -22,6 +22,8 @@
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Check, Loader2 } from 'lucide-react';
+import { useToast } from '@/components/ui/Toast';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 
 interface Props {
@@ -32,6 +34,7 @@ interface Props {
 
 export default function StatusChanger({ billboardId, currentStatus, currentPublishStatus }: Props) {
   const router = useRouter();
+  const toast = useToast();
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -88,19 +91,24 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
       // Balasan 500 berbadan HTML membuatnya melempar, dan lemparannya
       // mendarat di `catch` di bawah yang mencetak "Terjadi kesalahan pada
       // server." — pesan yang menghapus keterangan asli dari server.
-      const data = await res.json().catch(() => null);
+      //
+      // Penjaga itu kini datang dari `bacaJawaban`, yang sekaligus membuang
+      // `data?.message` bertipe `any`.
+      const jawaban = await bacaJawaban(res);
 
       if (!res.ok) {
-        throw new Error(data?.message || `Gagal mengubah status (${res.status}).`);
+        throw new Error(alasanPenolakan(res, jawaban));
       }
 
+      toast.sukses(jawaban.pesan ?? 'Status billboard diperbarui.');
       router.refresh();
     } catch (galat) {
       // `error: any` lalu `error?.message` dulu tertulis di sini. Pada nilai
       // yang bukan `Error` — `fetch` yang dibatalkan melempar objek tanpa
       // `message` — hasilnya `undefined`, jadi operator selalu membaca "galat
       // tidak diketahui" tanpa pernah tahu permintaannya batal, bukan ditolak.
-      alert(`Gagal mengubah status: ${pesanGalat(galat, 'galat tidak diketahui')}`);
+      console.error('Gagal mengubah status billboard:', galat);
+      toast.galat(`Gagal mengubah status: ${pesanGalat(galat, 'galat tidak diketahui')}`);
     } finally {
       // `setTimeout(..., 500)` dulu menahan hamparan loading setengah detik
       // SETELAH pekerjaan selesai — jeda kosmetik yang, bila komponen sudah

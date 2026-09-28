@@ -14,6 +14,8 @@ import { ALAMAT_PENJUAL, NAMA_PENJUAL } from '@/lib/penjual';
 import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 
 /**
  * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
@@ -84,6 +86,7 @@ const LABEL_TUJUAN: Record<string, string> = {
 // Helper component for internal design uploads
 const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
     const router = useRouter();
+    const toast = useToast();
     const [loading, setLoading] = useState(false);
     const [linkInput, setLinkInput] = useState("");
 
@@ -107,11 +110,11 @@ const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
             // kosong, supaya 403 tidak lagi terlihat sama dengan 500.
             const jawaban = await bacaJawaban(res);
             if (res.ok) {
-                alert(jawaban.pesan ?? 'Desain terkirim ke pengguna.');
+                toast.sukses(jawaban.pesan ?? 'Desain terkirim ke pengguna.');
                 setLinkInput("");
                 router.refresh();
             } else {
-                alert('Gagal: ' + alasanPenolakan(res, jawaban));
+                toast.galat('Gagal: ' + alasanPenolakan(res, jawaban));
             }
         } catch (galat) {
             // Galatnya dulu ditangkap lalu dibuang tanpa dibaca sama sekali.
@@ -119,7 +122,7 @@ const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
             // sebenarnya (jaringan mati, CORS, URL salah) tidak pernah
             // tercatat di mana pun — bukan di layar, bukan di konsol.
             console.error('Gagal mengirim desain internal:', galat);
-            alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
+            toast.galat(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
         } finally {
             setLoading(false);
         }
@@ -150,13 +153,15 @@ const InternalDesignUploader = ({ orderId }: { orderId: string }) => {
 // Helper component for adding new charges
 const AddChargeForm = ({ orderId }: { orderId: string }) => {
     const router = useRouter();
+    const toast = useToast();
     const [loading, setLoading] = useState(false);
     const [description, setDescription] = useState("");
     const [amount, setAmount] = useState("");
 
     const handleAddCharge = async () => {
         if (!description || !amount) {
-            return alert("Harap isi deskripsi dan jumlah biaya.");
+            toast.galat('Deskripsi dan jumlah biaya wajib diisi.');
+            return;
         }
         setLoading(true);
         try {
@@ -173,16 +178,16 @@ const AddChargeForm = ({ orderId }: { orderId: string }) => {
             // mencatat biaya yang sama berulang kali.
             const jawaban = await bacaJawaban(res);
             if (res.ok) {
-                alert(jawaban.pesan ?? 'Biaya tambahan tercatat.');
+                toast.sukses(jawaban.pesan ?? 'Biaya tambahan tercatat.');
                 setDescription("");
                 setAmount("");
                 router.refresh();
             } else {
-                alert('Gagal: ' + alasanPenolakan(res, jawaban));
+                toast.galat('Gagal: ' + alasanPenolakan(res, jawaban));
             }
         } catch (galat) {
             console.error('Gagal mencatat biaya tambahan:', galat);
-            alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
+            toast.galat(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
         } finally {
             setLoading(false);
         }
@@ -253,6 +258,8 @@ const InfoPair = ({ label, value }: { label: string, value: string | undefined |
 export default function TransactionClient({ transactions, currentUserRole }: Props) {
   const [selected, setSelected] = useState<TransaksiUntukClient | null>(transactions.length > 0 ? transactions[0] : null);
   const router = useRouter();
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
 
   // Kotak `placeholder="Search..."` di kolom kiri dulu tidak punya `value`
   // maupun `onChange`: ia menerima ketikan lalu membuangnya. Daftar pesanan di
@@ -284,8 +291,22 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
 
     let reason = '';
     if (status === 'REJECTED') {
-      reason = prompt('Harap masukkan alasan penolakan desain:') || '';
-      if (!reason) return; // User membatalkan prompt
+      // Alasan ini dikirimkan ke pembeli sebagai `designRejectionReason`, jadi
+      // teks kosong bukan pilihan: pembeli yang ditolak tanpa alasan tidak tahu
+      // apa yang harus diperbaiki. `wajib` bawaan `isian` menahan tombolnya.
+      const jawabanIsian = await konfirmasi({
+        judul: 'Tolak desain dari pembeli?',
+        pesan: 'Alasan yang Anda tulis dikirimkan ke pembeli agar mereka bisa memperbaikinya.',
+        labelSetuju: 'Tolak Desain',
+        nada: 'bahaya',
+        isian: {
+          label: 'Alasan penolakan desain',
+          placeholder: 'mis. resolusi terlalu rendah untuk cetak 4x6 m',
+          panjang: true,
+        },
+      });
+      if (typeof jawabanIsian !== 'string') return;
+      reason = jawabanIsian;
     }
 
     try {
@@ -297,14 +318,14 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       
       const jawaban = await bacaJawaban(res);
       if (res.ok) {
-        alert(jawaban.pesan ?? (status === 'APPROVED' ? 'Desain disetujui.' : 'Desain ditolak.'));
+        toast.sukses(jawaban.pesan ?? (status === 'APPROVED' ? 'Desain disetujui.' : 'Desain ditolak.'));
         router.refresh();
       } else {
-        alert('Gagal: ' + alasanPenolakan(res, jawaban));
+        toast.galat('Gagal: ' + alasanPenolakan(res, jawaban));
       }
     } catch (galat) {
       console.error('Gagal memperbarui status desain:', galat);
-      alert(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
+      toast.galat(pesanGalat(galat, 'Terjadi kesalahan pada server.'));
     }
   };
 

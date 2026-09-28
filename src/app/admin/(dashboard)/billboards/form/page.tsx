@@ -9,7 +9,10 @@ import { useRouter, useSearchParams } from 'next/navigation';
 // ditambahkan.
 import { ArrowLeft, Save, Loader2, Ruler, ExternalLink, X, History, RotateCcw } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 import { arrayDariJson } from '@/lib/safe-json';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { angkaRupiah } from '@/lib/money';
 import {
   sahStatusBillboard,
@@ -68,6 +71,8 @@ export default function BillboardFormPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const billboardId = searchParams.get('id');
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
 
   const [loading, setLoading] = useState(false);
   // Nilai awalnya diturunkan dari `billboardId`, bukan disetel lewat
@@ -77,7 +82,24 @@ export default function BillboardFormPage() {
   // "Loading..." — admin melihat kolom-kolom kosong dan sempat mengira datanya
   // hilang.
   const [fetching, setFetching] = useState(Boolean(billboardId));
-  
+
+  // Penghitung pemuatan ulang, satu-satunya alasan keberadaannya adalah
+  // MENGGANTI dua `window.location.reload()` yang dulu ada di `handleRollback`
+  // dan `handleSubmit`.
+  //
+  // `router.refresh()` tidak bisa dipakai di sini: halaman ini Client Component
+  // dan datanya tidak datang dari Server Component mana pun — ia diambil oleh
+  // `fetch` di dalam effect di bawah. `router.refresh()` hanya memuat ulang
+  // Server Component, jadi ia tidak akan menyentuh effect itu sama sekali dan
+  // form akan tetap menampilkan data sebelum rollback.
+  //
+  // Memuat ulang seluruh dokumen memang bekerja, tapi ia mengunduh kembali
+  // seluruh bundel JS dan membuang state komponen lain di layout admin
+  // (sidebar, notifikasi, koneksi chat). Menaikkan angka ini menjalankan ulang
+  // effect-nya saja.
+  const [pemuatanKe, setPemuatanKe] = useState(0);
+
+
   const [inputType, setInputType] = useState<'AUTO' | 'MANUAL'>('AUTO');
   const [historyList, setHistoryList] = useState<BarisRiwayatBillboard[]>([]);
 
@@ -200,15 +222,36 @@ export default function BillboardFormPage() {
                 }
                 setFetching(false);
             })
-            .catch(() => {
+            .catch((galat) => {
+                // Dicatat, bukan ditelan: `.catch` di sini menangkap TIGA hal
+                // sekaligus — `fetch` yang gagal, `res.ok` palsu yang dilempar
+                // di atas, dan setiap galat yang keluar dari `.then` pengurai.
+                // Tanpa satu baris log tidak ada cara membedakannya setelah
+                // admin melapor "formnya kosong".
+                console.error('Gagal memuat detail billboard:', galat);
                 setFetching(false);
-                alert("Gagal memuat data billboard. Silakan muat ulang halaman.");
+                toast.galat('Gagal memuat data billboard. Muat ulang halaman ini.');
             });
       }
-  }, [billboardId]);
+      // `toast` ikut di sini karena dipakai di atas. Nilainya dimemoisasi di
+      // `ToastProvider`, jadi ia tidak pernah memicu effect ini berjalan ulang
+      // dan pemuatan datanya tetap sekali per `billboardId`.
+      //
+      // `pemuatanKe` ada di sini justru SUPAYA effect ini berjalan ulang: itulah
+      // pengganti `window.location.reload()`. Yang menaikkannya juga menyetel
+      // `fetching` menjadi `true` lebih dulu, di dalam penangan klik — bukan di
+      // sini — karena `setState` sinkron di dalam effect memicu render berantai
+      // (react-hooks/set-state-in-effect).
+  }, [billboardId, pemuatanKe, toast]);
 
   const generateSlug = () => {
-      if(!form.title) return alert("Isi Nama Dulu");
+      if (!form.title) {
+          // Dulu `return alert(...)`, yang memulangkan `undefined` milik `alert`
+          // sebagai nilai fungsi ini. Kebetulan tidak ada yang membacanya, tapi
+          // bentuknya membuat fungsi bertipe `void | undefined` tanpa alasan.
+          toast.galat('Isi "Nama Billboard" dulu sebelum membuat slug.');
+          return;
+      }
       const clean = form.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
       setForm((p) => ({...p, slug: clean}));
   };
@@ -248,7 +291,26 @@ export default function BillboardFormPage() {
       setForm((p) => ({ ...p, gallery: p.gallery.filter((_, i) => i !== index) }));
 
   const handleRollback = async (historyItem: BarisRiwayatBillboard) => {
-      if(!confirm(`Rollback data?`)) return;
+      // Pesan lama berbunyi `confirm(\`Rollback data?\`)` — sebuah template
+      // literal tanpa satu pun interpolasi, dan sebuah pertanyaan yang tidak
+      // menyebut revisi mana yang akan dipulihkan maupun bahwa data sekarang
+      // ditimpa. Admin yang menekan "Restore" pada baris keempat dari sepuluh
+      // tidak punya cara memastikan baris itulah yang ditekannya.
+      const setuju = await konfirmasi({
+          judul: 'Pulihkan billboard ke revisi ini?',
+          pesan:
+              `Revisi ${new Date(historyItem.archivedAt).toLocaleString('id-ID')} ` +
+              `oleh ${historyItem.changedBy?.name ?? 'Sistem'}, harga ` +
+              `Rp ${angkaRupiah(historyItem.price)}.\n\n` +
+              'Seluruh data billboard yang tersimpan sekarang akan DITIMPA oleh ' +
+              'revisi ini. Data sekarang tetap tercatat sebagai revisi baru, jadi ' +
+              'pemulihan ini bisa dibatalkan dengan memulihkan revisi teratas.',
+          labelSetuju: 'Pulihkan Revisi Ini',
+          labelTolak: 'Jangan',
+          nada: 'bahaya',
+      });
+      if (!setuju) return;
+
       setLoading(true);
       try {
           const res = await fetch('/api/admin/billboards/rollback', {
@@ -257,13 +319,20 @@ export default function BillboardFormPage() {
             body: JSON.stringify({ historyId: historyItem.id })
           });
           if (!res.ok) {
-              alert("Gagal melakukan rollback. Silakan coba lagi.");
+              const jawaban = await bacaJawaban(res);
+              toast.galat('Gagal memulihkan revisi: ' + alasanPenolakan(res, jawaban));
               setLoading(false);
               return;
           }
-          window.location.reload();
-      } catch {
-          alert("Gagal terhubung ke server.");
+          toast.sukses('Billboard dipulihkan ke revisi yang dipilih.');
+          setLoading(false);
+          // Pengganti `window.location.reload()`: form dan daftar riwayat diambil
+          // ulang dari API, sisa halaman admin tetap hidup.
+          setFetching(true);
+          setPemuatanKe((n) => n + 1);
+      } catch (galat) {
+          console.error('Gagal memulihkan revisi billboard:', galat);
+          toast.galat('Server tidak dapat dihubungi. Revisi TIDAK dipulihkan.');
           setLoading(false);
       }
   };
@@ -290,12 +359,30 @@ export default function BillboardFormPage() {
               headers: {'Content-Type': 'application/json'},
               body: JSON.stringify(payload)
           });
-          if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
-          else {
-              const msg = await res.json().catch(() => null);
-              alert("Gagal menyimpan data" + (msg?.message ? `: ${msg.message}` : "."));
+          if (res.ok) {
+              toast.sukses(billboardId ? 'Perubahan billboard tersimpan.' : 'Billboard baru dibuat.');
+              if (billboardId) {
+                  // Pengganti `window.location.reload()`. Route update menyusun
+                  // ulang `specs`/`includes`/`excludes` dari payload, jadi bentuk
+                  // yang tersimpan tidak selalu sama dengan isi form — data harus
+                  // diambil ulang, tapi tidak dengan mengunduh ulang seluruh
+                  // halaman.
+                  setFetching(true);
+                  setPemuatanKe((n) => n + 1);
+              } else {
+                  router.push('/admin/billboards');
+              }
+          } else {
+              // Dulu `res.json().catch(() => null)` mentah: `msg?.message` lolos
+              // `tsc` sebagai `any`, jadi salah tulis nama kolom tidak pernah
+              // tertangkap dan pesan server yang sebenarnya tidak muncul.
+              const jawaban = await bacaJawaban(res);
+              toast.galat('Gagal menyimpan data: ' + alasanPenolakan(res, jawaban));
           }
-      } catch { alert("Gagal terhubung ke server."); }
+      } catch (galat) {
+          console.error('Gagal menyimpan billboard:', galat);
+          toast.galat('Server tidak dapat dihubungi. Data billboard belum tersimpan.');
+      }
       setLoading(false);
   }
 

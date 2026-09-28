@@ -39,6 +39,8 @@
 import { use, useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import ImageUpload from '@/components/ImageUpload';
+import { useToast } from '@/components/ui/Toast';
+import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { pesanGalat } from '@/lib/pesan-galat';
 import { ArrowLeft, Save, Loader2, AlertCircle } from 'lucide-react';
@@ -61,6 +63,7 @@ export default function AdminOrderDetailPage({
     const { id } = use(params);
 
     const router = useRouter();
+    const toast = useToast();
     const [order, setOrder] = useState<DetailPesanan | null>(null);
     const [galat, setGalat] = useState<string | null>(null);
     const [proof, setProof] = useState('');
@@ -82,8 +85,10 @@ export default function AdminOrderDetailPage({
                 // yang sah, dan tanpa pemeriksaan ini `{ message: '...' }`
                 // masuk ke `order` lalu `order.user.name` melempar.
                 if (!res.ok) {
-                    const isi = await res.json().catch(() => null);
-                    throw new Error(isi?.message || `Gagal memuat pesanan (${res.status}).`);
+                    // `res.json().catch(() => null)` mentah membuat `isi?.message`
+                    // bertipe `any`, jadi salah tulis nama kolom lolos `tsc`.
+                    const jawaban = await bacaJawaban(res);
+                    throw new Error(alasanPenolakan(res, jawaban));
                 }
 
                 const data = (await res.json()) as DetailPesanan;
@@ -110,7 +115,7 @@ export default function AdminOrderDetailPage({
 
         const bukti = proof.trim();
         if (bukti === '') {
-            alert('Pilih foto bukti tayang lebih dulu.');
+            toast.galat('Pilih foto bukti tayang lebih dulu.');
             return;
         }
 
@@ -130,22 +135,23 @@ export default function AdminOrderDetailPage({
                 }),
             });
 
-            const isi = await res.json().catch(() => null);
+            const jawaban = await bacaJawaban(res);
 
             // Keberhasilan diumumkan HANYA setelah server menyatakannya.
             if (!res.ok) {
-                throw new Error(isi?.message || `Gagal menyimpan (${res.status}).`);
+                throw new Error(alasanPenolakan(res, jawaban));
             }
 
             setOrder({ ...order, installationProof: bukti });
-            alert(isi?.message || 'Bukti tayang disimpan.');
+            toast.sukses(jawaban.pesan ?? 'Bukti tayang disimpan.');
             router.refresh();
         } catch (galatSimpan) {
-            alert(`Gagal menyimpan: ${pesanGalat(galatSimpan, 'galat tidak diketahui')}`);
+            console.error('Gagal menyimpan bukti tayang:', galatSimpan);
+            toast.galat(`Gagal menyimpan: ${pesanGalat(galatSimpan, 'galat tidak diketahui')}`);
         } finally {
             setMenyimpan(false);
         }
-    }, [order, proof, id, menyimpan, router]);
+    }, [order, proof, id, menyimpan, router, toast]);
 
     if (galat) {
         return (

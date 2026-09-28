@@ -11,6 +11,7 @@ import { ArrowLeft, Upload, AlertCircle, Calendar, FileText } from 'lucide-react
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { bacaBadan } from '@/lib/baca-jawaban';
+import { useToast } from '@/components/ui/Toast';
 
 interface CheckoutProps {
   billboard: {
@@ -34,6 +35,7 @@ interface CheckoutProps {
 
 export default function CheckoutForm({ billboard, startDate, duration: initialDuration, penyewa }: CheckoutProps) {
   const router = useRouter();
+  const toast = useToast();
 
   // STATE LOKAL BARU
   const [duration, setDuration] = useState(initialDuration || 1);
@@ -97,13 +99,16 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   const handlePayment = async () => {
       const userRole = session?.user?.role;
       if (userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') {
-          alert("⛔ MAAF AKSES DITOLAK!\n\nAdmin / Super Admin tidak diperbolehkan melakukan pemesanan.\nSilakan gunakan akun Customer untuk melakukan tes order.");
+          toast.galat(
+              'Akses ditolak. Akun admin tidak diperbolehkan memesan.\n' +
+              'Gunakan akun customer untuk mencoba alur pemesanan.'
+          );
           return;
       }
 
       const dateInput = document.getElementById('startDateInput') as HTMLInputElement;
       if(!dateInput || !dateInput.value) {
-          alert("⚠️ Harap pilih 'Rencana Mulai Tayang' terlebih dahulu!");
+          toast.galat("Pilih 'Rencana Mulai Tayang' terlebih dahulu.");
           return;
       }
 
@@ -183,17 +188,21 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
               if (!orderId) {
                   // Booking sudah mungkin tersimpan, tetapi tanpa ID yang tervalidasi
                   // browser tidak boleh mengarang URL pembayaran.
-                  alert('Pesanan dibuat, tetapi halaman pembayaran belum dapat dibuka. Buka Dashboard untuk melihat pesanan.');
+                  toast.galat('Pesanan dibuat, tetapi halaman pembayaran belum dapat dibuka. Buka Dashboard untuk melihat pesanan.');
                   router.push('/dashboard');
                   return;
               }
 
-              alert(
-                  "✅ ORDER DITERIMA!\n\n" +
+              // `alert` di sini MEMBEKUKAN tab sampai pembeli menekan OK, jadi
+              // navigasi ke halaman pembayaran di baris berikutnya tertunda
+              // tepat pada saat ia paling ingin dilanjutkan. Toast tidak
+              // menahan apa pun, dan tetap terbaca di halaman tujuan karena
+              // `ToastProvider` dipasang di layout akar.
+              toast.sukses(
+                  'Pesanan diterima.' +
                   (tagihan !== null
-                      ? `Nominal yang harus dibayar: Rp ${tagihan.toLocaleString('id-ID')}\n\n`
-                      : "") +
-                  "Lanjutkan ke Pembayaran Otomatis untuk memilih metode pembayaran."
+                      ? `\nNominal yang harus dibayar: Rp ${tagihan.toLocaleString('id-ID')}`
+                      : '')
               );
               router.push(`/dashboard/order/${encodeURIComponent(orderId)}/payment`);
           } else {
@@ -205,12 +214,12 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                   ? result.message
                   : `Server menolak (${response.status}).`;
               setGalatIdentitas(pesan);
-              alert("❌ Gagal: " + pesan);
+              toast.galat('Gagal membuat pesanan: ' + pesan);
           }
 
       } catch (err) {
-          console.error(err);
-          alert("Terjadi kesalahan sistem.");
+          console.error('Gagal membuat pesanan:', err);
+          toast.galat('Server tidak dapat dihubungi. Pesanan belum dibuat.');
       } finally {
           setIsLoading(false);
       }
