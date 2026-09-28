@@ -204,6 +204,65 @@ model User {
 
   /// Pengajuan titik yang status penanganannya terakhir diubah akun ini.
   pengajuanTitik    PengajuanTitik[]
+
+  /// Token reset sandi yang pernah diterbitkan untuk akun ini.
+  tokenResetSandi   PasswordResetToken[]
+}
+
+/// Satu permintaan reset sandi.
+///
+/// KENAPA TABEL SENDIRI, BUKAN DUA KOLOM DI `User`
+/// -----------------------------------------------
+/// `otpCode`/`otpExpires` pernah ada di `User` dan sudah dibuang (task 3.27):
+/// kolom di `User` ikut terkirim ke mana pun baris `User` pergi, dan baris itu
+/// pergi ke banyak tempat lewat `include: { user: true }`. Token reset adalah
+/// kredensial sementara yang setara sandi — ia tidak boleh menumpang baris yang
+/// dibaca seluruh aplikasi.
+///
+/// Tabel terpisah juga memberi hal yang dua kolom tidak bisa: RIWAYAT. Saat ada
+/// sengketa ("sandi saya diganti orang"), yang bisa dijawab adalah kapan token
+/// diminta, dari alamat mana, dan kapan dipakai.
+///
+/// YANG DISIMPAN ADALAH HASH, BUKAN TOKENNYA
+/// -----------------------------------------
+/// Token mentah hanya pernah ada di dua tempat: memori proses saat dibuat, dan
+/// tautan di kotak masuk pemiliknya. Yang tersimpan di sini adalah SHA-256 atas
+/// token itu. Database yang bocor karena itu tidak memberi penyerang satu pun
+/// tautan reset yang bisa dipakai — persis alasan `password` disimpan sebagai
+/// hash. Bcrypt tidak dipakai di sini: tokennya 32 byte acak, jadi tidak ada
+/// yang bisa ditebak dari kamus, dan pencarian baris harus bisa dilakukan lewat
+/// indeks (`bcrypt` tidak deterministik, jadi tidak bisa dicari).
+model PasswordResetToken {
+  id        String   @id @default(cuid())
+
+  /// SHA-256 heksadesimal atas token mentah. `@unique` supaya pencarian
+  /// webhook-style (satu token → satu baris) tidak pernah ambigu.
+  tokenHash String   @unique
+
+  userId    String
+  /// `Cascade`: akun yang dihapus tidak boleh meninggalkan tiket masuk yang
+  /// masih bisa ditukar. Berbeda dari `Payment`, baris ini bukan bukti uang —
+  /// ia kredensial sementara, dan kredensial yatim adalah risiko, bukan jejak.
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  expiresAt DateTime
+
+  /// Terisi saat token ditukar. Sekali pakai ditegakkan dengan kolom ini plus
+  /// `updateMany` bersyarat (CAS), bukan dengan menghapus barisnya: baris yang
+  /// dihapus tidak bisa membedakan "token belum pernah ada" dari "token sudah
+  /// dipakai", dan riwayatnya ikut hilang.
+  usedAt    DateTime?
+
+  /// Alamat asal peminta, bila header-nya ada. Untuk jejak sengketa saja —
+  /// tidak pernah dipakai sebagai syarat menukar token, karena alamat pembaca
+  /// email hampir selalu berbeda dari alamat peminta.
+  asalIp    String?
+
+  createdAt DateTime @default(now())
+
+  /// Penyapu token kedaluwarsa, dan pemeriksaan "sudah ada permintaan aktif".
+  @@index([userId, expiresAt])
+  @@index([expiresAt])
 }
 
 

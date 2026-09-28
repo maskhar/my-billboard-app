@@ -117,6 +117,28 @@ export function judulSurat(bagian: {
   return `${awalan}${bagian.topik}${nominal} — Pesanan #${nomorPesanan(bagian.idPesanan)}`;
 }
 
+/**
+ * Judul surat yang TIDAK menyangkut satu pesanan.
+ *
+ * `judulSurat` mewajibkan `idPesanan`, dan itu keputusan yang tetap benar untuk
+ * sebelas surat transaksional di aplikasi ini: masing-masing menyangkut tepat
+ * satu pesanan, dan surat "Dana Refund Dikembalikan" yang tidak menyebut pesanan
+ * mana adalah cacat yang aturan itu tutup.
+ *
+ * Surat akun — reset sandi — tidak punya pesanan. Melewatkan `null` ke
+ * `judulSurat` akan mencetak "Pesanan #—" di baris judul, yaitu memberi tahu
+ * penerima ada pesanan yang tidak ada. Jadi jalurnya dipisah di sini, bukan
+ * dilonggarkan di sana: pemanggil tidak bisa "kebetulan" lupa mengisi id
+ * pesanan dan mendapat judul tanpa pesanan tanpa menyadarinya.
+ *
+ * Akhirannya tetap ada supaya surat ini masih bisa dikenali sebagai kiriman
+ * sistem dan tidak tercampur dengan surat transaksional saat pengguna menyaring
+ * kotak masuknya.
+ */
+export function judulSuratAkun(bagian: { topik: string }): string {
+  return `${bagian.topik} — Akun ${BADAN_USAHA_PENJUAL}`;
+}
+
 const generateTemplate = (title: string, message: string, orderDetail?: RingkasanPesananSurat) => {
     // Template HTML Invoice Full (Dikembalikan seperti semula)
     //

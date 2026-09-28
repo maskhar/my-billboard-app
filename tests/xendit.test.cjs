@@ -19501,3 +19501,901 @@ describe('penanda fokus tidak pernah dibuang tanpa pengganti', () => {
     assert.deepStrictEqual(pelanggar, [], 'nomor telepon bukan bilangan yang dihitung');
   });
 });
+
+// ===========================================================================
+// RESET SANDI: TOKEN, JAWABAN SERAGAM, DAN SEKALI PAKAI
+// ===========================================================================
+//
+// Alur ini satu-satunya jalur di aplikasi yang menulis `User.password` tanpa sesi
+// dan tanpa membuktikan sandi lama. Yang menggantikan kedua bukti itu hanya token
+// di kotak masuk pemiliknya — jadi setiap syaratnya adalah syarat keamanan, dan
+// setiap kasus di bawah menguji satu di antaranya.
+
+const JALUR_RESET_SANDI = path.join(__dirname, '..', 'src', 'lib', 'reset-sandi.ts');
+const JALUR_SANDI = path.join(__dirname, '..', 'src', 'lib', 'sandi.ts');
+const JALUR_MIDDLEWARE_RESET = path.join(__dirname, '..', 'src', 'middleware.ts');
+const JALUR_ROUTE_MINTA_RESET = path.join(
+  __dirname, '..', 'src', 'app', 'api', 'auth', 'request-reset', 'route.ts'
+);
+const JALUR_ROUTE_TUKAR_RESET = path.join(
+  __dirname, '..', 'src', 'app', 'api', 'auth', 'reset-password', 'route.ts'
+);
+const JALUR_HALAMAN_LUPA = path.join(
+  __dirname, '..', 'src', 'app', 'forgot-password', 'page.tsx'
+);
+const JALUR_HALAMAN_RESET = path.join(
+  __dirname, '..', 'src', 'app', 'reset-password', 'page.tsx'
+);
+const JALUR_FORM_RESET = path.join(
+  __dirname, '..', 'src', 'app', 'reset-password', 'FormResetSandi.tsx'
+);
+const JALUR_HALAMAN_LOGIN = path.join(__dirname, '..', 'src', 'app', 'login', 'page.tsx');
+
+/**
+ * Isi berkas tanpa komentar.
+ *
+ * Tiga kasus di bawah memeriksa URUTAN dua panggilan di dalam sumber, dan
+ * komentar di berkas-berkas ini justru MENYEBUT nama panggilan yang diperiksa
+ * ("hash dihitung di LUAR transaksi"). Tanpa membuangnya, `indexOf` menemukan
+ * kalimat yang menjelaskan aturannya, bukan kode yang menjalankannya.
+ */
+function kodeSajaReset(jalur) {
+  return fs
+    .readFileSync(jalur, 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+    .split(/\r?\n/)
+    .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+    .join('\n');
+}
+
+function relReset(jalur) {
+  return path.relative(path.join(__dirname, '..'), jalur).replace(/\\/g, '/');
+}
+
+/**
+ * `judulSuratAkun` ASLI, hanya SMTP-nya yang dipalsukan.
+ *
+ * Alasannya sama dengan `mailPalsu` di atas, yang hanya mengembalikan
+ * `judulSurat`: judul surat adalah satu-satunya tempat identitas pengirim muncul
+ * di kotak masuk, dan memalsukannya membuat test lulus atas judul yang tidak
+ * pernah dipakai produksi. Hasilnya ditahan karena `muatDenganModulPalsu`
+ * membuang cache dan memuat ulang modulnya tiap panggilan.
+ */
+let judulAkunTertahan = null;
+function judulAkunAsli() {
+  if (!judulAkunTertahan) {
+    const { judulSuratAkun } = muatDenganModulPalsu(JALUR_MAIL, {
+      nodemailer: { createTransport: () => ({ sendMail: async () => ({ messageId: 'x' }) }) },
+    });
+    judulAkunTertahan = judulSuratAkun;
+  }
+  return judulAkunTertahan;
+}
+
+// Penghitung pembatas laju hidup di satu `Map` seumur proses, jadi dua kasus yang
+// memakai asal atau email yang sama akan saling menghabiskan jatah. Penghitung,
+// bukan angka acak: acak masih bisa bertabrakan, dan kegagalannya muncul sesekali
+// saja — bentuk kegagalan yang paling mahal untuk ditelusuri.
+let nomorAsalReset = 0;
+function asalUnikReset() {
+  nomorAsalReset += 1;
+  return `asal-reset-${process.pid}-${nomorAsalReset}`;
+}
+
+let nomorEmailReset = 0;
+function emailUnikReset() {
+  nomorEmailReset += 1;
+  return `reset.${process.pid}.${nomorEmailReset}@contoh.test`;
+}
+
+describe('src/lib/reset-sandi.ts — aturan token', () => {
+  const modul = require(JALUR_RESET_SANDI);
+
+  it('menerbitkan token 64 heksadesimal beserta hash yang cocok', () => {
+    const { mentah, hash } = modul.terbitkanTokenReset();
+
+    assert.match(mentah, /^[0-9a-f]{64}$/, 'token mentah bukan 64 hex');
+    // Keduanya dikembalikan sekaligus, bukan hanya tokennya. Fungsi yang
+    // mengembalikan satu nilai lalu meminta pemanggil meng-hash-nya sendiri
+    // adalah cara token mentah tersimpan di database tanpa disadari.
+    assert.equal(hash, modul.hashTokenReset(mentah));
+    assert.notEqual(hash, mentah, 'hash sama dengan tokennya — tidak di-hash sama sekali');
+  });
+
+  it('setiap token berbeda — tidak ada nilai tetap yang lolos', () => {
+    const kumpulan = new Set();
+    for (let i = 0; i < 200; i += 1) kumpulan.add(modul.terbitkanTokenReset().mentah);
+    assert.equal(kumpulan.size, 200, 'ada token yang terbit dua kali');
+  });
+
+  it('hash deterministik — itu yang membuat pencarian lewat indeks unik mungkin', () => {
+    // Syarat ini yang membedakannya dari bcrypt: bcrypt menyisipkan salt acak
+    // tiap pemanggilan, jadi barisnya tidak akan pernah bisa dicari lewat
+    // `where: { tokenHash }`.
+    const a = modul.hashTokenReset('abc');
+    assert.equal(a, modul.hashTokenReset('abc'));
+    assert.match(a, /^[0-9a-f]{64}$/);
+    assert.notEqual(a, modul.hashTokenReset('abd'));
+  });
+
+  it('hash TIDAK menormalkan spasi maupun huruf besar', () => {
+    // Menormalkan berarti dua teks berbeda memetakan ke satu baris — persis
+    // kelonggaran yang tidak dibutuhkan pembanding kredensial.
+    const dasar = modul.hashTokenReset('a'.repeat(64));
+    assert.notEqual(modul.hashTokenReset('A'.repeat(64)), dasar);
+    assert.notEqual(modul.hashTokenReset(' ' + 'a'.repeat(64)), dasar);
+  });
+
+  it('bentukTokenSah hanya menerima 64 hex huruf kecil', () => {
+    assert.equal(modul.bentukTokenSah('a'.repeat(64)), true);
+    assert.equal(modul.bentukTokenSah(modul.terbitkanTokenReset().mentah), true);
+
+    const ditolak = [
+      ['huruf besar', 'A'.repeat(64)],
+      ['terlalu pendek', 'a'.repeat(63)],
+      ['terlalu panjang', 'a'.repeat(65)],
+      ['bukan hex', 'z'.repeat(64)],
+      ['kosong', ''],
+      ['spasi di tepi', ' ' + 'a'.repeat(63)],
+      ['angka', 12345],
+      ['null', null],
+      ['undefined', undefined],
+      ['objek bertoString', { toString: () => 'a'.repeat(64) }],
+      ['array', ['a'.repeat(64)]],
+    ];
+    for (const [judul, nilai] of ditolak) {
+      assert.equal(modul.bentukTokenSah(nilai), false, `${judul} seharusnya ditolak`);
+    }
+  });
+
+  it('tokenMasihBisaDipakai menolak baris hilang, terpakai, dan kedaluwarsa', () => {
+    const sekarang = new Date('2026-09-29T10:00:00.000Z');
+    const nanti = new Date('2026-09-29T11:00:00.000Z');
+    const tadi = new Date('2026-09-29T09:00:00.000Z');
+
+    assert.equal(modul.tokenMasihBisaDipakai({ expiresAt: nanti, usedAt: null }, sekarang), true);
+    assert.equal(modul.tokenMasihBisaDipakai(null, sekarang), false, 'baris null lolos');
+    assert.equal(modul.tokenMasihBisaDipakai(undefined, sekarang), false);
+    // `usedAt` adalah syarat yang paling mudah terlupa dan akibatnya paling
+    // besar: tanpa itu satu tautan bisa dipakai berulang kali selama belum
+    // kedaluwarsa, jadi siapa pun yang pernah membaca email itu tetap memegang
+    // kunci akun walaupun pemiliknya sudah mengganti sandinya.
+    assert.equal(
+      modul.tokenMasihBisaDipakai({ expiresAt: nanti, usedAt: tadi }, sekarang),
+      false,
+      'token yang sudah terpakai masih diterima'
+    );
+    assert.equal(modul.tokenMasihBisaDipakai({ expiresAt: tadi, usedAt: null }, sekarang), false);
+    // Tepat di detik kedaluwarsa dianggap sudah lewat: `>`, bukan `>=`.
+    assert.equal(
+      modul.tokenMasihBisaDipakai({ expiresAt: sekarang, usedAt: null }, sekarang),
+      false
+    );
+  });
+
+  it('umur token satu jam, dan route penerbit mengimpornya alih-alih menulis ulang', () => {
+    assert.equal(modul.UMUR_TOKEN_RESET_MS, 60 * 60 * 1000);
+    // Angka yang ditulis ulang di route membuat kolom `expiresAt` dan kalimat
+    // "berlaku N menit" di suratnya bisa menyimpang — pengguna diberi tahu
+    // tenggat yang salah.
+    assert.match(kodeSajaReset(JALUR_ROUTE_MINTA_RESET), /UMUR_TOKEN_RESET_MS/);
+  });
+
+  it('tautan reset memakai origin yang diberikan dan meng-encode tokennya', () => {
+    const tautan = modul.tautanResetSandi('https://contoh.test', 'a'.repeat(64));
+    assert.equal(tautan, `https://contoh.test/reset-password?token=${'a'.repeat(64)}`);
+    assert.match(modul.tautanResetSandi('https://x.test', 'a&b=c'), /token=a%26b%3Dc$/);
+  });
+
+  it('origin TIDAK pernah diturunkan dari header permintaan', () => {
+    // Ini kerusakan paling mahal di seluruh alur: origin dari `Host` atau
+    // `X-Forwarded-Host` membuat email RESMI kami memuat tautan ke host
+    // penyerang, dan korban yang mengklik menyerahkan tokennya. Fitur pemulihan
+    // akun berubah menjadi alat pengambilalihan akun.
+    const kode = kodeSajaReset(JALUR_ROUTE_MINTA_RESET);
+    assert.match(kode, /originAplikasi\(\)/, 'origin tidak diambil dari konfigurasi server');
+    assert.equal(/get\(\s*['"](host|x-forwarded-host)/i.test(kode), false);
+    assert.equal(/req\.url/.test(kode), false, 'origin diturunkan dari URL permintaan');
+    assert.equal(/nextUrl/.test(kode), false);
+  });
+
+  it('modul token tidak menarik Prisma maupun server-only', () => {
+    // Dipakai dua route DAN diuji langsung di sini; menariknya ke `server-only`
+    // membuat berkas ini tidak bisa di-`require` tanpa mock.
+    const kode = fs.readFileSync(JALUR_RESET_SANDI, 'utf8');
+    assert.equal(/server-only/.test(kode), false);
+    assert.equal(/@prisma\/client|@\/lib\/prisma/.test(kode), false);
+  });
+});
+
+describe('POST /api/auth/request-reset — penerbit tautan', () => {
+  function buatRoute({ user = null, transaksiMelempar = false, originMelempar = false } = {}) {
+    const dibuat = [];
+    const dilumpuhkan = [];
+    const surat = [];
+    const pencarian = [];
+
+    const prisma = {
+      user: {
+        async findUnique(args) {
+          pencarian.push(args);
+          return user;
+        },
+      },
+      passwordResetToken: {
+        // Route memakai bentuk ARRAY (`$transaction([...])`), jadi kedua
+        // panggilan ini dijalankan saat arraynya disusun — bukan async.
+        updateMany: (args) => {
+          dilumpuhkan.push(args);
+          return { __op: 'updateMany' };
+        },
+        create: (args) => {
+          dibuat.push(args.data);
+          return { __op: 'create' };
+        },
+      },
+      async $transaction(operasi) {
+        if (transaksiMelempar) throw new Error('database mati');
+        assert.ok(Array.isArray(operasi), '$transaction dipanggil tanpa array operasi');
+        return operasi;
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_MINTA_RESET, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      '@/lib/prisma': { prisma },
+      '@/lib/mail': {
+        sendEmail: async (s) => {
+          surat.push(s);
+          return true;
+        },
+        judulSuratAkun: judulAkunAsli(),
+      },
+      '@/lib/xendit': {
+        originAplikasi: () => {
+          if (originMelempar) throw new Error('APP_ORIGIN belum diisi');
+          return 'https://contoh.test';
+        },
+      },
+    });
+
+    return {
+      route,
+      dibuat: () => dibuat,
+      dilumpuhkan: () => dilumpuhkan,
+      surat: () => surat,
+      pencarian: () => pencarian,
+    };
+  }
+
+  function minta(route, { email, asal } = {}) {
+    return route.POST(
+      new Request('https://contoh.test/api/auth/request-reset', {
+        method: 'POST',
+        headers: asal === null ? {} : { 'x-forwarded-for': asal ?? asalUnikReset() },
+        body: JSON.stringify({ email: email === undefined ? emailUnikReset() : email }),
+      })
+    );
+  }
+
+  function akunSandi(ganti = {}) {
+    return {
+      id: 'u-1',
+      name: 'Budi Santoso',
+      email: 'budi@contoh.test',
+      password: 'hash-lama',
+      ...ganti,
+    };
+  }
+
+  it('menerbitkan satu token dan mengirim satu surat untuk akun bersandi', async () => {
+    const fake = buatRoute({ user: akunSandi() });
+    const res = await minta(fake.route);
+
+    assert.equal(res.status, 200);
+    assert.equal(fake.dibuat().length, 1);
+    assert.equal(fake.surat().length, 1);
+  });
+
+  it('yang tersimpan adalah HASH, bukan token yang dikirim', async () => {
+    // Inti seluruh rancangan: database yang bocor tidak boleh memberi penyerang
+    // satu pun tautan reset yang masih bisa ditukar.
+    const { hashTokenReset } = require(JALUR_RESET_SANDI);
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route);
+
+    const baris = fake.dibuat()[0];
+    const cocok = /token=([0-9a-f]{64})/.exec(fake.surat()[0].message);
+
+    assert.ok(cocok, 'surat tidak memuat token 64 hex');
+    assert.match(baris.tokenHash, /^[0-9a-f]{64}$/);
+    assert.equal(baris.tokenHash, hashTokenReset(cocok[1]), 'kolomnya bukan hash dari token itu');
+    assert.notEqual(baris.tokenHash, cocok[1], 'token mentah tersimpan di database');
+    assert.equal(
+      JSON.stringify(baris).includes(cocok[1]), false,
+      'token mentah ikut tersimpan di kolom lain'
+    );
+  });
+
+  it('kedaluwarsa disetel satu jam ke depan', async () => {
+    const { UMUR_TOKEN_RESET_MS } = require(JALUR_RESET_SANDI);
+    const sebelum = Date.now();
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route);
+
+    const selisih = fake.dibuat()[0].expiresAt.getTime() - sebelum;
+    assert.ok(selisih > UMUR_TOKEN_RESET_MS - 10000, `terlalu pendek: ${selisih}`);
+    assert.ok(selisih <= UMUR_TOKEN_RESET_MS + 10000, `terlalu panjang: ${selisih}`);
+  });
+
+  it('token lama dilumpuhkan di transaksi yang sama saat tautan baru diterbitkan', async () => {
+    // Tanpa ini, tiga permintaan menghasilkan tiga tautan yang SEMUANYA berlaku —
+    // termasuk yang pertama, yang mungkin dipicu penyerang dan sudah ia baca.
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route);
+
+    assert.equal(fake.dilumpuhkan().length, 1);
+    assert.deepStrictEqual(fake.dilumpuhkan()[0].where, { userId: 'u-1', usedAt: null });
+    assert.ok(fake.dilumpuhkan()[0].data.usedAt instanceof Date);
+  });
+
+  it('jawaban SAMA untuk akun bersandi, akun Google, dan alamat tak terdaftar', async () => {
+    // Membedakannya mengembalikan alat pemeriksa yang sudah ditutup di
+    // `src/lib/auth.ts` dan `api/register`: siapa pun bisa menguji satu daftar
+    // alamat lalu tahu mana yang punya akun di sini, dan mana yang punya sandi.
+    const kasus = [
+      ['akun bersandi', akunSandi()],
+      ['akun Google tanpa sandi', akunSandi({ password: null })],
+      ['alamat tak terdaftar', null],
+    ];
+
+    const jawaban = [];
+    for (const [, user] of kasus) {
+      const fake = buatRoute({ user });
+      const res = await minta(fake.route);
+      jawaban.push({ status: res.status, isi: await res.json() });
+    }
+
+    assert.equal(jawaban[0].status, 200);
+    assert.deepStrictEqual(jawaban[1], jawaban[0], 'akun Google dijawab berbeda');
+    assert.deepStrictEqual(jawaban[2], jawaban[0], 'alamat tak terdaftar dijawab berbeda');
+  });
+
+  it('akun Google tidak diberi token maupun surat', async () => {
+    // Menerbitkan token untuk akun tanpa sandi berarti MEMBUAT jalur masuk
+    // berbasis sandi pada akun yang sengaja tidak punya sandi.
+    const fake = buatRoute({ user: akunSandi({ password: null }) });
+    await minta(fake.route);
+
+    assert.equal(fake.dibuat().length, 0);
+    assert.equal(fake.surat().length, 0);
+  });
+
+  it('alamat tak terdaftar tidak menyentuh tabel token', async () => {
+    const fake = buatRoute({ user: null });
+    await minta(fake.route);
+
+    assert.equal(fake.dibuat().length, 0);
+    assert.equal(fake.surat().length, 0);
+  });
+
+  it('email dinormalkan sebelum dicari — besar-kecil huruf bukan dua akun', async () => {
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route, { email: '  Ani@Contoh.TEST  ' });
+    assert.equal(fake.pencarian()[0].where.email, 'ani@contoh.test');
+  });
+
+  it('kolom User dipilih satu per satu, bukan seluruh baris', async () => {
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route);
+
+    const select = fake.pencarian()[0].select;
+    assert.ok(select, 'findUnique tanpa select membawa password, ktp, npwp, dan xenditCustomerId');
+    assert.deepStrictEqual(Object.keys(select).sort(), ['email', 'id', 'name', 'password']);
+  });
+
+  it('menolak email kosong dan bentuk yang bukan alamat', async () => {
+    for (const email of ['', '   ', 'bukan-email', 'a@b', 42, null]) {
+      const fake = buatRoute({ user: akunSandi() });
+      const res = await minta(fake.route, { email });
+      assert.equal(res.status, 400, `${JSON.stringify(email)} seharusnya 400`);
+      assert.equal(fake.dibuat().length, 0);
+    }
+  });
+
+  it('menolak 429 setelah tiga permintaan untuk SATU alamat email', async () => {
+    // Batas ini menahan pelecehan terhadap satu orang: tanpa itu siapa pun bisa
+    // membanjiri kotak masuk orang lain dengan surat resmi dari kami, dan surat
+    // yang kelewat sering datang adalah surat yang berhenti dibaca — termasuk
+    // saat resetnya benar-benar dia yang minta.
+    const email = emailUnikReset();
+    for (let i = 0; i < 3; i += 1) {
+      const res = await minta(buatRoute({ user: akunSandi() }).route, { email });
+      assert.equal(res.status, 200, `percobaan ke-${i + 1} seharusnya lolos`);
+    }
+
+    const fake = buatRoute({ user: akunSandi() });
+    const res = await minta(fake.route, { email });
+    assert.equal(res.status, 429);
+    assert.notEqual(res.headers.get('Retry-After'), null, 'tanpa Retry-After');
+    assert.equal(fake.dibuat().length, 0, 'token tetap diterbitkan setelah batas tercapai');
+    assert.equal(fake.surat().length, 0, 'surat tetap dikirim setelah batas tercapai');
+  });
+
+  it('menolak 429 setelah sepuluh permintaan dari satu alamat asal', async () => {
+    const asal = asalUnikReset();
+    for (let i = 0; i < 10; i += 1) {
+      const res = await minta(buatRoute({ user: null }).route, { asal });
+      assert.equal(res.status, 200, `percobaan ke-${i + 1} seharusnya lolos`);
+    }
+    const res = await minta(buatRoute({ user: null }).route, { asal });
+    assert.equal(res.status, 429);
+  });
+
+  it('batas per asal DILEWATI bila alamatnya tidak bisa ditentukan', async () => {
+    // Kunci tetap seperti "tanpa-ip" akan membuat sepuluh permintaan dari siapa
+    // pun menutup pemulihan akun bagi SEMUA orang selama sejam.
+    for (let i = 0; i < 12; i += 1) {
+      const res = await minta(buatRoute({ user: null }).route, { asal: null });
+      assert.notEqual(res.status, 429, `percobaan ke-${i + 1} tidak boleh dibatasi`);
+    }
+  });
+
+  it('batas diperiksa sebelum badan permintaan dibaca', () => {
+    const kode = kodeSajaReset(JALUR_ROUTE_MINTA_RESET);
+    const posisiBatas = kode.indexOf('rateLimit({');
+    const posisiBadan = kode.indexOf('req.json()');
+    assert.ok(posisiBatas > 0 && posisiBadan > 0);
+    assert.ok(posisiBatas < posisiBadan, 'badan dibaca sebelum batas diperiksa');
+    assert.match(kode, /rateLimitHeaders\(/);
+  });
+
+  it('nama pengguna di surat dibungkus amankanHtml', async () => {
+    // `message` adalah HTML yang sudah jadi, jadi PEMANGGIL yang wajib
+    // membungkus nilai pengguna. Nama diisi sendiri saat mendaftar.
+    const fake = buatRoute({ user: akunSandi({ name: '<img src=x onerror=alert(1)>' }) });
+    await minta(fake.route);
+
+    const pesan = fake.surat()[0].message;
+    assert.equal(pesan.includes('<img src=x'), false, 'nama masuk sebagai markup');
+    assert.match(pesan, /&lt;img src=x/);
+  });
+
+  it('surat memuat tautan ke origin konfigurasi, bukan host permintaan', async () => {
+    const fake = buatRoute({ user: akunSandi() });
+    await fake.route.POST(
+      new Request('https://penyerang.test/api/auth/request-reset', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': asalUnikReset(), 'x-forwarded-host': 'penyerang.test' },
+        body: JSON.stringify({ email: emailUnikReset() }),
+      })
+    );
+
+    const pesan = fake.surat()[0].message;
+    assert.match(pesan, /https:\/\/contoh\.test\/reset-password\?token=/);
+    assert.equal(pesan.includes('penyerang.test'), false);
+  });
+
+  it('judul surat tidak menyebut nomor pesanan', async () => {
+    // `judulSurat` mewajibkan `idPesanan`; memakainya di sini akan mencetak
+    // "Pesanan #undefined" — memberi tahu penerima ada pesanan yang tidak ada.
+    const fake = buatRoute({ user: akunSandi() });
+    await minta(fake.route);
+
+    assert.equal(/Pesanan #/.test(fake.surat()[0].subject), false);
+    assert.match(fake.surat()[0].subject, /reset sandi/i);
+    const kode = kodeSajaReset(JALUR_ROUTE_MINTA_RESET);
+    assert.match(kode, /judulSuratAkun/);
+    assert.equal(/judulSurat\(/.test(kode), false);
+  });
+
+  it('origin yang belum dikonfigurasi tidak mengubah jawaban dan tidak mengirim surat', async () => {
+    // Pemanggil tidak boleh bisa membedakan "server salah konfigurasi untuk
+    // alamat ini" dari "alamat tidak terdaftar".
+    const fake = buatRoute({ user: akunSandi(), originMelempar: true });
+    const res = await minta(fake.route);
+
+    assert.equal(res.status, 200);
+    assert.equal(fake.surat().length, 0, 'surat dikirim tanpa tautan yang sah');
+    assert.equal(fake.dibuat().length, 1, 'token gagal ditulis padahal database sehat');
+  });
+
+  it('galat database dijawab 500 tanpa membocorkan pesannya', async () => {
+    const fake = buatRoute({ user: akunSandi(), transaksiMelempar: true });
+    const res = await minta(fake.route);
+    const isi = await res.json();
+
+    assert.equal(res.status, 500);
+    assert.equal(/database mati|prisma/i.test(isi.message), false);
+  });
+
+  it('kedua route berada di luar /api/user/ — middleware menuntut sesi di sana', () => {
+    // Pengguna yang lupa sandinya tidak punya sesi; itu seluruh alasan ia di
+    // sini. `src/middleware.ts` memasang `/api/user/:path*` di matcher-nya.
+    assert.match(
+      fs.readFileSync(JALUR_MIDDLEWARE_RESET, 'utf8'),
+      /\/api\/user\/:path\*/,
+      'matcher berubah — periksa ulang lokasi route reset'
+    );
+    for (const jalur of [JALUR_ROUTE_MINTA_RESET, JALUR_ROUTE_TUKAR_RESET]) {
+      assert.equal(fs.existsSync(jalur), true, `${relReset(jalur)} tidak ada`);
+      assert.equal(
+        relReset(jalur).includes('api/user/'), false,
+        `${relReset(jalur)} berada di bawah /api/user/ dan akan menuntut sesi`
+      );
+    }
+  });
+});
+
+describe('POST /api/auth/reset-password — penukar token', () => {
+  const { terbitkanTokenReset, hashTokenReset } = require(JALUR_RESET_SANDI);
+
+  function buatRoute({
+    baris = null,
+    countKlaim = 1,
+    sandiCocok = false,
+    transaksiMelempar = false,
+  } = {}) {
+    const pencarian = [];
+    const klaim = [];
+    const dilumpuhkan = [];
+    const sandiTertulis = [];
+    const surat = [];
+
+    const tx = {
+      passwordResetToken: {
+        async updateMany(args) {
+          // Panggilan PERTAMA adalah klaim CAS; yang kedua melumpuhkan sisanya.
+          if (klaim.length === 0) {
+            klaim.push(args);
+            return { count: countKlaim };
+          }
+          dilumpuhkan.push(args);
+          return { count: 2 };
+        },
+      },
+      user: {
+        async update(args) {
+          sandiTertulis.push(args);
+          return { id: args.where.id };
+        },
+      },
+    };
+
+    const prisma = {
+      passwordResetToken: {
+        async findUnique(args) {
+          pencarian.push(args);
+          return baris;
+        },
+      },
+      async $transaction(kerja) {
+        if (transaksiMelempar) throw new Error('database mati');
+        return kerja(tx);
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_TUKAR_RESET, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      // Impornya `import bcrypt from 'bcryptjs'`, jadi yang dibutuhkan satu objek
+      // bermetode — bukan `{ hash }` seperti di `api/register`.
+      bcryptjs: {
+        compare: async () => sandiCocok,
+        hash: async (nilai, biaya) => `hash(${biaya}):${nilai}`,
+      },
+      '@/lib/prisma': { prisma },
+      '@/lib/mail': {
+        sendEmail: async (s) => {
+          surat.push(s);
+          return true;
+        },
+        judulSuratAkun: judulAkunAsli(),
+      },
+    });
+
+    return {
+      route,
+      pencarian: () => pencarian,
+      klaim: () => klaim,
+      dilumpuhkan: () => dilumpuhkan,
+      sandiTertulis: () => sandiTertulis,
+      surat: () => surat,
+    };
+  }
+
+  function barisSah(ganti = {}) {
+    return {
+      id: 'tok-1',
+      userId: 'u-1',
+      expiresAt: new Date(Date.now() + 30 * 60 * 1000),
+      usedAt: null,
+      user: { email: 'budi@contoh.test', name: 'Budi Santoso', password: 'hash-lama' },
+      ...ganti,
+    };
+  }
+
+  function tukar(route, { token, password = 'sandibaruku', asal } = {}) {
+    return route.POST(
+      new Request('https://contoh.test/api/auth/reset-password', {
+        method: 'POST',
+        headers: { 'x-forwarded-for': asal ?? asalUnikReset() },
+        body: JSON.stringify({
+          token: token === undefined ? terbitkanTokenReset().mentah : token,
+          password,
+        }),
+      })
+    );
+  }
+
+  it('menulis sandi baru dan menandai token terpakai', async () => {
+    const fake = buatRoute({ baris: barisSah() });
+    const res = await tukar(fake.route);
+
+    assert.equal(res.status, 200);
+    assert.equal(fake.sandiTertulis().length, 1);
+    assert.equal(fake.sandiTertulis()[0].where.id, 'u-1');
+    assert.equal(fake.klaim().length, 1);
+  });
+
+  it('sandi disimpan dengan biaya hash yang sama dengan pendaftaran', async () => {
+    // Biaya yang lebih rendah di satu penulis menurunkan diam-diam setiap
+    // pengguna yang memakai jalur itu.
+    const { BIAYA_HASH_SANDI } = require(JALUR_SANDI);
+    assert.equal(BIAYA_HASH_SANDI, 12);
+
+    const fake = buatRoute({ baris: barisSah() });
+    await tukar(fake.route, { password: 'sandibaruku' });
+    assert.equal(fake.sandiTertulis()[0].data.password, `hash(${BIAYA_HASH_SANDI}):sandibaruku`);
+  });
+
+  it('pencarian lewat HASH — tokennya tidak pernah dikirim ke database', async () => {
+    const token = 'b'.repeat(64);
+    const fake = buatRoute({ baris: barisSah() });
+    await tukar(fake.route, { token });
+
+    assert.equal(fake.pencarian()[0].where.tokenHash, hashTokenReset(token));
+    assert.equal(JSON.stringify(fake.pencarian()[0]).includes(token), false);
+  });
+
+  it('klaim memakai syarat `usedAt: null` di dalam WHERE, bukan baca lalu tulis', async () => {
+    // Compare-and-set: dua permintaan dengan token yang sama (klik ganda, dua
+    // tab) sama-sama lolos pemeriksaan kelayakan karena keduanya membacanya
+    // sebelum salah satu menulis. Yang membedakan hanyalah `count` di sini.
+    const fake = buatRoute({ baris: barisSah() });
+    await tukar(fake.route);
+
+    assert.deepStrictEqual(fake.klaim()[0].where, { id: 'tok-1', usedAt: null });
+    assert.ok(fake.klaim()[0].data.usedAt instanceof Date);
+  });
+
+  it('kalah balapan (count 0) tidak menulis sandi dan dijawab 400', async () => {
+    const fake = buatRoute({ baris: barisSah(), countKlaim: 0 });
+    const res = await tukar(fake.route);
+
+    assert.equal(res.status, 400);
+    assert.equal(fake.sandiTertulis().length, 0, 'sandi tertulis walaupun klaim token gagal');
+    assert.equal(fake.dilumpuhkan().length, 0);
+  });
+
+  it('token lain milik akun ini ikut dilumpuhkan setelah berhasil', async () => {
+    // Pemilik yang mengklik "lupa sandi" tiga kali punya tiga tautan; setelah
+    // satu dipakai, dua sisanya tidak boleh tetap menjadi kunci ke akun yang
+    // sudah diamankan.
+    const fake = buatRoute({ baris: barisSah() });
+    await tukar(fake.route);
+
+    assert.equal(fake.dilumpuhkan().length, 1);
+    assert.deepStrictEqual(fake.dilumpuhkan()[0].where, { userId: 'u-1', usedAt: null });
+  });
+
+  it('satu pesan untuk token tidak ada, terpakai, kedaluwarsa, dan akun tanpa sandi', async () => {
+    // Membedakannya memberi tahu pemegang token asing bahwa tokennya PERNAH sah —
+    // artinya alamat yang ia targetkan memang terdaftar dan memang pernah
+    // meminta reset.
+    const kasus = [
+      ['tidak ada', null],
+      ['sudah terpakai', barisSah({ usedAt: new Date() })],
+      ['kedaluwarsa', barisSah({ expiresAt: new Date(Date.now() - 1000) })],
+      [
+        'akun kehilangan sandinya',
+        barisSah({ user: { email: 'a@b.test', name: 'A', password: null } }),
+      ],
+    ];
+
+    const jawaban = [];
+    for (const [, baris] of kasus) {
+      const fake = buatRoute({ baris });
+      const res = await tukar(fake.route);
+      jawaban.push({ status: res.status, isi: await res.json() });
+      assert.equal(fake.sandiTertulis().length, 0);
+      assert.equal(fake.klaim().length, 0);
+    }
+
+    assert.equal(jawaban[0].status, 400);
+    for (let i = 1; i < jawaban.length; i += 1) {
+      assert.deepStrictEqual(jawaban[i], jawaban[0], `${kasus[i][0]} dijawab berbeda`);
+    }
+  });
+
+  it('token berbentuk salah ditolak sebelum database disentuh', async () => {
+    const bentuk = ['', 'a'.repeat(63), 'A'.repeat(64), 'z'.repeat(64), 42, null, ['a'.repeat(64)]];
+    for (const token of bentuk) {
+      const fake = buatRoute({ baris: barisSah() });
+      const res = await tukar(fake.route, { token });
+      assert.equal(res.status, 400, `${JSON.stringify(token)} seharusnya 400`);
+      assert.equal(fake.pencarian().length, 0, 'database disentuh untuk token berbentuk salah');
+    }
+  });
+
+  it('sandi diperiksa SEBELUM token dicari — sandi lemah tidak menghanguskan tautan', async () => {
+    // Token yang hangus karena sandi barunya cuma enam karakter memaksa pengguna
+    // meminta tautan baru untuk kesalahan yang bisa ia perbaiki di tempat — dan
+    // batas tiga tautan per jam di route penerbit akan segera menutup jalannya.
+    for (const password of ['', 'pendek', 'x'.repeat(100), 42, null]) {
+      const fake = buatRoute({ baris: barisSah() });
+      const res = await tukar(fake.route, { password });
+      assert.equal(res.status, 400, `${JSON.stringify(password)} seharusnya 400`);
+      assert.equal(fake.pencarian().length, 0, 'token dicari padahal sandinya sudah tidak sah');
+      assert.equal(fake.klaim().length, 0, 'token diklaim padahal sandinya tidak sah');
+    }
+  });
+
+  it('aturan sandi diimpor dari @/lib/sandi, tidak ditulis ulang sebagai angka', () => {
+    const kode = kodeSajaReset(JALUR_ROUTE_TUKAR_RESET);
+    assert.match(kode, /periksaSandiBaru/);
+    assert.match(kode, /BIAYA_HASH_SANDI/);
+    assert.equal(
+      /\.length\s*<\s*\d|bcrypt\.hash\([^,]+,\s*\d/.test(kode), false,
+      'aturan panjang atau biaya hash ditulis ulang sebagai angka'
+    );
+  });
+
+  it('sandi yang sama dengan sebelumnya ditolak tanpa menghanguskan token', async () => {
+    // Menjawab "berhasil" atas sandi yang tidak berubah membuat pengguna percaya
+    // akunnya sudah diselamatkan padahal belum — justru saat ia mereset karena
+    // menduga sandinya bocor.
+    const fake = buatRoute({ baris: barisSah(), sandiCocok: true });
+    const res = await tukar(fake.route);
+    const isi = await res.json();
+
+    assert.equal(res.status, 400);
+    assert.match(isi.message, /berbeda/i);
+    assert.equal(fake.klaim().length, 0, 'token hangus untuk kesalahan yang bisa diperbaiki');
+    assert.equal(fake.sandiTertulis().length, 0);
+  });
+
+  it('surat pemberitahuan dikirim setelah berhasil, tanpa tautan apa pun', async () => {
+    // Bila yang mereset bukan pemiliknya, surat ini satu-satunya tanda bahwa
+    // akunnya baru diambil. Tautan di dalamnya adalah pola yang sama dengan
+    // phishing dan melatih penerima mengkliknya, jadi sengaja tidak ada.
+    const fake = buatRoute({ baris: barisSah() });
+    await tukar(fake.route);
+
+    assert.equal(fake.surat().length, 1);
+    assert.equal(fake.surat()[0].to, 'budi@contoh.test');
+    assert.equal(/href=|https?:\/\//.test(fake.surat()[0].message), false, 'surat memuat tautan');
+    assert.equal(/Pesanan #/.test(fake.surat()[0].subject), false);
+  });
+
+  it('surat TIDAK dikirim saat penukaran gagal', async () => {
+    for (const opsi of [{ baris: null }, { baris: barisSah(), countKlaim: 0 }]) {
+      const fake = buatRoute(opsi);
+      await tukar(fake.route);
+      assert.equal(fake.surat().length, 0);
+    }
+  });
+
+  it('nama pengguna di surat dibungkus amankanHtml', async () => {
+    const fake = buatRoute({
+      baris: barisSah({ user: { email: 'a@b.test', name: '<script>x</script>', password: 'h' } }),
+    });
+    await tukar(fake.route);
+
+    assert.equal(fake.surat()[0].message.includes('<script>'), false);
+    assert.match(fake.surat()[0].message, /&lt;script&gt;/);
+  });
+
+  it('menolak 429 setelah dua puluh percobaan dari satu alamat asal', async () => {
+    const asal = asalUnikReset();
+    for (let i = 0; i < 20; i += 1) {
+      const res = await tukar(buatRoute({ baris: null }).route, { token: 'c'.repeat(64), asal });
+      assert.notEqual(res.status, 429, `percobaan ke-${i + 1} seharusnya lolos`);
+    }
+    const res = await tukar(buatRoute({ baris: null }).route, { token: 'c'.repeat(64), asal });
+    assert.equal(res.status, 429);
+    assert.notEqual(res.headers.get('Retry-After'), null);
+  });
+
+  it('hash bcrypt dihitung di luar transaksi', () => {
+    // Cost 12 memakan ratusan milidetik; menahan transaksi selama itu berarti
+    // menahan koneksi dari pool untuk pekerjaan yang tidak menyentuh database.
+    const kode = kodeSajaReset(JALUR_ROUTE_TUKAR_RESET);
+    const posisiHash = kode.indexOf('bcrypt.hash(');
+    const posisiTx = kode.indexOf('$transaction');
+    assert.ok(posisiHash > 0 && posisiTx > 0);
+    assert.ok(posisiHash < posisiTx, 'bcrypt.hash dipanggil di dalam transaksi');
+  });
+
+  it('galat database dijawab 500 tanpa membocorkan pesannya', async () => {
+    const fake = buatRoute({ baris: barisSah(), transaksiMelempar: true });
+    const res = await tukar(fake.route);
+    const isi = await res.json();
+
+    assert.equal(res.status, 500);
+    assert.equal(/database mati|prisma/i.test(isi.message), false);
+  });
+});
+
+describe('halaman reset sandi', () => {
+  it('halaman login menawarkan tautan "Lupa sandi"', () => {
+    // Sebelum ini tidak ada tautan apa pun: pemulihan akun tidak terlihat sebagai
+    // tombol rusak, ia terlihat sebagai fitur yang tidak ada.
+    assert.match(kodeSajaReset(JALUR_HALAMAN_LOGIN), /href="\/forgot-password"/);
+  });
+
+  it('kedua formulir memakai penanda fokus dan label yang sama dengan login', () => {
+    for (const jalur of [JALUR_HALAMAN_LUPA, JALUR_FORM_RESET]) {
+      const kode = kodeSajaReset(jalur);
+      // `focus:ring-utero` tanpa `ring-2` menghasilkan cincin selebar nol — di
+      // atas `outline-none` yang sudah membuang penanda bawaan peramban.
+      assert.match(kode, /focus:ring-2/, `${relReset(jalur)}: cincin fokus selebar nol`);
+      assert.match(kode, /focus:ring-utero/, relReset(jalur));
+      assert.match(kode, /htmlFor=/, `${relReset(jalur)}: label tanpa htmlFor`);
+    }
+  });
+
+  it('halaman reset menandai dirinya noindex dan no-referrer', () => {
+    // Token ada di URL, dan URL ikut terkirim sebagai header `Referer` pada
+    // setiap permintaan yang berangkat dari halaman ini — termasuk ke host lain.
+    // Navbar di halaman ini memuat tautan keluar.
+    const kode = kodeSajaReset(JALUR_HALAMAN_RESET);
+    assert.match(kode, /METADATA_PRIVAT/);
+    assert.match(kode, /referrer:\s*'no-referrer'/);
+  });
+
+  it('halaman reset meng-await searchParams', () => {
+    // Sejak Next 16 `searchParams` adalah Promise. Dibaca langsung, nilainya
+    // SELALU `undefined` — dan di halaman ini akibatnya adalah setiap pemilik
+    // tautan yang sah diberi tahu tautannya rusak.
+    const kode = kodeSajaReset(JALUR_HALAMAN_RESET);
+    assert.match(kode, /await searchParams/);
+    assert.match(kode, /searchParams\?:\s*Promise</);
+  });
+
+  it('token berbentuk array diperlakukan sebagai tidak ada', () => {
+    // `?token=a&token=b` tidak pernah kami terbitkan; mengambil elemen
+    // pertamanya berarti menerima bentuk yang tidak pernah kami kirim.
+    const kode = kodeSajaReset(JALUR_HALAMAN_RESET);
+    assert.match(kode, /typeof params\?\.token === 'string'/);
+    assert.equal(/token\[0\]|token\.at\(/.test(kode), false);
+  });
+
+  it('formulir reset memakai autoComplete="new-password" pada kedua kolom', () => {
+    const kode = kodeSajaReset(JALUR_FORM_RESET);
+    assert.equal((kode.match(/type="password"/g) || []).length, 2);
+    assert.equal((kode.match(/autoComplete="new-password"/g) || []).length, 2);
+    assert.equal(/autoComplete="current-password"/.test(kode), false);
+  });
+
+  it('formulir tidak menyalin aturan panjang sandi dari server', () => {
+    // Salinan di client hanya akan menyimpang dan memberi kesan sudah diperiksa.
+    // Yang berwenang atas panjang dan batas byte tetap `periksaSandiBaru`.
+    const kode = kodeSajaReset(JALUR_FORM_RESET);
+    assert.equal(/\.length\s*<\s*\d/.test(kode), false, 'aturan panjang disalin ke client');
+    assert.equal(/minLength=/.test(kode), false);
+  });
+
+  it('kedua halaman membaca jawaban lewat helper bersama, bukan `as any`', () => {
+    for (const jalur of [JALUR_HALAMAN_LUPA, JALUR_FORM_RESET]) {
+      const kode = kodeSajaReset(jalur);
+      assert.match(kode, /bacaJawaban/, relReset(jalur));
+      assert.match(kode, /pesanGalat/, relReset(jalur));
+      assert.equal(/as any/.test(kode), false, `${relReset(jalur)}: memakai as any`);
+    }
+  });
+});

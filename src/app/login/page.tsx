@@ -121,7 +121,17 @@ export default function LoginPage() {
                           <input id="masuk-email" type="email" name="email" autoComplete="email" className={KELAS_ISIAN} placeholder="nama@email.com" />
                       </div>
                       <div>
-                          <label htmlFor="masuk-sandi" className={KELAS_LABEL}>Password</label>
+                          {/* Label dan tautan "Lupa sandi" di satu baris, bukan
+                              di bawah tombol kirim. Pengguna yang sadar tidak
+                              ingat sandinya sadar saat berada DI kolom ini;
+                              tautan yang ditaruh di bawah tombol baru terlihat
+                              setelah ia menebak sekali dan gagal. */}
+                          <div className="flex items-baseline justify-between">
+                              <label htmlFor="masuk-sandi" className={KELAS_LABEL}>Password</label>
+                              <Link href="/forgot-password" className="mb-1 text-xs font-bold text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero">
+                                  Lupa sandi?
+                              </Link>
+                          </div>
                           <input id="masuk-sandi" type="password" name="password" autoComplete="current-password" className={KELAS_ISIAN} placeholder="••••••••" />
                       </div>
 
