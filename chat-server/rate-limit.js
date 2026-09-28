@@ -44,6 +44,20 @@ function rateLimit({ key, limit, windowMs }) {
   if (!existing || existing.resetAt <= now) {
     const resetAt = now + windowMs;
     buckets.set(key, { count: 1, resetAt });
+
+    // `limit < 1` diperiksa di sini juga, bukan hanya di cabang di bawah:
+    // cabang ini tidak membandingkan apa pun dengan `limit`, jadi `limit: 0`
+    // meloloskan permintaan PERTAMA setiap jendela dan melaporkan
+    // `remaining: -1`. Sama seperti di `src/lib/rate-limit.ts`.
+    if (limit < 1) {
+      return {
+        success: false,
+        remaining: 0,
+        resetAt,
+        retryAfterSeconds: Math.max(1, Math.ceil(windowMs / 1000)),
+      };
+    }
+
     return { success: true, remaining: limit - 1, resetAt, retryAfterSeconds: 0 };
   }
 

@@ -18814,3 +18814,493 @@ describe('CI menjalankan gerbang yang sudah ada', () => {
     assert.match(readme, /periksa\.yml/, 'README tidak menyebut workflow CI yang ada');
   });
 });
+
+describe('src/lib/money.ts — aritmetika uang', () => {
+  // Modul ini adalah pintu tunggal untuk setiap nominal di repo ini, dan sampai
+  // suite ini ada tidak satu pun test memuatnya sebagai subjek: ia hanya pernah
+  // DIPALSUKAN untuk menguji pemanggilnya. Artinya aturan yang paling sering
+  // dikutip di komentar seluruh repo — "jangan pakai `+ - * < >` pada uang" —
+  // tidak punya satu pun test yang menjaga bahwa penggantinya benar.
+  //
+  // Tidak butuh penukar modul: `money.ts` hanya mengimpor `@prisma/client`.
+  const JALUR = path.join(__dirname, '..', 'src', 'lib', 'money.ts');
+  const uang = require(JALUR);
+
+  describe('keDecimal: pintu masuk yang tidak pernah menghasilkan NaN', () => {
+    // NaN yang lolos ke sini ditolak database saat disimpan, dan penolakannya
+    // terjadi di titik yang jauh dari sumber masalahnya.
+    for (const [nama, masukan] of [
+      ['null', null],
+      ['undefined', undefined],
+      ['string kosong', ''],
+      ['teks bukan angka', 'abc'],
+      ['teks "NaN"', 'NaN'],
+      ['objek', {}],
+    ]) {
+      it(nama + ' menjadi 0, bukan NaN', () => {
+        const hasil = uang.keDecimal(masukan);
+        assert.equal(hasil.toString(), '0');
+        assert.equal(hasil.isNaN(), false, nama + ' menghasilkan NaN');
+      });
+    }
+
+    it('angka, teks, dan Decimal menghasilkan nilai yang sama', () => {
+      // Nominal masuk dari tiga arah: kolom database (Decimal), formulir
+      // (string), dan perhitungan di kode (number). Ketiganya harus setara.
+      assert.equal(uang.keDecimal(1500000).toString(), '1500000');
+      assert.equal(uang.keDecimal('1500000').toString(), '1500000');
+      assert.equal(uang.keDecimal(uang.keDecimal('1500000')).toString(), '1500000');
+    });
+  });
+
+  describe('operasi yang menggantikan operator', () => {
+    it('jumlah menambah, tidak menyambung teks', () => {
+      // `'100000' + 200000` dalam JavaScript adalah "100000200000". Ini yang
+      // membuat modul ini ada.
+      assert.equal(uang.jumlah('100000', 200000, uang.keDecimal('50000')).toString(), '350000');
+    });
+
+    it('jumlah tanpa argumen adalah 0, bukan undefined', () => {
+      // Dipanggil atas daftar kosong (mis. pesanan tanpa satu pun pembayaran).
+      assert.equal(uang.jumlah().toString(), '0');
+    });
+
+    it('kurang boleh menghasilkan negatif', () => {
+      // Tidak ditahan di nol di sini: yang menahannya adalah pemanggil yang
+      // memang butuh (mis. `sisaTagihan`). Menahannya di sini menyembunyikan
+      // pembayaran berlebih dari setiap pemanggil sekaligus.
+      assert.equal(uang.kurang('100', '300').toString(), '-200');
+    });
+
+    it('kali menerima pengali pecahan tanpa menjadi NaN', () => {
+      // `Decimal * 0.11` lewat operator menghasilkan NaN.
+      assert.equal(uang.kali('15000000', 0.11).toString(), '1650000');
+    });
+
+    it('persen membulatkan ke 2 desimal, arah ke atas pada angka 5', () => {
+      assert.equal(uang.persen(1000000, 11).toString(), '110000');
+      // 12345 * 11 / 100 = 1357.95 tepat; yang diuji adalah bentuk hasilnya
+      // tidak memanjang menjadi pecahan yang tidak bisa ditagih.
+      assert.equal(uang.persen('12345', 11).toString(), '1357.95');
+    });
+  });
+
+  describe('perbandingan: angka, bukan teks', () => {
+    it('lebihBesar tidak membandingkan sebagai teks', () => {
+      // Inti persoalannya, dan alasan `lebihKecil` ada berdampingan: sebagai
+      // teks "9000000" < "10000000" bernilai false, karena '9' > '1'. Di layar
+      // pengguna itu berarti sisa tagihan sembilan juta dianggap lebih besar
+      // dari sepuluh juta.
+      assert.equal(uang.lebihBesar('9000000', '10000000'), false);
+      assert.equal(uang.lebihKecil('9000000', '10000000'), true);
+    });
+
+    it('lebihBesar dan lebihKecil keduanya false pada nilai sama', () => {
+      // Pemanggil yang memakai `!lebihBesar(a, b)` sebagai "a <= b" bergantung
+      // pada ini.
+      assert.equal(uang.lebihBesar('500', '500'), false);
+      assert.equal(uang.lebihKecil('500', '500'), false);
+    });
+
+    it('nol menjawab benar untuk Decimal(0), yang `if` tidak bisa', () => {
+      // `if (order.dpAmount)` selalu lolos: Decimal(0) adalah objek, dan setiap
+      // objek bernilai benar di JavaScript.
+      assert.equal(uang.nol(0), true);
+      assert.equal(uang.nol(uang.keDecimal(0)), true);
+      assert.equal(uang.nol(null), true, 'nilai kosong dihitung nol');
+      assert.equal(uang.nol('1'), false);
+      // Bukti bahwa `if` memang tidak bisa dipakai untuk ini:
+      assert.ok(uang.keDecimal(0), 'Decimal(0) bernilai benar sebagai objek');
+    });
+
+    it('bulat menolak pecahan yang tidak akan pernah bisa ditagih', () => {
+      // `nominalUntukXendit` menolak pecahan dengan `NOMINAL_TIDAK_VALID`, dan
+      // penolakan itu terjadi saat pembeli menekan Bayar — setelah tagihannya
+      // tercatat, muncul di invoice, dan dikirim lewat email.
+      assert.equal(uang.bulat('1000.5'), false);
+      assert.equal(uang.bulat('1000'), true);
+      assert.equal(uang.bulat(0), true);
+    });
+  });
+
+  describe('format untuk layar', () => {
+    it('rupiah memberi pemisah ribuan dan tanpa sen', () => {
+      const hasil = uang.rupiah(15000000);
+      // Intl memakai NBSP (U+00A0) setelah "Rp", bukan spasi biasa. Assertion
+      // yang menuliskan spasi biasa akan gagal walau keluarannya benar, jadi
+      // yang diperiksa adalah bagian yang benar-benar menjadi maksudnya.
+      assert.match(hasil, /^Rp\s15\.000\.000$/u);
+      assert.ok(!hasil.includes(','), 'rupiah tidak ditampilkan sampai sen');
+    });
+
+    it('angkaRupiah tidak menyertakan "Rp"', () => {
+      // Dipakai di tempat yang sudah menulis "Rp" sendiri di sebelahnya;
+      // menyertakannya di sini menghasilkan "Rp Rp 15.000.000".
+      assert.equal(uang.angkaRupiah(15000000), '15.000.000');
+    });
+
+    it('rupiahSingkat memakai Jt dan M pada batasnya', () => {
+      assert.equal(uang.rupiahSingkat(15000000), '15 Jt');
+      assert.equal(uang.rupiahSingkat(1500000000), '1,5 M');
+      // Di bawah satu juta ditulis utuh: "0,8 Jt" lebih sulit dibaca daripada
+      // angka aslinya.
+      assert.equal(uang.rupiahSingkat(750000), '750.000');
+    });
+
+    it('rupiahSingkat memakai nilai mutlak untuk memilih satuan', () => {
+      // `abs` dipakai supaya nominal negatif (mis. selisih refund) tidak jatuh
+      // ke cabang "tulis utuh" dan muncul sebagai deret belasan digit.
+      assert.equal(uang.rupiahSingkat(-1500000000), '-1,5 M');
+    });
+
+    it('uangUntukClient mengembalikan number yang bisa di-JSON', () => {
+      // Bukan kerapian: Next mengubah setiap prop menjadi JSON saat
+      // menyeberang ke komponen `'use client'`, dan Decimal tidak bisa. Halaman
+      // gagal SAAT DIJALANKAN sementara `tsc` tidak melaporkan apa pun.
+      const hasil = uang.uangUntukClient(uang.keDecimal('1500000'));
+      assert.equal(typeof hasil, 'number');
+      assert.equal(hasil, 1500000);
+      assert.equal(JSON.stringify({ n: hasil }), '{"n":1500000}');
+    });
+  });
+});
+
+describe('src/lib/rate-limit.ts — pembatas laju', () => {
+  // Satu-satunya penahan penyalahgunaan di sembilan endpoint, termasuk yang
+  // meneruskan permintaan ke Gemini API (kuota berbayar) dan `auth.ts` (login).
+  // Sampai suite ini ada, modul ini hanya pernah dipalsukan untuk menguji
+  // pemanggilnya — perilakunya sendiri tidak diuji satu kali pun.
+  const JALUR = path.join(__dirname, '..', 'src', 'lib', 'rate-limit.ts');
+  const { rateLimit, rateLimitHeaders } = require(JALUR);
+
+  // Penghitungnya hidup di memori modul dan TIDAK direset antar test. Karena
+  // itu setiap test memakai kunci yang unik: kunci bersama membuat hasil satu
+  // test bergantung pada urutan jalannya test lain.
+  let nomor = 0;
+  const kunci = () => `test-${process.pid}-${(nomor += 1)}`;
+
+  it('permintaan di bawah batas diteruskan, sisa jatahnya menurun', () => {
+    const k = kunci();
+    const a = rateLimit({ key: k, limit: 3, windowMs: 60_000 });
+    const b = rateLimit({ key: k, limit: 3, windowMs: 60_000 });
+    assert.equal(a.success, true);
+    assert.equal(a.remaining, 2);
+    assert.equal(b.success, true);
+    assert.equal(b.remaining, 1);
+    assert.equal(a.retryAfterSeconds, 0);
+  });
+
+  it('permintaan setelah batas ditolak dengan retryAfter minimal 1', () => {
+    // `Math.max(1, ...)` ada supaya `Retry-After: 0` tidak pernah dikirim:
+    // client yang membacanya mencoba lagi seketika dan ditolak lagi.
+    const k = kunci();
+    rateLimit({ key: k, limit: 1, windowMs: 60_000 });
+    const tolak = rateLimit({ key: k, limit: 1, windowMs: 60_000 });
+    assert.equal(tolak.success, false);
+    assert.equal(tolak.remaining, 0);
+    assert.ok(tolak.retryAfterSeconds >= 1, 'retryAfterSeconds tidak boleh 0 saat ditolak');
+  });
+
+  it('kunci yang berbeda punya jatah masing-masing', () => {
+    // Kalau tidak, satu pengguna yang kena batas mengunci seluruh pengguna
+    // lain dari endpoint yang sama.
+    const a = kunci();
+    const b = kunci();
+    rateLimit({ key: a, limit: 1, windowMs: 60_000 });
+    assert.equal(rateLimit({ key: a, limit: 1, windowMs: 60_000 }).success, false);
+    assert.equal(rateLimit({ key: b, limit: 1, windowMs: 60_000 }).success, true);
+  });
+
+  it('jendela yang sudah lewat memulihkan jatah', () => {
+    // `windowMs: 0` membuat jendelanya berakhir pada milidetik yang sama, jadi
+    // panggilan berikutnya sudah berada di jendela baru tanpa perlu menunggu.
+    const k = kunci();
+    const a = rateLimit({ key: k, limit: 1, windowMs: 0 });
+    assert.equal(a.success, true);
+    const b = rateLimit({ key: k, limit: 1, windowMs: 0 });
+    assert.equal(b.success, true, 'jendela yang lewat tidak memulihkan jatah');
+  });
+
+  it('limit 0 menolak SEJAK permintaan pertama', () => {
+    // REGRESI. Cabang "jendela baru" tidak membandingkan apa pun dengan
+    // `limit`, jadi sebelum diperbaiki `limit: 0` meloloskan permintaan pertama
+    // setiap jendela dan melaporkan `remaining: -1`. `limit: 0` adalah cara
+    // paling wajar mematikan sebuah endpoint tanpa menyentuh route-nya, dan
+    // endpoint yang "dimatikan" tetap melayani satu permintaan per kunci per
+    // jendela adalah bentuk kegagalan yang paling buruk untuk itu.
+    const k = kunci();
+    const pertama = rateLimit({ key: k, limit: 0, windowMs: 60_000 });
+    assert.equal(pertama.success, false, 'limit 0 masih meloloskan permintaan pertama');
+    assert.equal(pertama.remaining, 0, 'remaining negatif bocor ke header');
+    assert.ok(pertama.retryAfterSeconds >= 1);
+  });
+
+  it('remaining tidak pernah negatif', () => {
+    // `X-RateLimit-Remaining: -1` bukan nilai yang sah bagi client mana pun.
+    const k = kunci();
+    for (let i = 0; i < 5; i += 1) {
+      const hasil = rateLimit({ key: k, limit: 2, windowMs: 60_000 });
+      assert.ok(hasil.remaining >= 0, 'remaining negatif pada panggilan ke-' + (i + 1));
+    }
+  });
+
+  describe('rateLimitHeaders', () => {
+    it('menyertakan Retry-After hanya saat ditolak', () => {
+      // Header itu memberi tahu client kapan boleh mencoba lagi; mengirimnya
+      // pada respons yang berhasil membuat client menunda tanpa alasan.
+      const sukses = rateLimitHeaders(5, {
+        success: true, remaining: 4, resetAt: 1_700_000_000_000, retryAfterSeconds: 0,
+      });
+      assert.equal(Object.hasOwn(sukses, 'Retry-After'), false);
+
+      const gagal = rateLimitHeaders(5, {
+        success: false, remaining: 0, resetAt: 1_700_000_000_000, retryAfterSeconds: 42,
+      });
+      assert.equal(gagal['Retry-After'], '42');
+    });
+
+    it('X-RateLimit-Reset dalam detik, bukan milidetik', () => {
+      // Standarnya detik epoch. Mengirim milidetik membuat client menghitung
+      // waktu tunggu sekitar 50 ribu tahun.
+      const h = rateLimitHeaders(5, {
+        success: true, remaining: 4, resetAt: 1_700_000_000_000, retryAfterSeconds: 0,
+      });
+      assert.equal(h['X-RateLimit-Reset'], '1700000000');
+      assert.equal(h['X-RateLimit-Limit'], '5');
+      assert.equal(h['X-RateLimit-Remaining'], '4');
+    });
+
+    it('seluruh nilainya string, sebagaimana Headers menuntut', () => {
+      const h = rateLimitHeaders(5, {
+        success: false, remaining: 0, resetAt: 1_700_000_000_000, retryAfterSeconds: 7,
+      });
+      for (const [nama, nilai] of Object.entries(h)) {
+        assert.equal(typeof nilai, 'string', nama + ' bukan string');
+      }
+    });
+  });
+
+  it('salinan kembarnya di chat-server ikut menolak limit 0', () => {
+    // `chat-server/rate-limit.js` adalah salinan CommonJS dari modul ini, dan
+    // header kedua berkas menyatakan: kalau salah satu diubah, ubah juga yang
+    // lain. Salinan itu punya cacat `limit: 0` yang sama persis, karena ia
+    // memang disalin. Diuji lewat berkasnya sendiri, bukan lewat pembacaan
+    // teks: yang penting perilakunya sama, bukan barisnya mirip.
+    const kembar = require(path.join(__dirname, '..', 'chat-server', 'rate-limit.js'));
+    const k = 'kembar-' + process.pid + '-' + (nomor += 1);
+    assert.equal(kembar.rateLimit({ key: k, limit: 0, windowMs: 60_000 }).success, false);
+    assert.equal(kembar.rateLimit({ key: k + 'b', limit: 2, windowMs: 60_000 }).remaining, 1);
+  });
+});
+
+describe('src/lib/transisi-status.ts — peta transisi sebagai perilaku', () => {
+  // `TRANSISI_SAH` sudah dijaga satu test yang MEMBACANYA SEBAGAI TEKS, dan
+  // `transisiSah` sudah dipalsukan di beberapa test pemanggil. Yang belum ada
+  // adalah test atas perilaku fungsinya sendiri — termasuk dua jalur yang
+  // komentar berkasnya sebut sebagai alasan ia dibuat, dan satu yang
+  // menggantung uang pembeli secara permanen.
+  const modul = () => muatDenganModulPalsu(JALUR_TRANSISI, { '@/lib/prisma': { prisma: {} } });
+
+  it('REFUNDED dan CANCELLED tidak bisa dihidupkan kembali', () => {
+    // Alasan berkas ini ada. Sebelumnya `admin/update-order` menerima status
+    // apa pun yang anggota enum, jadi satu salah klik memindahkan pesanan yang
+    // sudah dikembalikan dananya kembali ke ACTIVE: uangnya sudah ditransfer
+    // keluar, tanggalnya terkunci lagi, dan pelanggan menerima email
+    // "Pembayaran Berhasil" untuk pesanan yang baru saja direfund.
+    const { transisiSah } = modul();
+    for (const buntu of ['REFUNDED', 'CANCELLED']) {
+      for (const tujuan of ['ACTIVE', 'PENDING_PAYMENT', 'PAID_CONFIRMED', 'IN_PRODUCTION']) {
+        assert.equal(
+          transisiSah(buntu, tujuan),
+          false,
+          buntu + ' bisa dihidupkan kembali ke ' + tujuan
+        );
+      }
+    }
+  });
+
+  it('pesanan yang sudah dibayar tidak bisa dilempar ke CANCELLED', () => {
+    // Jebakan uang yang nyata: CANCELLED adalah status buntu yang juga BUKAN
+    // titik awal pengajuan refund. Satu klik "Tolak" pada pesanan yang uangnya
+    // sudah di rekening memindahkannya ke keadaan tanpa satu pun jalur
+    // pengembalian — tidak bisa maju, tidak bisa refund, tidak bisa kembali.
+    // Penggantinya WAITING_BANK, yang selalu berujung pada pengembalian dana.
+    const { transisiSah } = modul();
+    for (const dibayar of ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION', 'ACTIVE']) {
+      assert.equal(
+        transisiSah(dibayar, 'CANCELLED'),
+        false,
+        dibayar + ' bisa dilempar ke CANCELLED tanpa jalur refund'
+      );
+      assert.equal(
+        transisiSah(dibayar, 'WAITING_BANK') || transisiSah(dibayar, 'REVIEW_REFUND'),
+        true,
+        dibayar + ' tidak punya satu pun jalur pengembalian dana'
+      );
+    }
+  });
+
+  it('menyimpan ulang status yang sama diterima', () => {
+    // Admin menekan tombol yang sama dua kali, atau hanya menambahkan foto
+    // bukti tanpa mengubah tahap. Ditolaknya terbaca sebagai kegagalan padahal
+    // tidak ada yang berubah — termasuk untuk status buntu.
+    const { transisiSah } = modul();
+    for (const s of ['PENDING_PAYMENT', 'ACTIVE', 'REFUNDED', 'CANCELLED']) {
+      assert.equal(transisiSah(s, s), true, s + ' ke dirinya sendiri ditolak');
+    }
+  });
+
+  it('status yang tidak dikenal ditolak, bukan melempar', () => {
+    // Nilai bisa datang dari body permintaan. `TRANSISI_SAH[dari]` menjadi
+    // undefined untuk kunci asing, dan tanpa `?? false` barisnya melempar
+    // TypeError yang menjadi 500 alih-alih 400.
+    const { transisiSah } = modul();
+    assert.equal(transisiSah('BUKAN_STATUS', 'ACTIVE'), false);
+    assert.equal(transisiSah('PENDING_PAYMENT', 'BUKAN_STATUS'), false);
+  });
+
+  it('STATUS_BOLEH_AJUKAN_REFUND diturunkan dari peta, bukan disalin', () => {
+    // Ditulis sebagai turunan supaya tidak ada kemungkinan dua daftar berbeda
+    // isi. Test ini menghitung ulang turunannya dari peta.
+    const { TRANSISI_SAH, STATUS_BOLEH_AJUKAN_REFUND } = modul();
+    const harusnya = Object.keys(TRANSISI_SAH).filter((d) =>
+      TRANSISI_SAH[d].includes('REVIEW_REFUND')
+    );
+    assert.deepStrictEqual([...STATUS_BOLEH_AJUKAN_REFUND], harusnya);
+    assert.ok(STATUS_BOLEH_AJUKAN_REFUND.length > 0, 'tidak ada satu pun jalur pengajuan refund');
+    assert.ok(
+      !STATUS_BOLEH_AJUKAN_REFUND.includes('CANCELLED'),
+      'CANCELLED terdaftar sebagai titik awal refund'
+    );
+  });
+
+  it('STATUS_MENGUNCI_TANGGAL mengecualikan tepat CANCELLED dan REFUNDED', () => {
+    // Keduanya berarti pesanan sudah lepas, jadi tanggalnya kembali bisa
+    // dijual. Status lain yang ikut dikecualikan berarti tanggal yang masih
+    // dipakai pesanan hidup dijual dua kali.
+    const { TRANSISI_SAH, STATUS_MENGUNCI_TANGGAL } = modul();
+    const semua = Object.keys(TRANSISI_SAH);
+    const luar = semua.filter((s) => !STATUS_MENGUNCI_TANGGAL.includes(s));
+    assert.deepStrictEqual(luar.sort(), ['CANCELLED', 'REFUNDED']);
+  });
+
+  it('daftar pengunci tanggal sama dengan yang ada di constraint SQL', () => {
+    // Daftar di kode diturunkan otomatis dari `TRANSISI_SAH`; daftar di SQL
+    // ditulis tangan. Setiap status baru masuk ke daftar kode dengan sendirinya
+    // tapi HARUS ditambahkan ke migrasi secara manual — komentar kepala migrasi
+    // `20260923140000_samakan_status_pengunci_tanggal` menyatakan tuntutan itu
+    // dengan kata-kata, dan sampai test ini ada tidak ada apa pun yang
+    // menegakkannya. Kalau keduanya menyimpang, status yang menyimpang mengunci
+    // tanggal di aplikasi tapi TIDAK di database, dan celah balapan yang
+    // ditutup `booking_tanpa_tumpang_tindih` terbuka lagi persis di sana: dua
+    // permintaan bersamaan hanya dijaga constraint itu.
+    //
+    // Yang dibaca adalah `WHERE (status IN (...))` milik constraint terakhir
+    // yang dibuat — bukan sembarang `IN` di berkas migrasi. Migrasi backfill
+    // punya `NOT IN ('PENDING_PAYMENT','CANCELLED')` yang bentuknya mirip tapi
+    // maksudnya lain sama sekali: ia memilih baris untuk disalin sekali,
+    // bukan menyatakan status apa yang mengunci tanggal. Karena itu
+    // pengambilannya dijangkarkan ke nama constraint-nya.
+    const { STATUS_MENGUNCI_TANGGAL } = modul();
+    const jalurMigrasi = path.join(__dirname, '..', 'prisma', 'migrations');
+    const sql = fs
+      .readdirSync(jalurMigrasi)
+      .sort()
+      .filter((d) => fs.existsSync(path.join(jalurMigrasi, d, 'migration.sql')))
+      .map((d) => fs.readFileSync(path.join(jalurMigrasi, d, 'migration.sql'), 'utf8'))
+      // Komentar dibuang lebih dulu: migrasi terbaru mengutip bentuk constraint
+      // lama di dalam komentarnya, dan kutipan itu bukan constraint yang
+      // berlaku.
+      .map((isi) =>
+        isi
+          .split('\n')
+          .filter((b) => !/^\s*--/.test(b))
+          .join('\n')
+      )
+      .join('\n');
+
+    // Constraint terakhir yang ditambahkan adalah yang berlaku: migrasi
+    // penyama menghapus yang lama lalu membuatnya ulang.
+    const potongan = sql.split(/ADD\s+CONSTRAINT\s+"booking_tanpa_tumpang_tindih"/i);
+    assert.ok(
+      potongan.length > 1,
+      'constraint booking_tanpa_tumpang_tindih tidak ditemukan di satu pun migrasi'
+    );
+
+    const terakhir = potongan[potongan.length - 1];
+    const klausa = terakhir.match(/WHERE\s*\([\s\S]*?\)\s*\)\s*;/i);
+    assert.ok(klausa, 'klausa WHERE constraint tidak terbaca');
+
+    const daftar = [...klausa[0].matchAll(/'([A-Z_]+)'/g)].map((m) => m[1]);
+    assert.ok(daftar.length > 0, 'daftar status di constraint tidak terbaca');
+
+    assert.deepStrictEqual(
+      [...daftar].sort(),
+      [...STATUS_MENGUNCI_TANGGAL].sort(),
+      'daftar status pengunci tanggal di kode dan di constraint SQL berbeda'
+    );
+  });
+
+  it('pesanTransisiDitolak menyebut tujuan yang benar-benar tersedia', () => {
+    // Pesan galat yang hanya berbunyi "tidak boleh" memaksa admin menebak.
+    const { pesanTransisiDitolak, TRANSISI_SAH } = modul();
+    const pesan = pesanTransisiDitolak('ACTIVE', 'PENDING_PAYMENT');
+    for (const tujuan of TRANSISI_SAH.ACTIVE) {
+      assert.ok(pesan.includes(tujuan), 'pesan tidak menyebut tujuan ' + tujuan);
+    }
+    assert.ok(pesan.includes('PENDING_PAYMENT'), 'pesan tidak menyebut yang diminta');
+  });
+
+  it('pesan untuk status buntu tidak menawarkan daftar kosong', () => {
+    // "hanya bisa ke: " tanpa apa pun sesudahnya terbaca sebagai pesan rusak.
+    const { pesanTransisiDitolak } = modul();
+    const pesan = pesanTransisiDitolak('REFUNDED', 'ACTIVE');
+    assert.match(pesan, /sudah selesai/);
+    assert.ok(!/hanya bisa ke:\s*$/.test(pesan), 'pesan menawarkan daftar tujuan kosong');
+  });
+
+  it('tenggat pembayaran 24 jam dihitung dari waktu yang diberikan', () => {
+    const { JAM_TENGGAT_PEMBAYARAN, hitungTenggatPembayaran } = modul();
+    assert.equal(JAM_TENGGAT_PEMBAYARAN, 24);
+    const dari = new Date('2026-09-29T00:00:00.000Z');
+    assert.equal(hitungTenggatPembayaran(dari).toISOString(), '2026-09-30T00:00:00.000Z');
+    // Tidak mengubah tanggal yang dikirim masuk.
+    assert.equal(dari.toISOString(), '2026-09-29T00:00:00.000Z');
+  });
+
+  it('setiap tujuan di peta adalah status yang benar-benar ada', () => {
+    // Salah tulis nama status membuat sebuah jalur tidak pernah bisa dilewati,
+    // dan tidak ada yang melaporkannya: `includes` atas nama yang tidak ada
+    // hanya memulangkan false.
+    const { TRANSISI_SAH } = modul();
+    const dikenal = new Set(Object.keys(TRANSISI_SAH));
+    for (const [dari, tujuan] of Object.entries(TRANSISI_SAH)) {
+      for (const ke of tujuan) {
+        assert.ok(dikenal.has(ke), dari + ' menuju status yang tidak ada: ' + ke);
+        assert.notEqual(ke, dari, dari + ' mendaftarkan dirinya sendiri sebagai tujuan');
+      }
+    }
+  });
+
+  it('setiap status bisa dicapai dari PENDING_PAYMENT', () => {
+    // Status yang tidak bisa dicapai dari titik awal mana pun adalah kode mati
+    // yang terlihat hidup: ia muncul di menu admin dan di label, tapi tidak ada
+    // satu pun pesanan yang bisa sampai ke sana.
+    const { TRANSISI_SAH } = modul();
+    const terjangkau = new Set(['PENDING_PAYMENT']);
+    let tumbuh = true;
+    while (tumbuh) {
+      tumbuh = false;
+      for (const dari of [...terjangkau]) {
+        for (const ke of TRANSISI_SAH[dari] ?? []) {
+          if (!terjangkau.has(ke)) {
+            terjangkau.add(ke);
+            tumbuh = true;
+          }
+        }
+      }
+    }
+    const terasing = Object.keys(TRANSISI_SAH).filter((s) => !terjangkau.has(s));
+    assert.deepStrictEqual(terasing, [], 'status ini tidak bisa dicapai dari PENDING_PAYMENT');
+  });
+});

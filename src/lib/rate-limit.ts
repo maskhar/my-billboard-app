@@ -86,6 +86,30 @@ export function rateLimit({ key, limit, windowMs }: RateLimitOptions): RateLimit
   if (!existing || existing.resetAt <= now) {
     const resetAt = now + windowMs;
     buckets.set(key, { count: 1, resetAt });
+
+    // `limit < 1` DIPERIKSA DI SINI JUGA, bukan hanya di cabang di bawah.
+    //
+    // Tanpa baris ini `limit: 0` meloloskan permintaan PERTAMA setiap jendela:
+    // cabang ini tidak pernah membandingkan apa pun dengan `limit`, jadi
+    // permintaan pertama lolos dan `remaining` menjadi -1. Barulah permintaan
+    // kedua ditolak oleh cabang di bawah.
+    //
+    // `limit: 0` adalah cara paling wajar mematikan sebuah endpoint tanpa
+    // menyentuh route-nya — dan bentuk kegagalannya di sini adalah yang paling
+    // buruk untuk itu: endpoint yang "dimatikan" tetap melayani satu permintaan
+    // per kunci per jendela, dan `X-RateLimit-Remaining: -1` menjadi satu-satunya
+    // petunjuk bahwa ada yang salah. Belum ada pemanggil yang memakai nilai itu
+    // hari ini; baris ini ada supaya yang pertama memakainya tidak menemukannya
+    // dengan cara yang sulit.
+    if (limit < 1) {
+      return {
+        success: false,
+        remaining: 0,
+        resetAt,
+        retryAfterSeconds: Math.max(1, Math.ceil(windowMs / 1000)),
+      };
+    }
+
     return {
       success: true,
       remaining: limit - 1,
