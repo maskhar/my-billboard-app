@@ -9,6 +9,60 @@ import {
 } from 'lucide-react';
 import Link from 'next/link';
 import { rupiah } from '@/lib/money';
+import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+
+/**
+ * Kolom pesanan yang benar-benar dibaca komponen ini.
+ *
+ * Sengaja TIDAK mengimpor `TransaksiUntukClient` dari `TransactionClient.tsx`:
+ * file itulah satu-satunya pemanggil komponen ini, jadi impor baliknya akan
+ * melingkar. Tipe di bawah adalah himpunan bagiannya, dan karena TypeScript
+ * mencocokkan bentuk (bukan nama), `order={selected}` di sana tetap lolos —
+ * sementara kolom yang salah tulis di SINI menjadi galat kompilasi.
+ *
+ * Sebelumnya prop ini `any`. Akibatnya bukan sekadar kerapian: `order.status`
+ * dibandingkan dengan sebelas string status di file ini, dan satu salah ketik
+ * ('PROCESS_REUND') membuat tombolnya hilang tanpa satu pun peringatan.
+ */
+export type PesananUntukAksi = {
+  id: string;
+  status: string;
+  totalPrice: number;
+  designOption: string | null;
+  designFileUrl: string | null;
+  refundProof: string | null;
+  installationProof: string | null;
+  userBankName: string | null;
+  userBankAccount: string | null;
+};
+
+/**
+ * Kolom tambahan yang diterima `/api/admin/update-order` selain `orderId` dan
+ * `newStatus`.
+ *
+ * Route itu memakai allowlist, jadi kolom asing memang dibuang di server —
+ * tapi `extraData: any` membuat salah tulis di sisi client (`refundProff`)
+ * lolos `tsc` dan berakhir sebagai 422 "bukti transfer wajib" yang membingungkan.
+ */
+type DataTambahan = {
+  reason?: string;
+  refundProof?: string;
+  installationProof?: string;
+  isLocked?: boolean;
+};
+
+/**
+ * Role yang benar-benar diterima ketiga route yang dipanggil komponen ini.
+ *
+ * `admin/update-order`, `admin/orders/record-payment`, dan
+ * `admin/orders/add-charge` semuanya menolak dengan `['ADMIN', 'SUPER_ADMIN']`.
+ * Sementara itu `admin/(dashboard)/layout.tsx` mengizinkan `CS` dan `OPERATOR`
+ * masuk dashboard, jadi mereka melihat SELURUH tombol di kolom ini — dan setiap
+ * penekanan berakhir 403 setelah `confirm()` yang menakutkan ("status REFUNDED
+ * tidak bisa dibatalkan") sudah disetujui. Yang lebih buruk, `prompt()` alasan
+ * pembatalan sudah terisi dan hilang bersama penolakannya.
+ */
+const ROLE_BOLEH_UBAH = ['ADMIN', 'SUPER_ADMIN'];
 
 export default function OrderActions({
   order,
@@ -17,7 +71,8 @@ export default function OrderActions({
   nominalRefund,
   sisaPokok,
 }: {
-  order: any;
+  order: PesananUntukAksi;
+  /** Role sesi, dari server. Menentukan apakah tombol pengubah dirender. */
   currentUserRole: string;
   /**
    * Apakah pesanan ini punya `Payment PAID` pokok — dihitung server dari ledger.
@@ -59,7 +114,7 @@ export default function OrderActions({
       setInstallData(order.installationProof || "");
   }, [order]);
 
-  const updateStatus = async (newStatus: string, extraData: any = {}) => {
+  const updateStatus = async (newStatus: string, extraData: DataTambahan = {}) => {
       setLoading(true);
       try {
           const res = await fetch('/api/admin/update-order', {
@@ -67,15 +122,15 @@ export default function OrderActions({
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ orderId: order.id, newStatus, ...extraData })
           });
-          const data = await res.json().catch(() => ({} as any));
+          const jawaban = await bacaJawaban(res);
           if (!res.ok) {
-              alert('Gagal memperbarui status: ' + (data.message || `Server menolak (${res.status}).`));
+              alert('Gagal memperbarui status: ' + alasanPenolakan(res, jawaban));
               return;
           }
           setShowTransferModal(false);
           setShowInstallModal(false);
           router.refresh();
-      } catch (err) {
+      } catch {
           alert('Error Server: status tidak berubah.');
       } finally {
           setLoading(false);
@@ -83,7 +138,10 @@ export default function OrderActions({
   };
 
   // --- HANDLERS HELPER ---
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: any) => {
+  const handleFileChange = (
+      e: React.ChangeEvent<HTMLInputElement>,
+      setter: (dataUrl: string) => void,
+  ) => {
       const file = e.target.files?.[0];
       if (file) {
           if (file.size > 2 * 1024 * 1024) { alert("Max 2MB"); return; }
@@ -175,12 +233,12 @@ export default function OrderActions({
                   keterangan: keteranganCatat,
               }),
           });
-          const data = await res.json().catch(() => ({} as any));
+          const jawaban = await bacaJawaban(res);
           if (!res.ok) {
-              alert('Gagal mencatat pembayaran: ' + (data.message || `Server menolak (${res.status}).`));
+              alert('Gagal mencatat pembayaran: ' + alasanPenolakan(res, jawaban));
               return;
           }
-          alert(data.message || 'Pembayaran tercatat.');
+          alert(jawaban.pesan ?? 'Pembayaran tercatat.');
           setShowCatatModal(false);
           setNominalCatat("");
           setKeteranganCatat("");
@@ -280,12 +338,18 @@ export default function OrderActions({
 
   if (loading) return <Loader2 className="animate-spin text-gray-400 mx-auto" size={18} />;
 
+  // CS dan OPERATOR hanya melihat tombol cetak invoice. Server tetap yang
+  // memutuskan — ini menghindarkan mereka dari `prompt()`/`confirm()` yang
+  // pasti berakhir 403.
+  const bolehUbah = ROLE_BOLEH_UBAH.includes(currentUserRole);
+
   // Daftar yang sama dipakai server (`STATUS_BOLEH_BAYAR_LANJUTAN` di
   // `src/lib/pembayaran.ts`) untuk memutuskan bolehkah setoran dicatat. Ditulis
   // ulang di sini sebagai teks karena komponen client tidak pernah menerima enum
   // Prisma; server tetap yang memutuskan — ini hanya menyembunyikan tombol yang
   // pasti ditolak.
   const bolehCatatSetoran =
+      bolehUbah &&
       sisaPokok > 0 &&
       ['PENDING_PAYMENT', 'PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION', 'ACTIVE']
           .includes(order.status);
@@ -295,6 +359,12 @@ export default function OrderActions({
   // ===============================================
   
   const renderButtons = () => {
+    // Pengamat (CS/OPERATOR) melihat statusnya saja. Tombol yang ada di sini
+    // seluruhnya memanggil route yang menolak role mereka.
+    if (!bolehUbah) {
+        return <span className="text-[10px] text-gray-400">Hanya lihat</span>;
+    }
+
     // 1. BELUM BAYAR / KONFIRMASI BAYAR
     if (order.status === 'PENDING_PAYMENT' || order.status === 'PAID_CONFIRMED') {
         const isPaid = order.status === 'PAID_CONFIRMED';
@@ -433,7 +503,12 @@ export default function OrderActions({
                     <div className="p-5 space-y-4">
                         <div className="border-2 border-dashed p-6 text-center rounded-xl cursor-pointer hover:bg-indigo-50 transition relative">
                              <input type="file" accept="image/*" onChange={(e) => handleFileChange(e, setInstallData)} className="absolute inset-0 opacity-0 cursor-pointer"/>
-                             {installData ? <img src={installData} className="max-h-32 mx-auto rounded shadow-sm"/> : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
+                             {/* `<img>` biasa, bukan `next/image`: sumbernya `data:` URL hasil
+                                 `FileReader` yang belum pernah diunggah ke mana pun, jadi
+                                 pengoptimal gambar Next.js tidak punya apa pun untuk
+                                 dioptimalkan — dan `next/image` MELEMPAR pada `data:` URL. */}
+                             {/* eslint-disable-next-line @next/next/no-img-element */}
+                             {installData ? <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/> : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
                         </div>
                         <button onClick={handleFinishInstall} className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-indigo-700">Tayangkan & Aktifkan</button>
                     </div>
@@ -582,19 +657,47 @@ export default function OrderActions({
                         <button onClick={() => setShowDesignModal(false)}>✕</button>
                     </div>
                     <div className="p-5 space-y-4">
-                        <div className="bg-gray-100 p-4 rounded-lg flex justify-center items-center">
-                            <img src={order.designFileUrl} alt="Desain User" className="max-w-full max-h-[60vh] rounded shadow-md"/>
-                        </div>
-                        <a 
-                            href={order.designFileUrl} 
-                            download={`design-${order.id}.jpg`} // Anda bisa sesuaikan nama filenya
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-blue-700 flex items-center justify-center gap-2"
-                        >
-                            <UploadCloud size={14} />
-                            Download Desain
-                        </a>
+                        {/* `designFileUrl` boleh `null` di status DESIGN_RECEIVED: pembeli
+                            yang memilih "upload sendiri" sampai di tahap ini sebelum
+                            berkasnya masuk. Sebelum penjaga ini, modalnya merender gambar
+                            rusak dan sebuah tombol "Download Desain" tanpa `href` — yang
+                            di browser justru menavigasi ke halaman ini sendiri, sehingga
+                            admin menyangka berkasnya ada tapi gagal diunduh. */}
+                        {order.designFileUrl ? (
+                            <>
+                                <div className="bg-gray-100 p-4 rounded-lg flex justify-center items-center">
+                                    {/* `<img>` biasa, bukan `next/image`: desain diunggah pembeli
+                                        dan `designFileUrl` boleh berupa tautan ke penyimpanan
+                                        mana pun. `next/image` menolak host yang tidak terdaftar
+                                        di `remotePatterns` next.config.ts saat dijalankan, jadi
+                                        mengubahnya membuat modal ini gagal merender setiap
+                                        desain yang tidak diunggah lewat form kami. */}
+                                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                                    <img src={order.designFileUrl} alt="Desain yang dikirim pembeli" className="max-w-full max-h-[60vh] rounded shadow-md"/>
+                                </div>
+                                {/*
+                                  `download` SENGAJA tanpa nama berkas. Atribut ini
+                                  diabaikan browser pada tautan lintas-domain, dan
+                                  `design-<id>.jpg` yang dulu dipaksakan di sini berbohong
+                                  soal formatnya: berkas PNG atau PDF tersimpan dengan
+                                  akhiran .jpg dan gagal dibuka di mesin admin.
+                                */}
+                                <a
+                                    href={order.designFileUrl}
+                                    download
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-blue-700 flex items-center justify-center gap-2"
+                                >
+                                    <UploadCloud size={14} />
+                                    Download Desain
+                                </a>
+                            </>
+                        ) : (
+                            <p className="bg-gray-50 border rounded-lg p-6 text-center text-xs text-gray-500">
+                                Pembeli belum mengunggah berkas desain.
+                            </p>
+                        )}
                     </div>
                 </div>
             </div>

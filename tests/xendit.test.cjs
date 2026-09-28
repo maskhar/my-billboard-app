@@ -12861,3 +12861,303 @@ describe('form pengguna bertipe dan komponen isian disatukan', () => {
     );
   });
 });
+
+describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
+  const JALUR_BACA = 'src/lib/baca-jawaban.ts';
+  const JALUR_AKSI = 'src/components/admin/OrderActions.tsx';
+  const JALUR_KARTU = 'src/components/BookingCard.tsx';
+  const JALUR_TRANSAKSI = 'src/app/admin/(dashboard)/orders/TransactionClient.tsx';
+
+  const kodeSajaA1c = (jalur) => {
+    const isi = fs.readFileSync(path.join(__dirname, '..', jalur), 'utf8');
+    return isi
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  };
+
+  const { bacaJawaban, alasanPenolakan } = require('../src/lib/baca-jawaban.ts');
+
+  // Respons palsu: cukup `status` dan `json()`, karena itu saja yang dipakai.
+  const responsPalsu = (status, jsonImpl) => ({
+    status,
+    ok: status >= 200 && status < 300,
+    json: jsonImpl,
+  });
+
+  it('bacaJawaban memulangkan pesan dan url dari badan JSON yang sah', async () => {
+    const hasil = await bacaJawaban(
+      responsPalsu(200, async () => ({ message: 'Sukses Upload!', url: '/uploads/a.png' }))
+    );
+    assert.equal(hasil.pesan, 'Sukses Upload!');
+    assert.equal(hasil.url, '/uploads/a.png');
+  });
+
+  it('bacaJawaban tidak melempar saat badan bukan JSON (halaman HTML 500)', async () => {
+    // Inilah cacat yang ditutup: `res.json()` pada halaman galat Next.js
+    // melemparkan SyntaxError, dan galat itu MENGGANTIKAN pesan server.
+    const hasil = await bacaJawaban(
+      responsPalsu(500, async () => {
+        throw new SyntaxError('Unexpected token <');
+      })
+    );
+    assert.deepEqual(hasil, { pesan: null, url: null });
+  });
+
+  it('bacaJawaban menolak nilai yang bukan teks, bukan meneruskannya', async () => {
+    // `alert(objek)` mencetak "[object Object]"; `<img src={objek}>` memicu
+    // permintaan ke URL yang tidak masuk akal.
+    for (const badan of [
+      { message: { nested: true }, url: 42 },
+      { message: [], url: null },
+      { message: null, url: undefined },
+    ]) {
+      const hasil = await bacaJawaban(responsPalsu(400, async () => badan));
+      assert.equal(hasil.pesan, null);
+      assert.equal(hasil.url, null);
+    }
+  });
+
+  it('bacaJawaban menganggap teks kosong/spasi sama dengan tidak ada', async () => {
+    const hasil = await bacaJawaban(responsPalsu(400, async () => ({ message: '   ', url: '' })));
+    assert.equal(hasil.pesan, null);
+    assert.equal(hasil.url, null);
+  });
+
+  it('bacaJawaban memangkas spasi di tepi pesan', async () => {
+    const hasil = await bacaJawaban(
+      responsPalsu(400, async () => ({ message: '  Nominal tidak sah  ' }))
+    );
+    assert.equal(hasil.pesan, 'Nominal tidak sah');
+  });
+
+  it('bacaJawaban tahan pada badan JSON yang bukan objek', async () => {
+    for (const badan of [null, 'teks', 7, [1, 2, 3], true]) {
+      const hasil = await bacaJawaban(responsPalsu(400, async () => badan));
+      assert.deepEqual(hasil, { pesan: null, url: null });
+    }
+  });
+
+  it('alasanPenolakan memakai pesan server bila ada, kode status bila tidak', () => {
+    assert.equal(
+      alasanPenolakan(responsPalsu(422, async () => ({})), { pesan: 'Bukti wajib', url: null }),
+      'Bukti wajib'
+    );
+    assert.equal(
+      alasanPenolakan(responsPalsu(403, async () => ({})), { pesan: null, url: null }),
+      'Server menolak (403).'
+    );
+  });
+
+  it('tidak ada lagi ({} as any) di kedua komponen, dan keduanya memakai bacaJawaban', () => {
+    for (const jalur of [JALUR_AKSI, JALUR_KARTU]) {
+      const kode = kodeSajaA1c(jalur);
+      assert.ok(
+        !/\{\}\s*as\s*any/.test(kode),
+        `${jalur} masih memakai ({} as any) sebagai cadangan res.json()`
+      );
+      assert.ok(!/:\s*any\b/.test(kode), `${jalur} masih memuat anotasi any`);
+      assert.match(kode, /bacaJawaban\(res\)/);
+      assert.match(kode, /from '@\/lib\/baca-jawaban'/);
+    }
+  });
+
+  it('tidak ada res.json() langsung yang tak dijaga di kedua komponen', () => {
+    for (const jalur of [JALUR_AKSI, JALUR_KARTU]) {
+      const kode = kodeSajaA1c(jalur);
+      assert.ok(
+        !/await\s+res\.json\(\)/.test(kode),
+        `${jalur} memanggil res.json() langsung — badan HTML akan melempar`
+      );
+    }
+  });
+
+  it('OrderActions menyatakan bentuk pesanan yang dibacanya, bukan any', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.match(kode, /export type PesananUntukAksi = \{/);
+    assert.match(kode, /order: PesananUntukAksi;/);
+    // Setiap kolom yang dibaca file ini harus ada di tipenya.
+    for (const kolom of [
+      'id',
+      'status',
+      'totalPrice',
+      'designOption',
+      'designFileUrl',
+      'refundProof',
+      'installationProof',
+      'userBankName',
+      'userBankAccount',
+    ]) {
+      assert.match(kode, new RegExp(`\\n\\s+${kolom}:`), `kolom ${kolom} belum ada di PesananUntukAksi`);
+    }
+  });
+
+  it('OrderActions tidak mengimpor tipe dari TransactionClient (impor melingkar)', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.ok(
+      !/from '.*TransactionClient'/.test(kode),
+      'TransactionClient adalah pemanggilnya; mengimpor baliknya melingkar'
+    );
+    // Dan komponen client ini tetap tidak boleh menarik runtime Prisma.
+    assert.ok(!/from '@prisma\/client'/.test(kode));
+  });
+
+  it('extraData bertipe daftar kolom yang benar-benar diterima update-order', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.match(kode, /type DataTambahan = \{/);
+    assert.match(kode, /extraData: DataTambahan = \{\}/);
+    for (const kolom of ['reason', 'refundProof', 'installationProof', 'isLocked']) {
+      assert.match(kode, new RegExp(`${kolom}\\?:`), `kolom ${kolom} belum ada di DataTambahan`);
+    }
+  });
+
+  it('DataTambahan hanya memuat kolom yang route update-order benar-benar baca', () => {
+    // Kalau daftarnya menyimpang, salah tulis di client kembali lolos tsc.
+    const rute = fs.readFileSync(
+      path.join(__dirname, '..', 'src/app/api/admin/update-order/route.ts'),
+      'utf8'
+    );
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    const daftar = kode.match(/type DataTambahan = \{([\s\S]*?)\n\};/);
+    assert.ok(daftar, 'DataTambahan tidak ditemukan');
+    const kolom = [...daftar[1].matchAll(/(\w+)\?:/g)].map((m) => m[1]);
+    assert.ok(kolom.length > 0);
+    for (const nama of kolom) {
+      assert.ok(
+        rute.includes(nama),
+        `DataTambahan memuat ${nama} yang tidak pernah dibaca update-order/route.ts`
+      );
+    }
+  });
+
+  it('setter berkas bertipe fungsi penerima teks', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.match(kode, /setter: \(dataUrl: string\) => void/);
+    assert.ok(!/setter: any/.test(kode));
+  });
+
+  it('currentUserRole dipakai, bukan diterima lalu dibuang', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.match(kode, /const ROLE_BOLEH_UBAH = \['ADMIN', 'SUPER_ADMIN'\]/);
+    assert.match(kode, /ROLE_BOLEH_UBAH\.includes\(currentUserRole\)/);
+    // Tombol pencatatan setoran juga ikut gerbang itu.
+    assert.match(kode, /const bolehCatatSetoran =\s*\n?\s*bolehUbah &&/);
+  });
+
+  it('gerbang role di komponen sama dengan gerbang ketiga route yang dipanggilnya', () => {
+    // CS dan OPERATOR boleh masuk dashboard admin, tapi ketiga route ini
+    // menolak mereka. Kalau daftarnya menyimpang, tombolnya kembali muncul
+    // untuk orang yang pasti ditolak setelah confirm() disetujui.
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    const daftar = kode.match(/const ROLE_BOLEH_UBAH = \[([^\]]+)\]/);
+    assert.ok(daftar);
+    const peran = [...daftar[1].matchAll(/'(\w+)'/g)].map((m) => m[1]).sort();
+    assert.deepEqual(peran, ['ADMIN', 'SUPER_ADMIN']);
+
+    for (const rute of [
+      'src/app/api/admin/update-order/route.ts',
+      'src/app/api/admin/orders/record-payment/route.ts',
+    ]) {
+      const isi = fs.readFileSync(path.join(__dirname, '..', rute), 'utf8');
+      assert.match(
+        isi,
+        /\['ADMIN', 'SUPER_ADMIN'\]\.includes\(session\.user\.role\)/,
+        `${rute} tidak lagi memakai gerbang yang sama`
+      );
+    }
+  });
+
+  it('TransactionClient tetap mengirim order dan currentUserRole ke OrderActions', () => {
+    const kode = kodeSajaA1c(JALUR_TRANSAKSI);
+    assert.match(kode, /<OrderActions[\s\S]{0,300}order=\{selected\}/);
+    assert.match(kode, /<OrderActions[\s\S]{0,300}currentUserRole=\{currentUserRole\}/);
+  });
+
+  it('modal desain tidak merender gambar rusak saat berkas belum diunggah', () => {
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    // `designFileUrl` boleh null di DESIGN_RECEIVED; tanpa penjaga, tombol
+    // Download tampil tanpa href dan justru menavigasi ke halaman ini sendiri.
+    assert.match(kode, /order\.designFileUrl \? \(/);
+    assert.match(kode, /Pembeli belum mengunggah berkas desain/);
+    assert.ok(
+      !/download=\{`design-/.test(kode),
+      'nama berkas paksaan .jpg berbohong soal format dan diabaikan lintas-domain'
+    );
+  });
+
+  it('unggahan desain memeriksa url dari server, tidak meneruskannya buta', () => {
+    const kode = kodeSajaA1c(JALUR_KARTU);
+    assert.match(kode, /if \(!jawaban\.url\) \{/);
+    assert.match(kode, /handleDesignSubmit\(jawaban\.url\)/);
+    assert.ok(
+      !/handleDesignSubmit\(data\.url\)/.test(kode),
+      'url yang tidak diperiksa dikirim balik ke server sebagai undefined'
+    );
+  });
+
+  it('unggahan desain selalu melepas loading dan mengosongkan kotak berkas', () => {
+    const kode = kodeSajaA1c(JALUR_KARTU);
+    const potong = kode.match(/const handleFileUpload = async[\s\S]*?\n  \};/);
+    assert.ok(potong, 'handleFileUpload tidak ditemukan');
+    const isi = potong[0];
+    // `return` di dalam try melewati baris setelah try — loading harus di finally.
+    assert.match(isi, /\} finally \{[\s\S]{0,160}setLoading\(false\);/);
+    assert.match(isi, /kotak\.value = '';/);
+  });
+
+  it('tidak ada lagi catch (err) yang parameternya tidak dipakai', () => {
+    for (const jalur of [JALUR_AKSI, JALUR_KARTU]) {
+      const kode = kodeSajaA1c(jalur);
+      assert.ok(
+        !/catch \(err\)/.test(kode),
+        `${jalur} masih menangkap err tanpa memakainya`
+      );
+    }
+  });
+
+  it('setiap <img> punya alt dan alasan tertulis kenapa bukan next/image', () => {
+    for (const jalur of [JALUR_AKSI, JALUR_KARTU]) {
+      const isi = fs.readFileSync(path.join(__dirname, '..', jalur), 'utf8');
+      // Tag dibaca dari kode yang KOMENTARNYA sudah dibuang: komentar di kedua
+      // berkas menyebut "`<img>` biasa, bukan next/image", dan menghitungnya
+      // sebagai tag membuat test ini gagal atas prosa.
+      const gambar = kodeSajaA1c(jalur).match(/<img[^>]*>/g) || [];
+      assert.ok(gambar.length > 0, `${jalur} tidak punya <img> — test ini usang`);
+      for (const tag of gambar) {
+        assert.match(tag, /alt=/, `<img> tanpa alt di ${jalur}: ${tag.slice(0, 60)}`);
+      }
+      // Pengecualian eslint ADALAH komentar, jadi dihitung dari berkas mentah.
+      const jumlahDisable = (isi.match(/eslint-disable-next-line @next\/next\/no-img-element/g) || [])
+        .length;
+      assert.equal(
+        jumlahDisable,
+        gambar.length,
+        `${jalur}: jumlah pengecualian eslint harus sama dengan jumlah <img>`
+      );
+    }
+  });
+
+  it('kartu pesanan tidak mengimpor ikon yang tidak dipakainya', () => {
+    const isi = fs.readFileSync(path.join(__dirname, '..', JALUR_KARTU), 'utf8');
+    const impor = isi.match(/import \{([^}]+)\} from 'lucide-react'/);
+    assert.ok(impor, 'impor lucide-react tidak ditemukan');
+    const badan = kodeSajaA1c(JALUR_KARTU).replace(/import \{[^}]+\} from 'lucide-react';/, '');
+    for (const mentah of impor[1].split(',')) {
+      const nama = mentah.trim().split(/\s+as\s+/).pop().trim();
+      if (!nama) continue;
+      assert.match(
+        badan,
+        new RegExp(`\\b${nama}\\b`),
+        `ikon ${nama} diimpor tapi tidak pernah dipakai`
+      );
+    }
+  });
+
+  it('baca-jawaban tidak menarik apa pun dari Prisma atau server-only', () => {
+    const kode = kodeSajaA1c(JALUR_BACA);
+    assert.ok(!/from '@prisma\/client'/.test(kode));
+    assert.ok(!/server-only/.test(kode));
+    assert.ok(!/:\s*any\b/.test(kode));
+  });
+});
