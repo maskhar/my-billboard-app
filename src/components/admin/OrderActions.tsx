@@ -112,6 +112,10 @@ export default function OrderActions({
   const [installData, setInstallData] = useState<string>(""); // Data Foto Tayang
   const [nominalCatat, setNominalCatat] = useState<string>("");
   const [keteranganCatat, setKeteranganCatat] = useState<string>("");
+  // Berkas sedang diunggah. Dipisah dari `loading` (yang menandai permintaan
+  // ubah status) supaya tombol simpan di modal bisa dimatikan selama unggahan
+  // berjalan tanpa ikut mematikan seluruh panel aksi.
+  const [mengunggah, setMengunggah] = useState(false);
 
   useEffect(() => {
       setProofData(order.refundProof || "");
@@ -147,19 +151,84 @@ export default function OrderActions({
   };
 
   // --- HANDLERS HELPER ---
-  const handleFileChange = (
+  // Berkas diunggah ke `/api/upload`, dan yang disimpan ke state adalah URL
+  // hasilnya — BUKAN isi berkasnya.
+  //
+  // Sebelumnya fungsi ini memakai `FileReader.readAsDataURL` dan menaruh
+  // `data:image/jpeg;base64,...` ke state, lalu mengirimkannya sebagai
+  // `installationProof`/`refundProof`. Tiga lapisan di belakangnya menolak
+  // bentuk itu tanpa memberi tahu siapa pun:
+  //
+  //   1. `urlBuktiSah()` di `src/lib/url-bukti.ts` MENOLAK skema `data:`
+  //      (memang harus: `data:` di `src`/`href` adalah pembawa XSS).
+  //   2. `api/admin/update-order/route.ts` hanya menulis kolomnya bila
+  //      nilainya lolos — `if (buktiPasang)`.
+  //   3. Perpindahan statusnya sendiri tetap berhasil.
+  //
+  // Hasilnya kegagalan yang paling mahal: pesanan berpindah ke `ACTIVE`,
+  // admin membaca "Update Sukses", dan `installationProof` tetap kosong
+  // selamanya. Tidak ada galat di layar, tidak ada baris di log. Bukti
+  // pemasangan yang hilang baru ditemukan saat pembeli menagihnya.
+  //
+  // `/api/upload` sudah menjadi jalur yang benar dan dipakai
+  // `components/ImageUpload.tsx`: ia memeriksa tipe MIME terhadap isi berkas,
+  // membatasi ukuran, memasang jatah per pengguna, dan mengembalikan
+  // `{ url: '/uploads/...' }` — bentuk yang `urlBuktiSah()` terima.
+  const handleFileChange = async (
       e: React.ChangeEvent<HTMLInputElement>,
-      setter: (dataUrl: string) => void,
+      setter: (url: string) => void,
   ) => {
       const file = e.target.files?.[0];
-      if (file) {
-          if (file.size > 2 * 1024 * 1024) {
-              toast.galat('Berkas melebihi 2 MB. Perkecil dulu gambarnya, lalu unggah lagi.');
+      if (!file) return;
+
+      // Batasnya dinaikkan ke 10 MB supaya sama dengan `MAX_BYTES` di
+      // `api/upload/route.ts`. Batas klien yang lebih ketat daripada server
+      // hanya menolak berkas yang sebenarnya diterima.
+      if (file.size > 10 * 1024 * 1024) {
+          toast.galat('Berkas melebihi 10 MB. Perkecil dulu gambarnya, lalu unggah lagi.');
+          return;
+      }
+
+      // Nilai input dikosongkan supaya memilih berkas yang SAMA setelah
+      // kegagalan tetap memicu `onChange` lagi.
+      e.target.value = '';
+
+      setMengunggah(true);
+      try {
+          const formData = new FormData();
+          formData.append('file', file);
+          // `orderId` membuat route unggah memeriksa bahwa pemanggil memang
+          // berhak atas pesanan ini.
+          formData.append('orderId', order.id);
+
+          const res = await fetch('/api/upload', { method: 'POST', body: formData });
+          // `bacaJawaban`, bukan `res.json().catch(() => ({}))`: badan 500 dari
+          // Next.js berisi HTML, dan galat penguraiannya akan MENGGANTIKAN
+          // pesan server yang sebenarnya. Sudah dipakai `updateStatus` di berkas
+          // ini dan `ImageUpload.tsx` untuk route yang sama.
+          const jawaban = await bacaJawaban(res);
+
+          if (!res.ok) {
+              toast.galat(alasanPenolakan(res, jawaban));
               return;
           }
-          const reader = new FileReader();
-          reader.onloadend = () => setter(reader.result as string);
-          reader.readAsDataURL(file);
+
+          // Respons 200 tanpa `url` diperlakukan sebagai kegagalan. Menyetel
+          // state ke teks kosong membuat tombol simpan tampak siap padahal
+          // tidak ada apa pun untuk disimpan — persis cacat yang sedang
+          // ditutup di sini.
+          if (!jawaban.url) {
+              toast.galat('Server tidak mengembalikan alamat berkas. Bukti belum tersimpan.');
+              return;
+          }
+
+          setter(jawaban.url);
+          toast.sukses('Berkas terunggah.');
+      } catch (galat) {
+          console.error('Gagal mengunggah bukti:', galat);
+          toast.galat('Server tidak dapat dihubungi. Berkas belum terunggah.');
+      } finally {
+          setMengunggah(false);
       }
   };
 
@@ -580,15 +649,36 @@ export default function OrderActions({
                     </div>
                     <div className="p-5 space-y-4">
                         <div className="border-2 border-dashed p-6 text-center rounded-xl cursor-pointer hover:bg-indigo-50 transition relative">
-                             <input type="file" accept="image/*" onChange={(e) => handleFileChange(e, setInstallData)} className="absolute inset-0 opacity-0 cursor-pointer"/>
-                             {/* `<img>` biasa, bukan `next/image`: sumbernya `data:` URL hasil
-                                 `FileReader` yang belum pernah diunggah ke mana pun, jadi
-                                 pengoptimal gambar Next.js tidak punya apa pun untuk
-                                 dioptimalkan — dan `next/image` MELEMPAR pada `data:` URL. */}
+                             <input
+                                type="file"
+                                accept="image/*"
+                                disabled={mengunggah}
+                                onChange={(e) => handleFileChange(e, setInstallData)}
+                                className="absolute inset-0 opacity-0 cursor-pointer disabled:cursor-wait"
+                             />
+                             {/* `<img>` biasa, bukan `next/image`: sumbernya jalur unggahan
+                                 (`/uploads/...`) atau `secure_url` Cloudinary, dan host
+                                 Cloudinary tidak seluruhnya terdaftar di `remotePatterns`.
+                                 `next/image` MELEMPAR pada sumber di luar daftar itu, yang
+                                 akan menjatuhkan seluruh panel aksi admin. */}
                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                             {installData ? <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/> : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
+                             {mengunggah
+                                ? <p className="text-xs text-gray-500">Mengunggah…</p>
+                                : installData
+                                    ? <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/>
+                                    : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
                         </div>
-                        <button onClick={handleFinishInstall} className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-indigo-700">Tayangkan & Aktifkan</button>
+                        {/* Dimatikan sampai ada bukti yang benar-benar terunggah. Tanpa ini
+                            admin bisa menekan "Tayangkan & Aktifkan" pada modal kosong,
+                            dan satu-satunya penolakan datang dari `handleFinishInstall`
+                            sebagai toast — sesudah tombolnya tampak menerima tekanan. */}
+                        <button
+                            onClick={handleFinishInstall}
+                            disabled={loading || mengunggah || !installData}
+                            className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-indigo-700 disabled:bg-gray-300 transition"
+                        >
+                            Tayangkan &amp; Aktifkan
+                        </button>
                     </div>
                 </div>
             </div>

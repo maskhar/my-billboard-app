@@ -4738,7 +4738,11 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
       refundedAt: null,
       productionStartedAt: null,
       installedAt: null,
-      installationProof: null,
+      // Pesanan `INSTALLATION` yang hendak ditayangkan wajib sudah punya bukti
+      // pemasangan; route menolaknya dengan 422 bila kosong. Fixture yang
+      // berangkat dari `INSTALLATION` karena itu mengisinya, dan yang menguji
+      // gerbangnya sendiri membiarkannya `null`.
+      installationProof: options.installationProof ?? null,
       cancelReason: null,
       isLocked: false,
       duration: 30,
@@ -4977,7 +4981,11 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
   }
 
   it('email ACTIVE tidak menagih sisa pada pesanan yang sudah lunas', async () => {
-    const fake = buatDbAdmin({ status: BookingStatus.INSTALLATION, payments: PAID_PENUH });
+    const fake = buatDbAdmin({
+      status: BookingStatus.INSTALLATION,
+      payments: PAID_PENUH,
+      installationProof: '/uploads/pasang-1.jpg',
+    });
     const { route, emails } = buatRouteAdmin(fake);
 
     const response = await route.POST(permintaan({ newStatus: 'ACTIVE' }));
@@ -4991,7 +4999,11 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
   it('email ACTIVE menagih sisa yang sama dengan sisaTagihan pada pesanan DP', async () => {
     const { sisaTagihan } = require(JALUR_LEDGER);
     const payments = [barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000')];
-    const fake = buatDbAdmin({ status: BookingStatus.INSTALLATION, payments });
+    const fake = buatDbAdmin({
+      status: BookingStatus.INSTALLATION,
+      payments,
+      installationProof: '/uploads/pasang-1.jpg',
+    });
     const { route, emails } = buatRouteAdmin(fake);
 
     const response = await route.POST(permintaan({ newStatus: 'ACTIVE' }));
@@ -5009,6 +5021,7 @@ describe('POST /api/admin/update-order gerbang REFUNDED', () => {
         barisPembayaran(PaymentTujuan.DP, PaymentStatus.PAID, '400000'),
         barisPembayaran(PaymentTujuan.TAMBAHAN, PaymentStatus.PAID, '250000'),
       ],
+      installationProof: '/uploads/pasang-1.jpg',
     });
     const { route, emails } = buatRouteAdmin(fake);
 
@@ -13193,8 +13206,63 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
 
   it('setter berkas bertipe fungsi penerima teks', () => {
     const kode = kodeSajaA1c(JALUR_AKSI);
-    assert.match(kode, /setter: \(dataUrl: string\) => void/);
+    // Namanya `url`, bukan `dataUrl`, dan itu bukan kosmetik: yang disimpan ke
+    // state sekarang alamat hasil unggahan, bukan isi berkasnya.
+    assert.match(kode, /setter: \(url: string\) => void/);
     assert.ok(!/setter: any/.test(kode));
+  });
+
+  it('bukti pemasangan diunggah ke /api/upload, bukan dikirim sebagai data: URL', () => {
+    // Regresi yang ditutup di sini menghilangkan bukti pemasangan TANPA GALAT:
+    //
+    //   `readAsDataURL` menaruh `data:image/...;base64,...` ke state, lalu
+    //   mengirimkannya sebagai `installationProof`. `urlBuktiSah()` di
+    //   `src/lib/url-bukti.ts` menolak skema `data:`, dan
+    //   `update-order/route.ts` hanya menulis kolomnya `if (buktiPasang)` —
+    //   sementara perpindahan status tetap berhasil. Pesanan menjadi `ACTIVE`,
+    //   admin membaca "Update Sukses", kolom buktinya kosong selamanya.
+    //
+    // Karena kegagalannya senyap, tidak ada gejala yang bisa dijadikan alarm;
+    // penjaga inilah alarmnya.
+    const kode = kodeSajaA1c(JALUR_AKSI);
+    assert.ok(
+      !/readAsDataURL/.test(kode),
+      'jangan kirim isi berkas sebagai data: URL — urlBuktiSah() menolaknya'
+    );
+    assert.ok(!/FileReader/.test(kode), 'unggah lewat /api/upload, bukan FileReader');
+    assert.match(kode, /fetch\('\/api\/upload'/);
+    assert.match(kode, /formData\.append\('file', file\)/);
+    // `orderId` ikut supaya route unggah bisa memeriksa hak atas pesanan ini.
+    assert.match(kode, /formData\.append\('orderId', order\.id\)/);
+    // Respons 200 tanpa `url` harus diperlakukan sebagai kegagalan.
+    assert.match(kode, /if \(!jawaban\.url\)/);
+  });
+
+  it('update-order menolak ACTIVE tanpa bukti pemasangan', () => {
+    // Pasangan server dari penjaga di atas. Tanpa ini, kelalaian klien
+    // berikutnya kembali menghasilkan pesanan `ACTIVE` tanpa bukti — dan
+    // klienlah yang paling sering berubah.
+    const rute = fs.readFileSync(
+      path.join(__dirname, '..', 'src/app/api/admin/update-order/route.ts'),
+      'utf8'
+    );
+    assert.match(rute, /keadaan: 'BUKTI_PASANG_TIDAK_SAH'/);
+    // Hanya DARI `INSTALLATION`, mengikuti pola gerbang uang masuk: sebuah
+    // gerbang menjaga perpindahan dari tahapnya sendiri. Tanpa batas ini
+    // `REVIEW_REFUND → ACTIVE` ikut terkunci, dan itu satu-satunya jalan keluar
+    // bagi pengajuan refund yang ditolak admin.
+    assert.match(
+      rute,
+      /newStatus === BookingStatus\.ACTIVE &&\s*\n\s*currentOrder\.status === BookingStatus\.INSTALLATION/
+    );
+    // Bukti yang sudah tersimpan dihitung sah, supaya percobaan ulang setelah
+    // kegagalan jaringan tidak menuntut unggah ulang.
+    assert.match(rute, /buktiPasang \?\? currentOrder\.installationProof/);
+    // Dan keadaannya harus benar-benar dipetakan ke 422, bukan menggantung.
+    assert.match(
+      rute,
+      /hasil\.keadaan === 'BUKTI_PASANG_TIDAK_SAH'[\s\S]{0,160}status: 422/
+    );
   });
 
   it('currentUserRole dipakai, bukan diterima lalu dibuang', () => {

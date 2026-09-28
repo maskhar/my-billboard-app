@@ -166,6 +166,53 @@ export async function POST(req: Request) {
           // terbaca sebagai `true` kalau dibiarkan lewat.
           if (typeof isLocked === 'boolean') updateData.isLocked = isLocked;
 
+          // `ACTIVE` menuntut bukti pemasangan, dengan alasan yang sama seperti
+          // `REFUNDED` menuntut bukti transfer: statusnya adalah pernyataan
+          // kepada pembeli bahwa medianya sudah terpasang dan tayang.
+          //
+          // Gerbang ini menutup kegagalan SENYAP, bukan sekadar menambah syarat.
+          // `OrderActions.tsx` dulu mengirim `installationProof` sebagai
+          // `data:image/...;base64,...` hasil `FileReader`. `urlBuktiSah()`
+          // menolak skema `data:` (benar — itu pembawa XSS), lalu
+          // `if (buktiPasang)` di atas melewatkan penulisannya, SEMENTARA
+          // perpindahan status tetap berhasil. Admin membaca "Update Sukses",
+          // pesanan menjadi `ACTIVE`, dan kolom buktinya kosong selamanya —
+          // tanpa satu pun galat di layar maupun di log. Klien sekarang
+          // mengunggah lewat `/api/upload` dan mengirim URL-nya, tapi gerbang
+          // ini yang memastikan kelalaian serupa berikutnya berbunyi di sini
+          // alih-alih menghilang.
+          //
+          // HANYA dari `INSTALLATION`, mengikuti pola gerbang uang masuk di
+          // atas: sebuah gerbang menjaga perpindahan DARI tahapnya sendiri, dan
+          // tidak menuntut apa pun pada pesanan yang sudah melewatinya.
+          //
+          // `REVIEW_REFUND → ACTIVE` karena itu dibiarkan terbuka. Itu
+          // satu-satunya jalan keluar bagi pengajuan refund yang DITOLAK admin,
+          // dan pesanan lama yang buktinya memang kosong sebelum gerbang ini ada
+          // tidak boleh terkunci di alur refund selamanya — akibatnya jauh lebih
+          // mahal daripada satu kolom bukti yang kosong. Penjaganya ada di
+          // `tests/xendit.test.cjs`.
+          //
+          // `?? currentOrder.installationProof` menerima bukti yang sudah
+          // tersimpan, supaya percobaan ulang setelah kegagalan jaringan tidak
+          // menuntut unggah ulang.
+          if (
+              newStatus === BookingStatus.ACTIVE &&
+              currentOrder.status === BookingStatus.INSTALLATION
+          ) {
+              const buktiTayang = buktiPasang ?? currentOrder.installationProof;
+              if (!buktiTayang) {
+                  return {
+                      keadaan: 'BUKTI_PASANG_TIDAK_SAH',
+                      pesan:
+                          `Pesanan belum bisa ditayangkan: bukti pemasangan belum tersimpan. ` +
+                          `Unggah ulang fotonya lewat tombol "Bukti Pemasangan" dan tunggu ` +
+                          `sampai pratinjaunya muncul sebelum menekan "Tayangkan & Aktifkan". ` +
+                          `Bila unggahan terus gagal, periksa format berkasnya (JPG/PNG/WEBP).`,
+                  } as const;
+              }
+          }
+
           if (newStatus === BookingStatus.REFUNDED) {
               // `REFUNDED` berarti uang sudah keluar dari rekening perusahaan.
               // Sebelum gerbang ini ada, satu klik cukup untuk menyatakannya
@@ -277,6 +324,10 @@ export async function POST(req: Request) {
       // 422, sama seperti gerbang refund: permintaannya berbentuk benar dan
       // perpindahannya sah, yang belum terpenuhi adalah syarat isinya.
       if (hasil.keadaan === 'UANG_BELUM_TERCATAT') {
+          return NextResponse.json({ message: hasil.pesan }, { status: 422 });
+      }
+
+      if (hasil.keadaan === 'BUKTI_PASANG_TIDAK_SAH') {
           return NextResponse.json({ message: hasil.pesan }, { status: 422 });
       }
 
