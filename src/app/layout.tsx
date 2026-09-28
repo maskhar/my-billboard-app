@@ -21,13 +21,50 @@ import { ambilIdentitasSitus } from '@/lib/identitas-situs';
 export async function generateMetadata(): Promise<Metadata> {
   const { nama, deskripsi } = await ambilIdentitasSitus();
 
+  const judul = `${nama} — ${deskripsi}`;
+
   return {
     title: {
-      default: `${nama} — ${deskripsi}`,
+      default: judul,
       template: `%s | ${nama}`,
     },
     description: deskripsi,
     applicationName: nama,
+
+    // KARTU BAGIKAN, UNTUK SEMUA HALAMAN YANG TIDAK PUNYA MILIKNYA SENDIRI
+    //
+    // Sebelum ini nol berkas di repo menyetel `openGraph` atau `twitter`.
+    // Akibatnya tautan ke situs ini — dibagikan sales lewat WhatsApp, ditempel
+    // di grup, dikirim di email — muncul sebagai alamat telanjang tanpa judul
+    // dan tanpa keterangan. `/billboard/[slug]` menimpanya dengan foto papan dan
+    // harganya; yang di sini adalah dasar untuk beranda, `/about`, dan
+    // `/sewakan-tempat`.
+    //
+    // Nilainya mengikuti pengaturan admin, sama dengan `title` di atas: nama
+    // usaha yang diganti di `/admin/settings` juga berubah di kartu bagikan,
+    // bukan hanya di tab peramban.
+    openGraph: {
+      title: judul,
+      description: deskripsi,
+      siteName: nama,
+      type: 'website',
+      // `locale` disebut karena seluruh isi situs ini Bahasa Indonesia dan
+      // `<html lang="id">` di bawah sudah menyatakannya. Pengambil pratinjau
+      // membaca atribut ini, bukan `<html>`.
+      locale: 'id_ID',
+      // TIDAK ada `images` di sini, dan itu disengaja. Repo ini belum punya satu
+      // gambar bagikan yang dirancang untuk keperluan ini, dan menunjuk ke logo
+      // kecil atau ke foto pertama yang kebetulan ada akan menghasilkan kartu
+      // dengan gambar terpotong atau meregang — lebih buruk daripada kartu teks
+      // yang rapi. Tambahkan bersamaan dengan gambarnya, bukan sebelumnya.
+    },
+    twitter: {
+      // `summary`, bukan `summary_large_image`: tanpa gambar, kartu besar
+      // dirender sebagai blok kosong dengan teks di bawahnya.
+      card: 'summary',
+      title: judul,
+      description: deskripsi,
+    },
   };
 }
 

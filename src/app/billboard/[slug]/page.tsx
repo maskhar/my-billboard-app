@@ -1,4 +1,5 @@
 // src/app/billboard/[slug]/page.tsx
+import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import BillboardDetailClient from './BillboardDetailClient';
 import { Billboard } from '@prisma/client';
@@ -115,6 +116,77 @@ type Props = {
   params: Promise<{ slug: string }>;
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 };
+
+/**
+ * Judul, keterangan, dan kartu bagikan untuk satu billboard.
+ *
+ * KENAPA HALAMAN INI YANG PERTAMA MENDAPATKANNYA
+ * ----------------------------------------------
+ * Nol berkas di repo ini menyetel `openGraph` atau `twitter`, dan inilah satu
+ * halaman yang paling sering dibagikan: sales mengirim tautan billboard ke calon
+ * penyewa lewat WhatsApp, dan yang muncul di sana sebelumnya adalah tautan
+ * telanjang — alamat mentah tanpa judul, tanpa harga, tanpa satu pun foto.
+ * Untuk produk yang keputusannya visual (di mana papannya, seberapa besar,
+ * menghadap ke mana), kartu tanpa gambar berarti penerimanya harus membuka
+ * tautannya dulu sebelum tahu apa yang ditawarkan. Sebagian tidak.
+ *
+ * `generateMetadata` memakai query yang SAMA dengan halamannya, termasuk gate
+ * `publishStatus: 'PUBLISHED'`. Next memanggil keduanya dalam satu permintaan
+ * render dan Prisma di sini tidak di-cache antar keduanya, jadi ini memang satu
+ * query tambahan — harga yang dibayar supaya metadata tidak pernah bisa
+ * menyebut billboard yang halamannya sendiri menjawab 404.
+ */
+export async function generateMetadata({ params }: Props): Promise<Metadata> {
+  const { slug } = await params;
+
+  // TIDAK MELEMPAR. `generateMetadata` yang gagal menjatuhkan seluruh halaman,
+  // termasuk halaman yang datanya sendiri baik-baik saja — dan yang hilang bila
+  // ia diam hanyalah judul tab. Bandingkan dengan query isi halaman di
+  // `getBillboardBySlug`, yang justru HARUS melempar.
+  let data: { title: string; address: string; type: string; mainImage: string } | null = null;
+  try {
+    data = await prisma.billboard.findFirst({
+      where: { slug, publishStatus: 'PUBLISHED' },
+      select: { title: true, address: true, type: true, mainImage: true },
+    });
+  } catch (error) {
+    console.error('[billboard/metadata] Gagal membaca billboard:', error);
+  }
+
+  // Slug yang tidak ada dibiarkan memakai metadata layout akar: halamannya akan
+  // memanggil `notFound()` beberapa milidetik kemudian, dan menebak judul untuk
+  // halaman 404 hanya menghasilkan judul yang salah.
+  if (!data) return {};
+
+  const deskripsi =
+    `${data.type} di ${data.address}. Lihat ketersediaan tanggal, harga sewa, ` +
+    `dan lokasi di peta.`;
+
+  return {
+    // Layout akar menempelkan nama usaha lewat `template`, jadi di sini cukup
+    // judul billboard-nya sendiri — tanpa itu namanya tertulis dua kali.
+    title: data.title,
+    description: deskripsi,
+    openGraph: {
+      title: data.title,
+      description: deskripsi,
+      type: 'website',
+      // `mainImage` non-null di schema, dan halaman ini sudah merendernya
+      // sebagai gambar utama. Ukuran tidak disebutkan: nilai yang ditebak dan
+      // tidak cocok membuat sebagian pratinjau memotong gambarnya, dan tanpa
+      // atribut itu pengambil pratinjau mengukurnya sendiri.
+      images: [{ url: data.mainImage, alt: data.title }],
+    },
+    twitter: {
+      // `summary_large_image`, bukan `summary`: foto papan adalah isi utamanya,
+      // dan kartu kecil menampilkannya sebagai ikon persegi di samping teks.
+      card: 'summary_large_image',
+      title: data.title,
+      description: deskripsi,
+      images: [data.mainImage],
+    },
+  };
+}
 
 export default async function DetailPage({ params, searchParams }: Props) {
   // [FIX] Unrwap KEDUA promise, baik params maupun searchParams

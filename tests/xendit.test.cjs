@@ -8226,9 +8226,13 @@ describe('route unggah berkas dibatasi lajunya', () => {
 describe('area privat tidak boleh masuk indeks pencarian', () => {
   const JALUR_ROBOTS = path.join(__dirname, '..', 'src', 'app', 'robots.ts');
 
+  // `robots.ts` sekarang mengimpor `@/lib/xendit`, dan alias `@/` tidak dikenali
+  // loader CommonJS — `require` biasa di sini gagal dengan
+  // "Cannot find module '@/lib/xendit'". `muatDenganModulPalsu` memetakannya ke
+  // `src/`, dan modul aslinya yang dipakai (bukan palsu) supaya aturan
+  // `originAplikasi()` yang diuji di bawah adalah aturan yang sungguh berjalan.
   function muatRobots() {
-    delete require.cache[require.resolve(JALUR_ROBOTS)];
-    return require(JALUR_ROBOTS).default();
+    return muatDenganModulPalsu(JALUR_ROBOTS, {}).default();
   }
 
   it('melarang perangkakan seluruh area yang menuntut login', () => {
@@ -8241,29 +8245,76 @@ describe('area privat tidak boleh masuk indeks pencarian', () => {
     }
   });
 
-  it('tidak menunjuk sitemap yang tidak ada', () => {
+  it('menunjuk sitemap hanya bila berkasnya benar-benar ada', () => {
+    // Invariant ini dulu berbunyi sebaliknya: selama `src/app/sitemap.ts` belum
+    // ada, baris `sitemap` HARUS tidak ada, karena menunjuk ke alamat yang
+    // menjawab 404 membuat crawler mencatat situs ini salah konfigurasi.
+    // Sitemap-nya sekarang ada, jadi arah pemeriksaannya dibalik — tapi
+    // keduanya tetap satu aturan yang sama: baris dan berkasnya hidup bersama.
     const adaSitemap =
       fs.existsSync(path.join(__dirname, '..', 'src', 'app', 'sitemap.ts')) ||
       fs.existsSync(path.join(__dirname, '..', 'public', 'sitemap.xml'));
-    if (!adaSitemap) {
-      assert.equal(muatRobots().sitemap, undefined, 'menunjuk sitemap yang menjawab 404');
+
+    const asli = process.env.APP_ORIGIN;
+    try {
+      process.env.APP_ORIGIN = 'https://contoh.test';
+      const hasil = muatRobots();
+      if (adaSitemap) {
+        assert.equal(
+          hasil.sitemap,
+          'https://contoh.test/sitemap.xml',
+          'berkas sitemap ada tapi robots.txt tidak menunjuknya'
+        );
+      } else {
+        assert.equal(hasil.sitemap, undefined, 'menunjuk sitemap yang menjawab 404');
+      }
+    } finally {
+      if (asli === undefined) delete process.env.APP_ORIGIN;
+      else process.env.APP_ORIGIN = asli;
+    }
+  });
+
+  it('alamat sitemap absolut dan memakai origin yang sama dengan sitemap-nya', () => {
+    // Kalau `robots.ts` dan `sitemap.ts` mengambil origin dari tempat berbeda,
+    // salah satu akan menunjuk ke host yang tidak menjawab dan tidak ada yang
+    // memberi tahu. Keduanya wajib lewat `originAplikasi()`.
+    for (const berkas of ['robots.ts', 'sitemap.ts']) {
+      // `kodeSajaAny` menerima JALUR, bukan isi berkas, dan membuang baris
+      // komentar — perlu di sini karena kedua berkas MENYEBUT
+      // `process.env.APP_ORIGIN` di dalam komentarnya yang menjelaskan kenapa
+      // nilainya tidak dibaca langsung.
+      const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', berkas));
+      assert.match(kode, /originAplikasi/, berkas + ' tidak memakai originAplikasi()');
+      assert.doesNotMatch(
+        kode,
+        /process\.env\.(APP_ORIGIN|NEXTAUTH_URL|NEXT_PUBLIC_APP_URL)/,
+        berkas + ' membaca origin langsung dari env, melewati validasinya'
+      );
     }
   });
 
   it('tidak melempar walau APP_ORIGIN kosong', () => {
-    // `/robots.txt` yang menjawab 500 lebih buruk daripada robots.txt tanpa
-    // baris sitemap. `originAplikasi()` MELEMPAR bila variabelnya kosong atau
-    // bukan https, jadi route ini sengaja tidak memakainya.
+    // `/robots.txt` yang menjawab 500 membuat crawler berhenti merangkak
+    // SELURUH situs — termasuk halaman produk yang sehat. `originAplikasi()`
+    // MELEMPAR bila variabelnya kosong atau bukan https, jadi pemanggilannya di
+    // sini wajib terbungkus `try`: yang hilang hanyalah baris `sitemap`,
+    // sementara larangan area privat tetap terkirim.
     const asli = process.env.APP_ORIGIN;
     try {
       delete process.env.APP_ORIGIN;
       assert.doesNotThrow(muatRobots);
+      assert.equal(muatRobots().sitemap, undefined, 'baris sitemap terbit tanpa origin');
+      assert.ok(
+        muatRobots().rules[0].disallow.includes('/admin'),
+        'larangan area privat hilang saat origin belum siap'
+      );
+
       process.env.APP_ORIGIN = 'http://bukan-https.test';
       assert.doesNotThrow(muatRobots);
+      assert.equal(muatRobots().sitemap, undefined, 'origin non-https tetap dipakai');
     } finally {
       if (asli === undefined) delete process.env.APP_ORIGIN;
       else process.env.APP_ORIGIN = asli;
-      delete require.cache[require.resolve(JALUR_ROBOTS)];
     }
   });
 
@@ -18224,5 +18275,308 @@ describe('pemeriksaan environment saat boot', () => {
     }
 
     assert.deepStrictEqual(bocor, [], `nilai .env ikut ke .env.example: ${bocor.join(', ')}`);
+  });
+});
+
+// ===========================================================================
+// SITEMAP DAN KARTU BAGIKAN
+// ===========================================================================
+//
+// Dua cacat yang berbeda sifatnya, diuji berdampingan karena satu commit yang
+// sama menutup keduanya:
+//
+// 1. Tidak ada sitemap sama sekali. Halaman produk di sini `/billboard/[slug]`,
+//    dan tidak satu pun halaman menaut ke SELURUH inventaris — crawler yang
+//    hanya mengikuti tautan karena itu tidak pernah menemukan sebagian besar
+//    papan yang dijual.
+// 2. Nol berkas menyetel `openGraph`/`twitter`. Tautan yang dibagikan sales
+//    lewat WhatsApp muncul sebagai alamat telanjang: tanpa judul, tanpa harga,
+//    tanpa foto, untuk produk yang keputusannya visual.
+//
+// Yang dijaga test ini bukan keberadaan field-nya, melainkan tiga hal yang bisa
+// merugikan: sitemap tidak boleh menyebut area yang `robots.txt` larang (sinyal
+// bertabrakan, dilaporkan Search Console sebagai galat), tidak boleh menyebut
+// billboard yang halamannya sendiri menjawab 404, dan `generateMetadata` tidak
+// boleh melempar — lemparan di sana menjatuhkan SELURUH halaman produk, padahal
+// yang hilang bila ia diam hanyalah judul tab.
+
+describe('sitemap dan kartu bagikan', () => {
+  const JALUR_SITEMAP = path.join(__dirname, '..', 'src', 'app', 'sitemap.ts');
+  const JALUR_ROBOTS_2 = path.join(__dirname, '..', 'src', 'app', 'robots.ts');
+  const JALUR_DETAIL = path.join(
+    __dirname, '..', 'src', 'app', 'billboard', '[slug]', 'page.tsx'
+  );
+  const JALUR_LAYOUT = path.join(__dirname, '..', 'src', 'app', 'layout.tsx');
+
+  const ORIGIN_UJI = 'https://contoh.test';
+
+  /**
+   * Muat `sitemap.ts` dengan Prisma palsu.
+   *
+   * `prisma` asli membuka koneksi database saat modulnya dimuat, jadi ia HARUS
+   * dipalsukan; `@/lib/xendit` tidak dipalsukan supaya validasi origin yang
+   * diuji adalah validasi yang sungguh berjalan di produksi.
+   */
+  function muatSitemap(hasilFindMany) {
+    const dipanggil = [];
+    const prismaPalsu = {
+      prisma: {
+        billboard: {
+          findMany: async (arg) => {
+            dipanggil.push(arg);
+            if (typeof hasilFindMany === 'function') return hasilFindMany(arg);
+            return hasilFindMany ?? [];
+          },
+        },
+      },
+    };
+    const modul = muatDenganModulPalsu(JALUR_SITEMAP, { '@/lib/prisma': prismaPalsu });
+    return { sitemap: modul.default, dipanggil };
+  }
+
+  async function jalankanSitemap(hasilFindMany) {
+    const asli = process.env.APP_ORIGIN;
+    try {
+      process.env.APP_ORIGIN = ORIGIN_UJI;
+      const { sitemap, dipanggil } = muatSitemap(hasilFindMany);
+      return { entri: await sitemap(), dipanggil };
+    } finally {
+      if (asli === undefined) delete process.env.APP_ORIGIN;
+      else process.env.APP_ORIGIN = asli;
+    }
+  }
+
+  it('menyebut setiap billboard PUBLISHED dengan alamat absolut', async () => {
+    const { entri } = await jalankanSitemap([
+      { slug: 'sudirman-01', updatedAt: new Date('2026-01-02T03:04:05Z') },
+      { slug: 'thamrin-02', updatedAt: new Date('2026-02-03T04:05:06Z') },
+    ]);
+
+    const alamat = entri.map((e) => e.url);
+    assert.ok(alamat.includes(ORIGIN_UJI + '/billboard/sudirman-01'));
+    assert.ok(alamat.includes(ORIGIN_UJI + '/billboard/thamrin-02'));
+
+    // Alamat relatif di sitemap diabaikan seluruhnya oleh mesin pencari.
+    for (const a of alamat) {
+      assert.ok(a.startsWith('https://'), 'alamat tidak absolut: ' + a);
+    }
+  });
+
+  it('memfilter publishStatus PUBLISHED di query, bukan setelahnya', async () => {
+    // Menyaring di JavaScript berarti seluruh tabel terbaca lebih dulu, dan satu
+    // baris DRAFT yang lolos berarti crawler dikirim ke 404 yang kita tulis
+    // sendiri di `billboard/[slug]/page.tsx`.
+    const { dipanggil } = await jalankanSitemap([]);
+    assert.equal(dipanggil.length, 1, 'sitemap tidak membaca billboard sama sekali');
+    assert.deepStrictEqual(dipanggil[0].where, { publishStatus: 'PUBLISHED' });
+  });
+
+  it('hanya membaca slug dan updatedAt', async () => {
+    // Tabel ini memuat harga dan koordinat. Tidak ada alasan keduanya ikut
+    // terbaca untuk menyusun daftar alamat.
+    const { dipanggil } = await jalankanSitemap([]);
+    assert.deepStrictEqual(dipanggil[0].select, { slug: true, updatedAt: true });
+  });
+
+  it('memakai updatedAt baris, bukan waktu sekarang', async () => {
+    // Tanggal yang selalu "sekarang" memberi tahu crawler bahwa SETIAP halaman
+    // berubah setiap kali sitemap diminta, sehingga ia berhenti memercayai kolom
+    // ini seluruhnya — dan halaman yang benar-benar berubah tidak lagi menonjol.
+    const kemarin = new Date('2025-06-01T00:00:00Z');
+    const { entri } = await jalankanSitemap([{ slug: 'lama', updatedAt: kemarin }]);
+    const baris = entri.find((e) => e.url.endsWith('/billboard/lama'));
+    assert.ok(baris, 'billboard tidak masuk sitemap');
+    assert.equal(new Date(baris.lastModified).toISOString(), kemarin.toISOString());
+  });
+
+  it('tidak menyebut satu pun jalur yang dilarang robots.txt', async () => {
+    // Sitemap yang menyebut `/dashboard` sementara `robots.txt` melarangnya
+    // bukan sekadar mubazir — ia sinyal yang bertabrakan, dan Google Search
+    // Console melaporkannya sebagai galat.
+    const { entri } = await jalankanSitemap([{ slug: 'x', updatedAt: new Date() }]);
+    const larangan = muatDenganModulPalsu(JALUR_ROBOTS_2, {}).default().rules[0].disallow;
+
+    for (const e of entri) {
+      const jalur = e.url.slice(ORIGIN_UJI.length);
+      for (const terlarang of larangan) {
+        assert.ok(
+          !jalur.startsWith(terlarang),
+          'sitemap menyebut ' + jalur + ' yang dilarang robots.txt (' + terlarang + ')'
+        );
+      }
+    }
+  });
+
+  it('tidak menyebut halaman login, register, maupun akhir alur pembayaran', async () => {
+    const { entri } = await jalankanSitemap([]);
+    const jalur = entri.map((e) => e.url.slice(ORIGIN_UJI.length));
+    for (const dilarang of ['/login', '/register', '/pembayaran/selesai']) {
+      assert.ok(!jalur.includes(dilarang), dilarang + ' masuk sitemap');
+    }
+  });
+
+  it('database gagal tetap menghasilkan halaman statis, bukan 500', async () => {
+    // Crawler yang menerima 500 di sini mencatat SELURUH sitemap sebagai gagal
+    // dan menjadwal ulang jauh di kemudian hari.
+    const errorAsli = console.error;
+    console.error = () => {};
+    try {
+      const { entri } = await jalankanSitemap(async () => {
+        throw new Error('koneksi database terputus');
+      });
+      assert.ok(entri.length > 0, 'sitemap kosong saat database gagal');
+      assert.ok(
+        entri.some((e) => e.url === ORIGIN_UJI + '/'),
+        'beranda hilang saat database gagal'
+      );
+      assert.ok(
+        !entri.some((e) => e.url.includes('/billboard/')),
+        'billboard muncul padahal query gagal'
+      );
+    } finally {
+      console.error = errorAsli;
+    }
+  });
+
+  it('melempar bila APP_ORIGIN belum siap', async () => {
+    // Berbeda dari `robots.ts`: sitemap dengan origin yang salah lebih buruk
+    // daripada tidak ada sitemap — ia mengajari mesin pencari alamat yang tidak
+    // pernah bisa dibuka, dan alamat itu bertahan di indeks.
+    const asli = process.env.APP_ORIGIN;
+    try {
+      delete process.env.APP_ORIGIN;
+      const { sitemap } = muatSitemap([]);
+      await assert.rejects(sitemap(), /ORIGIN/);
+    } finally {
+      if (asli === undefined) delete process.env.APP_ORIGIN;
+      else process.env.APP_ORIGIN = asli;
+    }
+  });
+
+  it('prioritas dan frekuensi tidak dilebih-lebihkan', () => {
+    // Keduanya PETUNJUK yang boleh diabaikan mesin pencari. Nilai yang
+    // dilebihkan (semuanya 1.0, semuanya `always`) tidak menghasilkan apa pun
+    // selain sinyal yang tidak informatif.
+    const kode = kodeSajaAny(JALUR_SITEMAP);
+    assert.doesNotMatch(kode, /'always'/, 'memakai changeFrequency always');
+    const satu = kode.match(/priority:\s*1(\.0)?\b/g) ?? [];
+    assert.ok(satu.length <= 1, 'lebih dari satu halaman berprioritas tertinggi');
+  });
+
+  it('halaman detail billboard menyetel openGraph dan twitter', () => {
+    const kode = kodeSajaAny(JALUR_DETAIL);
+    assert.match(kode, /export async function generateMetadata/);
+    assert.match(kode, /openGraph:/, 'tidak ada kartu openGraph');
+    assert.match(kode, /twitter:/, 'tidak ada kartu twitter');
+    // Foto papan adalah isi utamanya; kartu kecil menampilkannya sebagai ikon
+    // persegi di samping teks.
+    assert.match(kode, /summary_large_image/);
+    assert.match(kode, /images:/, 'kartu bagikan tanpa gambar');
+  });
+
+  it('metadata billboard memakai gate publish yang sama dengan halamannya', () => {
+    // Metadata yang menyebut billboard DRAFT berarti judul dan foto terbit untuk
+    // alamat yang halamannya sendiri menjawab 404.
+    const kode = kodeSajaAny(JALUR_DETAIL);
+    const gate = kode.match(/publishStatus:\s*'PUBLISHED'/g) ?? [];
+    assert.ok(
+      gate.length >= 2,
+      'gate PUBLISHED hanya muncul ' + gate.length + '× — metadata atau halaman tidak dijaga'
+    );
+  });
+
+  it('generateMetadata billboard tidak boleh melempar', () => {
+    // `generateMetadata` yang gagal menjatuhkan SELURUH halaman, termasuk
+    // halaman yang datanya sendiri baik-baik saja — dan yang hilang bila ia diam
+    // hanyalah judul tab. Bandingkan `getBillboardBySlug`, yang justru HARUS
+    // melempar supaya kegagalan database tidak menyamar sebagai 404.
+    const kode = kodeSajaAny(JALUR_DETAIL);
+    const awal = kode.indexOf('export async function generateMetadata');
+    assert.ok(awal > -1, 'generateMetadata tidak ada');
+    const akhir = kode.indexOf('export default async function DetailPage');
+    assert.ok(akhir > awal, 'batas fungsi tidak ditemukan');
+
+    const badan = kode.slice(awal, akhir);
+    assert.match(badan, /try\s*\{/, 'query metadata tidak dibungkus try');
+    assert.match(badan, /catch/, 'tidak ada catch di generateMetadata');
+    assert.doesNotMatch(badan, /\bthrow\b/, 'generateMetadata melempar');
+    // Slug yang tidak ada dibiarkan memakai metadata layout akar: halamannya
+    // akan memanggil `notFound()` beberapa milidetik kemudian.
+    assert.doesNotMatch(badan, /notFound\(\)/, 'generateMetadata memanggil notFound()');
+    assert.match(badan, /return \{\}/, 'slug kosong tidak dikembalikan sebagai {}');
+  });
+
+  it('metadata billboard tidak mengulang nama usaha di judulnya', () => {
+    // Layout akar menempelkan nama usaha lewat `template: '%s | nama'`. Judul
+    // yang sudah memuatnya sendiri membuat namanya tertulis dua kali.
+    const kode = kodeSajaAny(JALUR_DETAIL);
+    const awal = kode.indexOf('export async function generateMetadata');
+    const akhir = kode.indexOf('export default async function DetailPage');
+    const badan = kode.slice(awal, akhir);
+    assert.doesNotMatch(badan, /ambilIdentitasSitus/, 'judul billboard menempel nama usaha lagi');
+  });
+
+  it('layout akar punya kartu bagikan dasar tanpa gambar tebakan', () => {
+    const kode = kodeSajaAny(JALUR_LAYOUT);
+    assert.match(kode, /openGraph:/, 'layout akar tanpa openGraph');
+    assert.match(kode, /twitter:/, 'layout akar tanpa twitter');
+    // Repo belum punya gambar bagikan yang dirancang untuk keperluan ini.
+    // Menunjuk ke logo kecil menghasilkan kartu dengan gambar meregang — lebih
+    // buruk daripada kartu teks yang rapi.
+    assert.doesNotMatch(kode, /images:/, 'layout akar menebak gambar bagikan');
+    assert.doesNotMatch(
+      kode,
+      /summary_large_image/,
+      'kartu besar tanpa gambar dirender sebagai blok kosong'
+    );
+  });
+
+  it('kartu bagikan mengikuti pengaturan admin, bukan teks tetap', () => {
+    // Nama usaha yang diganti di `/admin/settings` harus ikut berubah di kartu
+    // bagikan, bukan hanya di tab peramban.
+    const kode = kodeSajaAny(JALUR_LAYOUT);
+    const awal = kode.indexOf('openGraph:');
+    const badan = kode.slice(awal, kode.indexOf('export default function RootLayout'));
+    assert.match(badan, /judul|nama|deskripsi/, 'kartu bagikan memakai teks tetap');
+  });
+
+  it('sitemap tidak menyeberangkan kolom selain slug dan tanggal', () => {
+    const kode = kodeSajaAny(JALUR_SITEMAP);
+    for (const kolom of ['price', 'lat', 'lng', 'gallery', 'specs', 'mainImage']) {
+      assert.doesNotMatch(kode, new RegExp('\\b' + kolom + '\\b'), kolom + ' terbaca sitemap');
+    }
+  });
+});
+
+describe('robots.txt dan sitemap.xml dirender per permintaan', () => {
+  // Ditemukan oleh `npm run build`, bukan oleh test — dan itu sebabnya test ini
+  // ada. Tanpa `export const dynamic = 'force-dynamic'`, Next memanggil kedua
+  // route saat build dan menyimpan hasilnya sebagai berkas statis:
+  //
+  //   Error occurred prerendering page "/sitemap.xml"
+  //   GalatXendit: APP_ORIGIN belum diisi
+  //   Export encountered an error on /sitemap.xml/route, exiting the build.
+  //
+  // `src/instrumentation.ts` SENGAJA dilewati Next pada fase build, jadi tidak
+  // ada jaminan mesin build punya env produksi. Untuk `robots.ts` akibatnya
+  // lebih buruk karena senyap: ia tidak melempar, jadi build lolos dan
+  // `robots.txt` dibekukan TANPA baris `sitemap` — bentuk itu lalu disajikan
+  // selamanya walaupun `APP_ORIGIN` di produksi terisi benar.
+  for (const berkas of ['robots.ts', 'sitemap.ts']) {
+    it(berkas + ' menyatakan force-dynamic', () => {
+      const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', berkas));
+      assert.match(
+        kode,
+        /export const dynamic = 'force-dynamic'/,
+        berkas + ' akan dibekukan saat build'
+      );
+    });
+  }
+
+  it('sitemap tidak menyatakan revalidate yang membekukan daftarnya', () => {
+    // `revalidate` bernilai besar mengembalikan masalah yang sama dengan bentuk
+    // lain: billboard baru tidak muncul sampai jendelanya lewat.
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', 'sitemap.ts'));
+    assert.doesNotMatch(kode, /export const revalidate/);
   });
 });
