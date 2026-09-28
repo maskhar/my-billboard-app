@@ -14,6 +14,7 @@ import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 import { arrayDariJson } from '@/lib/safe-json';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { angkaRupiah } from '@/lib/money';
+import { tanggalJam, tanggalRingkas } from '@/lib/tanggal';
 import {
   sahStatusBillboard,
   sahStatusPublikasi,
@@ -299,7 +300,7 @@ export default function BillboardFormPage() {
       const setuju = await konfirmasi({
           judul: 'Pulihkan billboard ke revisi ini?',
           pesan:
-              `Revisi ${new Date(historyItem.archivedAt).toLocaleString('id-ID')} ` +
+              `Revisi ${tanggalJam(historyItem.archivedAt)} ` +
               `oleh ${historyItem.changedBy?.name ?? 'Sistem'}, harga ` +
               `Rp ${angkaRupiah(historyItem.price)}.\n\n` +
               'Seluruh data billboard yang tersimpan sekarang akan DITIMPA oleh ' +
@@ -523,7 +524,7 @@ export default function BillboardFormPage() {
                                     <div key={log.id} className="bg-gray-50 p-3 rounded-lg border text-xs">
                                         <div className="flex justify-between font-bold text-gray-700 mb-1">
                                             <span>{log.changedBy?.name || "System"}</span>
-                                            <span className="text-[10px] font-normal text-gray-400">{new Date(log.archivedAt).toLocaleDateString()}</span>
+                                            <span className="text-[10px] font-normal text-gray-400">{tanggalRingkas(log.archivedAt)}</span>
                                         </div>
                                         <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {angkaRupiah(log.price)}</p>
                                         <button onClick={()=>handleRollback(log)} className="text-blue-600 font-bold hover:underline flex gap-1"><RotateCcw size={10}/> Restore</button>

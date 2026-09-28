@@ -12,6 +12,7 @@ import {
   uangMasuk,
 } from '@/lib/pembayaran';
 import { PaymentStatus, PaymentTujuan } from '@prisma/client';
+import { tanggalRingkas } from '@/lib/tanggal';
 
 /**
  * Kolom Payment yang cukup untuk menyusun riwayat pembayaran di invoice.
@@ -190,7 +191,7 @@ export default async function InvoicePage(props: Props) {
                     <p className="text-[10px] text-gray-400 mt-2">
                         Status pesanan: <span className="font-bold">{order.status.replace(/_/g, ' ')}</span>
                     </p>
-                    <p className="text-xs text-gray-400 mt-1 font-mono">Tgl: {new Date(order.createdAt).toLocaleDateString('id-ID')}</p>
+                    <p className="text-xs text-gray-400 mt-1 font-mono">Tgl: {tanggalRingkas(order.createdAt)}</p>
                 </div>
             </div>
 
@@ -303,7 +304,7 @@ export default async function InvoicePage(props: Props) {
                                     {LABEL_TUJUAN[p.tujuan]}
                                     {p.paidAt && (
                                         <span className="text-gray-400 ml-1">
-                                            · {new Date(p.paidAt).toLocaleDateString('id-ID')}
+                                            · {tanggalRingkas(p.paidAt)}
                                         </span>
                                     )}
                                 </span>

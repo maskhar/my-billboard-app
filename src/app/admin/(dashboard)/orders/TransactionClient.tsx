@@ -16,6 +16,7 @@ import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 import { useToast } from '@/components/ui/Toast';
 import { useKonfirmasi } from '@/components/ui/Konfirmasi';
+import { tanggalPanjang, tanggalRingkas } from '@/lib/tanggal';
 
 /**
  * Bentuk satu pesanan SETELAH diserialisasi oleh `page.tsx`.
@@ -383,7 +384,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
             >
               <div className="flex justify-between items-center mb-1">
                 <span className="font-mono text-xs font-bold text-gray-700">{labelPesanan(t.id)}</span>
-                <span className="text-xs text-gray-400">{new Date(t.createdAt).toLocaleDateString()}</span>
+                <span className="text-xs text-gray-400">{tanggalRingkas(t.createdAt)}</span>
               </div>
               <p className="text-sm font-semibold text-gray-800 line-clamp-1">{t.billboard.title}</p>
               <p className="text-xs text-gray-500">{t.user.name}</p>
@@ -475,9 +476,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                                     </span>
                                     <span className="text-[10px] leading-relaxed text-red-700">
                                         Batas H-3 lewat sejak{' '}
-                                        {new Date(selected.uang.tenggatPelunasanISO).toLocaleDateString('id-ID', {
-                                            dateStyle: 'long',
-                                        })}
+                                        {tanggalPanjang(selected.uang.tenggatPelunasanISO)}
                                         . Pembayaran masih dibuka untuk pembeli.
                                     </span>
                                 </div>
@@ -504,7 +503,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                                                 {rupiah(p.jumlah)}
                                                 {p.paidAt && (
                                                     <span className="ml-2 text-gray-400">
-                                                        {new Date(p.paidAt).toLocaleDateString('id-ID')}
+                                                        {tanggalRingkas(p.paidAt)}
                                                     </span>
                                                 )}
                                             </span>

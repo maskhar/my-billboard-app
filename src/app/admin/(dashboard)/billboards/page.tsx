@@ -5,6 +5,7 @@ import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn';
 import StatusChanger from '@/components/admin/StatusChanger';
 import { Billboard } from '@prisma/client';
 import { angkaRupiah } from '@/lib/money';
+import { tanggalRingkas } from '@/lib/tanggal';
 
 export const dynamic = 'force-dynamic';
 
@@ -135,7 +136,7 @@ export default async function AdminBillboardsPage({
                                         <span className="text-xs font-bold text-gray-700">{item.updatedBy?.name || "System"}</span>
                                     </div>
                                     <div className="flex items-center gap-1 text-[10px] text-gray-400">
-                                        <Clock size={10}/> {new Date(item.updatedAt).toLocaleDateString()}
+                                        <Clock size={10}/> {tanggalRingkas(item.updatedAt)}
                                     </div>
                                 </div>
                             </td>

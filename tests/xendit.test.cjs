@@ -20592,3 +20592,202 @@ describe('src/lib/sapu-token-reset.ts', () => {
     assert.notEqual(jam, undefined);
   });
 });
+
+// ===========================================================================
+// src/lib/tanggal.ts — satu zona waktu untuk semua pembaca
+//
+// Dua bug yang modul ini tutup, dan yang tes di bawah jaga supaya tidak
+// kembali:
+//
+// 1. `toLocaleDateString()` tanpa locale — hasilnya bergantung pada sistem
+//    yang menjalankannya. Test ini berjalan di runner yang locale-nya bisa
+//    apa saja, jadi ia memeriksa BENTUKNYA, bukan mencocokkan teks bulan
+//    Indonesia secara harfiah (`Intl` pada beberapa build Node hanya punya
+//    locale `en`, dan tes yang menuntut "Sep" versus "Sept" akan gagal di
+//    mesin lain tanpa ada yang rusak).
+//
+// 2. Zona waktu proses ikut dipakai. Ini yang diperiksa keras: tanggal yang
+//    berada di sisi berbeda dari batas hari WIB harus keluar sebagai hari
+//    WIB, apa pun zona proses yang menjalankan test.
+// ===========================================================================
+const JALUR_TANGGAL = path.join(__dirname, '..', 'src', 'lib', 'tanggal.ts');
+
+describe('src/lib/tanggal.ts', () => {
+  /** Kode tanpa komentar — komentar modul ini menyebut sendiri pola yang salah. */
+  function kodeSajaTanggal() {
+    return fs
+      .readFileSync(JALUR_TANGGAL, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  it('zona waktu dipaku ke Asia/Jakarta, bukan zona proses', () => {
+    const { ZONA_WAKTU, LOKAL } = require(JALUR_TANGGAL);
+    assert.equal(ZONA_WAKTU, 'Asia/Jakarta');
+    assert.equal(LOKAL, 'id-ID');
+  });
+
+  it('setiap pemformat menyerahkan timeZone — tanpa itu zona proses yang menang', () => {
+    const kode = kodeSajaTanggal();
+    // Ini invariant pusat modul: empat fungsi ekspor, empat `timeZone`.
+    // Satu pemanggil `toLocale*` tanpa `timeZone` mengembalikan bug yang
+    // membuat invoice mencetak tanggal yang lebih awal satu hari.
+    const pemanggil = kode.match(/toLocale(?:Date|Time)?String\(/g) || [];
+    assert.equal(pemanggil.length, 4, 'jumlah pemanggil toLocale* berubah');
+    const denganZona = kode.match(/timeZone:/g) || [];
+    assert.equal(denganZona.length, 4, 'ada pemformat tanpa timeZone');
+  });
+
+  it('modul nol impor — dipakai dari Client Component', () => {
+    // Alasan yang sama seperti `src/lib/tarif.ts`: mengimpor `@prisma/client`
+    // dari sini akan menarik runtime Prisma ke bundel browser lewat setiap
+    // Client Component yang memformat tanggal.
+    const kode = kodeSajaTanggal();
+    assert.doesNotMatch(kode, /^\s*import\s/m, 'tanggal.ts tidak boleh mengimpor apa pun');
+    assert.doesNotMatch(kode, /require\(/);
+  });
+
+  it('tanggal sesudah 17.00 UTC sudah menjadi hari berikutnya di WIB', () => {
+    // WIB = UTC+7. Pukul 17.30 UTC tanggal 28 adalah 00.30 WIB tanggal 29.
+    // Tanpa `timeZone`, proses yang berjalan di UTC (Vercel) mencetak 28 —
+    // satu hari lebih awal daripada yang dilihat pembeli saat memesan.
+    const { tanggalRingkas, tanggalPanjang, kunciTanggal } = require(JALUR_TANGGAL);
+    const larutUtc = new Date('2026-09-28T17:30:00.000Z');
+
+    assert.equal(kunciTanggal(larutUtc), '2026-09-29');
+    assert.match(tanggalRingkas(larutUtc), /\b29\b/);
+    assert.match(tanggalRingkas(larutUtc), /2026/);
+    assert.match(tanggalPanjang(larutUtc), /\b29\b/);
+  });
+
+  it('tanggal sebelum 17.00 UTC tetap hari yang sama di WIB', () => {
+    const { kunciTanggal } = require(JALUR_TANGGAL);
+    // 16.59 UTC = 23.59 WIB hari yang sama. Batasnya harus tepat di 17.00,
+    // bukan tergeser satu jam.
+    assert.equal(kunciTanggal(new Date('2026-09-28T16:59:59.000Z')), '2026-09-28');
+    assert.equal(kunciTanggal(new Date('2026-09-28T17:00:00.000Z')), '2026-09-29');
+  });
+
+  it('kunciTanggal memakai WIB, bukan potongan toISOString', () => {
+    // `toISOString().slice(0, 10)` memotong di UTC. Untuk 1 Oktober pukul
+    // 06.00 WIB ia menghasilkan `2026-09-30`, dan kalender ketersediaan lalu
+    // menyorot hari yang salah. Nilai ini juga masuk ke `?date=`, jadi salah
+    // di sini berarti pesanan dibuat untuk tanggal yang tidak dipilih.
+    const { kunciTanggal } = require(JALUR_TANGGAL);
+    const pagiWib = new Date('2026-09-30T23:00:00.000Z'); // 1 Okt 06.00 WIB
+    assert.equal(kunciTanggal(pagiWib), '2026-10-01');
+    assert.notEqual(kunciTanggal(pagiWib), pagiWib.toISOString().slice(0, 10));
+  });
+
+  it('kunciTanggal berbentuk YYYY-MM-DD dengan nol di depan', () => {
+    // Bentuknya dibandingkan sebagai teks di query dan filter, jadi
+    // `2026-1-5` akan diurutkan salah dan tidak cocok dengan apa pun.
+    const { kunciTanggal } = require(JALUR_TANGGAL);
+    assert.match(kunciTanggal(new Date('2026-01-05T05:00:00.000Z')), /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(kunciTanggal(new Date('2026-01-05T05:00:00.000Z')), '2026-01-05');
+  });
+
+  it('teks ISO dan angka epoch diterima — tanggal menyeberang sebagai teks', () => {
+    // Objek `Date` tidak bisa menjadi props Client Component, jadi separuh
+    // pemanggil memegang teks ISO. Pemformat yang hanya menerima `Date` akan
+    // melempar di separuh tempat pemakaiannya.
+    const { kunciTanggal } = require(JALUR_TANGGAL);
+    const acuan = '2026-09-28T17:30:00.000Z';
+    assert.equal(kunciTanggal(acuan), '2026-09-29');
+    assert.equal(kunciTanggal(new Date(acuan).getTime()), '2026-09-29');
+    assert.equal(kunciTanggal(new Date(acuan)), '2026-09-29');
+  });
+
+  it('nilai kosong menjadi tanda pisah, bukan "Invalid Date"', () => {
+    // `paidAt`, `tenggatPelunasanISO`, dan `installedAt` semuanya boleh null.
+    // Teks "Invalid Date" pernah tampil di layar admin.
+    const { tanggalRingkas, tanggalPanjang, tanggalJam } = require(JALUR_TANGGAL);
+    for (const fungsi of [tanggalRingkas, tanggalPanjang, tanggalJam]) {
+      assert.equal(fungsi(null), '—');
+      assert.equal(fungsi(undefined), '—');
+      assert.equal(fungsi('bukan tanggal'), '—');
+      assert.equal(fungsi(''), '—');
+    }
+  });
+
+  it('kunciTanggal kosong menjadi string kosong, bukan tanda pisah', () => {
+    // Nilainya masuk ke URL. `—` di `?date=` akan dikirim ke server sebagai
+    // tanggal dan ditolak di sana — lebih baik parameternya tidak terisi.
+    const { kunciTanggal } = require(JALUR_TANGGAL);
+    assert.equal(kunciTanggal(null), '');
+    assert.equal(kunciTanggal('bukan tanggal'), '');
+  });
+
+  it('tanggalJam menyertakan jam dan menit, dua pemformat lain tidak', () => {
+    const { tanggalRingkas, tanggalPanjang, tanggalJam } = require(JALUR_TANGGAL);
+    const acuan = new Date('2026-09-28T07:30:00.000Z'); // 14.30 WIB
+    assert.match(tanggalJam(acuan), /\b14[.:]30\b/);
+    assert.doesNotMatch(tanggalRingkas(acuan), /\b14[.:]30\b/);
+    assert.doesNotMatch(tanggalPanjang(acuan), /\b14[.:]30\b/);
+  });
+
+  it('tanggalPanjang lebih panjang daripada tanggalRingkas', () => {
+    // Keduanya sengaja berbeda: satu untuk kolom tabel, satu untuk dokumen
+    // yang dicetak. Kalau menyatu, salah satu pemanggil akan kehilangan
+    // maksudnya tanpa ada yang menyadarinya.
+    const { tanggalRingkas, tanggalPanjang } = require(JALUR_TANGGAL);
+    const acuan = new Date('2026-09-28T07:30:00.000Z');
+    assert.ok(tanggalPanjang(acuan).length > tanggalRingkas(acuan).length);
+  });
+
+  it('tidak ada lagi toLocale* tanpa timeZone di src/app dan src/components', () => {
+    // Gerbang regresi: seluruh pemformat tanggal harus lewat modul ini.
+    // Yang boleh tersisa hanyalah pemanggil pada objek `Date` yang dibuat
+    // lokal untuk nama bulan kalender, dan `money.ts` yang memformat ANGKA,
+    // bukan tanggal.
+    const dikecualikan = new Set([
+      // Nama bulan dari `new Date(tahun, bulan, 1)` yang dibuat di tempat.
+      // Tidak ada timestamp server yang terlibat, jadi zona tidak berperan.
+      'src/components/AvailabilityCalendar.tsx',
+    ]);
+
+    const akar = path.join(__dirname, '..', 'src');
+    const pelanggar = [];
+
+    /** Telusuri seluruh berkas .ts/.tsx di bawah `dir`. */
+    function telusuri(dir) {
+      for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) {
+          telusuri(penuh);
+          continue;
+        }
+        if (!/\.tsx?$/.test(entri.name)) continue;
+
+        const rel = path.relative(path.join(__dirname, '..'), penuh).replace(/\\/g, '/');
+        if (rel === 'src/lib/tanggal.ts' || rel === 'src/lib/money.ts') continue;
+        if (dikecualikan.has(rel)) continue;
+
+        const kode = fs
+          .readFileSync(penuh, 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+          .split(/\r?\n/)
+          .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+          .join('\n');
+
+        // Hanya yang memformat TANGGAL. `toLocaleString('id-ID')` pada angka
+        // rupiah bukan pelanggaran — lihat `money.ts`.
+        if (/toLocaleDateString\(|toLocaleTimeString\(/.test(kode)) {
+          pelanggar.push(rel);
+        }
+      }
+    }
+
+    telusuri(akar);
+
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'berkas ini memformat tanggal sendiri, bukan lewat src/lib/tanggal.ts: ' +
+        pelanggar.join(', ')
+    );
+  });
+});

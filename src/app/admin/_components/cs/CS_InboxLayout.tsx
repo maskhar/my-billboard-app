@@ -10,6 +10,7 @@ import {
 } from '@/app/admin/(dashboard)/live-chat/actions';
 import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
 import type { PesanChat, SesiChat } from '@/lib/tipe-chat';
+import { tanggalJam } from '@/lib/tanggal';
 
 // Label status percakapan. `ChatSessionStatus` punya tiga nilai dan ketiganya
 // benar-benar ditulis: OPEN (tamu menunggu), AGENT (sudah dipegang admin),
@@ -398,7 +399,7 @@ const VisitorDetails = ({ session }: { session: SesiChat | null }) => {
                         <dt className="font-semibold w-24 shrink-0">Mulai</dt>
                         <dd>
                             {session.createdAt
-                                ? new Date(session.createdAt).toLocaleString('id-ID', { dateStyle: 'medium', timeStyle: 'short' })
+                                ? tanggalJam(session.createdAt)
                                 : <span className="text-gray-400">Tidak diketahui</span>}
                         </dd>
                     </div>

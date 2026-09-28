@@ -15,6 +15,7 @@ import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 import { useToast } from '@/components/ui/Toast';
 import { useKonfirmasi } from '@/components/ui/Konfirmasi';
+import { tanggalRingkas } from '@/lib/tanggal';
 
 /**
  * Status ditulis sebagai union teks, bukan diimpor dari `@prisma/client`.
@@ -168,11 +169,7 @@ export default function PengajuanClient({ daftar }: { daftar: Pengajuan[] }) {
                   {/* `toLocaleDateString` di client dengan zona peramban admin.
                       Nilainya teks ISO dari server, jadi tidak ada `Date` yang
                       menyeberang sebagai props. */}
-                  Masuk {new Date(p.createdAt).toLocaleDateString('id-ID', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  })}
+                  Masuk {tanggalRingkas(p.createdAt)}
                   {p.namaPenangan && ` · ditangani ${p.namaPenangan}`}
                 </p>
               </div>

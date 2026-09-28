@@ -12,6 +12,7 @@ import TrafficReportModal from '@/components/TrafficReportModal';
 import { arrayDariJson } from '@/lib/safe-json';
 import { rupiahSingkat } from '@/lib/money';
 import type { DetailBillboardPublik, PengaturanPublik } from '@/lib/tipe-billboard';
+import { kunciTanggal, tanggalPanjang } from '@/lib/tanggal';
 
 // Tipe properti yang diterima dari Server Component
 //
@@ -51,7 +52,7 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
   const [selectedDate, setSelectedDate] = useState<string>(initialDate);
 
   const handleDateSelect = (date: Date) => {
-    const dateString = date.toLocaleDateString('en-CA'); // YYYY-MM-DD
+    const dateString = kunciTanggal(date);
     setSelectedDate(dateString);
 
     const params = new URLSearchParams(currentSearchParams);
@@ -227,7 +228,7 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
                 {selectedDate && (
                   <div className="flex gap-2 items-center text-sm text-blue-700 bg-blue-50 p-3 rounded-xl border border-blue-100">
                     <Calendar size={16} />
-                    <span className="font-bold">Mulai: {new Date(selectedDate).toLocaleDateString('id-ID', { dateStyle: 'long' })}</span>
+                    <span className="font-bold">Mulai: {tanggalPanjang(selectedDate)}</span>
                   </div>
                 )}
               </div>

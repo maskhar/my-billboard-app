@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { Pencil, Wallet } from 'lucide-react';
 import UserFormModal from './UserFormModal';
 import { rupiah } from '@/lib/money';
+import { tanggalRingkas } from '@/lib/tanggal';
 
 const GOOGLE_ICON = "https://cdn.iconscout.com/icon/free/png-256/free-google-1772223-1507807.png";
 
@@ -161,7 +162,7 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                                              )}
                                          </div>
                                          <div className="text-[10px] text-gray-400 mt-1">
-                                             {new Date(user.createdAt).toLocaleDateString()}
+                                             {tanggalRingkas(user.createdAt)}
                                          </div>
                                     </td>
 
