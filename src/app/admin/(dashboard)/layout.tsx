@@ -7,7 +7,7 @@ import Link from "next/link";
 // [PEMBARUAN] Impor komponen-komponen layout
 import LogoutButton from '../_components/LogoutButton';
 import CS_Layout from "../_components/cs/CS_Layout"; // Layout Baru untuk CS
-import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert, type LucideIcon } from 'lucide-react';
+import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert, Inbox, type LucideIcon } from 'lucide-react';
 import { Role } from "@/lib/enum-guard";
 
 // Bentuk yang BENAR-BENAR dibaca kedua layout di bawah, bukan `any`.
@@ -140,6 +140,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       { name: "Overview", icon: LayoutDashboard, link: "/admin" },
       { name: "Transaksi", icon: ShoppingCart, link: "/admin/orders" },
       { name: "Inventory Billboard", icon: Map, link: "/admin/billboards" },
+      { name: "Pengajuan Titik", icon: Inbox, link: "/admin/pengajuan" },
       { name: "Manage Users", icon: Users, link: "/admin/users" },
       { name: "Live Chat CS", icon: MessageCircle, link: "/admin/live-chat" },
   ];
@@ -147,8 +148,14 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   // OPERATOR menangani chat dan pesanan, bukan inventaris atau daftar akun.
   // Menu yang tidak boleh ia buka tidak ditampilkan; pembatasan sebenarnya
   // tetap ada di masing-masing route API, bukan di daftar menu ini.
+  //
+  // `/admin/pengajuan` ikut disembunyikan dari OPERATOR karena penulisnya,
+  // `/api/admin/pengajuan-titik`, hanya menerima ADMIN dan SUPER_ADMIN:
+  // menolak penawaran lahan adalah keputusan komersial. Menu yang membuka
+  // halaman yang tombolnya selalu gagal lebih buruk daripada menu yang tidak
+  // ada.
   if (userRole === 'OPERATOR') {
-      menus = menus.filter(m => m.link !== '/admin/billboards' && m.link !== '/admin/users');
+      menus = menus.filter(m => m.link !== '/admin/billboards' && m.link !== '/admin/users' && m.link !== '/admin/pengajuan');
   }
 
   if (userRole === 'SUPER_ADMIN') {

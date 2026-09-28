@@ -10314,10 +10314,28 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
       }
     });
 
-    it('tombol "Sewakan Tempat" tanpa tujuan dibuang', () => {
-      // Tidak ada alur pendaftaran pemilik lahan di aplikasi ini. Tombol yang
-      // tidak melakukan apa pun membuat pemilik lahan menyimpulkan situs rusak.
-      assert.doesNotMatch(kode, /Sewakan Tempat/);
+    it('tombol "Sewakan Tempat" kini punya tujuan, di desktop dan di mobile', () => {
+      // Kasus ini DIBALIK dari versi sebelumnya. Dulu ia menuntut
+      // `assert.doesNotMatch(kode, /Sewakan Tempat/)` karena tombolnya tidak
+      // punya `href` dan alur pemilik lahan belum ada sama sekali — tombol yang
+      // tidak melakukan apa pun membuat pengaju menyimpulkan situs rusak.
+      //
+      // Alurnya sekarang ada (`src/app/sewakan-tempat/page.tsx` +
+      // `src/app/api/sewakan-tempat/route.ts`), jadi yang dijaga berubah
+      // arahnya: tombolnya WAJIB ada dan WAJIB menunjuk rutenya. Kasus "setiap
+      // href internal menunjuk rute yang benar-benar ada" di atas yang
+      // membuktikan rutenya tidak hilang di kemudian hari.
+      //
+      // Dua tombol dituntut, bukan satu: menu desktop dan panel mobile adalah
+      // dua pohon JSX terpisah di berkas ini, dan memasang hanya salah satunya
+      // adalah cacat yang persis pernah terjadi pada `/about`.
+      const tautan = [...kode.matchAll(/href="\/sewakan-tempat"/g)];
+      assert.equal(
+        tautan.length,
+        2,
+        'Navbar wajib punya tepat dua tautan /sewakan-tempat: satu di menu desktop, satu di panel mobile'
+      );
+      assert.match(kode, /Sewakan Tempat/);
     });
 
     it('dropdown profil menutup diri: klik luar, Escape, dan setelah navigasi', () => {
@@ -15971,6 +15989,867 @@ describe('nomor WhatsApp perusahaan: penyimpan, pembaca, dan tautannya', () => {
         .filter((jalur) => fs.existsSync(jalur))
         .some((jalur) => /ADD COLUMN "waNumber"/.test(fs.readFileSync(jalur, 'utf8')));
       assert.ok(ditemukan, 'tidak ada migrasi yang menambahkan kolom waNumber');
+    });
+  });
+});
+
+// ===========================================================================
+// SEWAKAN TEMPAT: ALUR PENGAJUAN TITIK DARI PEMILIK LAHAN
+// ===========================================================================
+//
+// Tombol "Sewakan Tempat" di Navbar pernah dibuang karena tidak punya `href`,
+// tidak punya `onClick`, dan tidak ada satu pun alur pemilik lahan di aplikasi
+// ini. Yang dijaga suite ini adalah bahwa alurnya sekarang UTUH di kedua
+// arahnya — pengaju bisa mengirim, DAN admin bisa membacanya.
+//
+// Arah kedua itu bukan pelengkap. Tabel yang tidak dibaca siapa pun membuat
+// pemilik lahan menunggu telepon yang tidak akan pernah datang, dan ia sudah
+// menyerahkan nomornya dengan harapan dihubungi. Itu cacat yang sama dengan
+// kolom tanpa penulis — alasan `fotoUrl` ditolak dari tabel ini — hanya
+// terbalik arahnya.
+
+const JALUR_ROUTE_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'api', 'sewakan-tempat', 'route.ts'
+);
+const JALUR_ROUTE_ADMIN_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'api', 'admin', 'pengajuan-titik', 'route.ts'
+);
+const JALUR_HALAMAN_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'sewakan-tempat', 'page.tsx'
+);
+const JALUR_FORM_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'sewakan-tempat', 'FormSewakanTempat.tsx'
+);
+const JALUR_HALAMAN_ADMIN_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'pengajuan', 'page.tsx'
+);
+const JALUR_CLIENT_ADMIN_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'pengajuan', 'PengajuanClient.tsx'
+);
+const JALUR_LAYOUT_ADMIN_PENGAJUAN = path.join(
+  __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'layout.tsx'
+);
+
+/**
+ * Buang baris komentar dari teks schema/SQL sebelum diuji.
+ *
+ * Tanpa ini, komentar yang MENJELASKAN kenapa `fotoUrl` tidak ada justru membuat
+ * kasus "tidak ada kolom fotoUrl" gagal — dan komentar migrasi yang menyebut
+ * "tidak ada satu pun `DROP`" membuat kasus "tidak ada DROP" gagal.
+ */
+function tanpaKomentarBaris(teks, pola) {
+  return teks
+    .split('\n')
+    .filter((baris) => !pola.test(baris))
+    .join('\n');
+}
+
+describe('alur "Sewakan Tempat" dari pengaju sampai admin', () => {
+  // ---------------------------------------------------------------------
+  // POST /api/sewakan-tempat — penerima publik
+  // ---------------------------------------------------------------------
+  describe('POST /api/sewakan-tempat', () => {
+    function buatRoute({ batasLolos = true, gagalTulis = false } = {}) {
+      const calls = { create: [], rate: [] };
+      const route = muatDenganModulPalsu(JALUR_ROUTE_PENGAJUAN, {
+        'next/server': {
+          NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+        },
+        '@/lib/prisma': {
+          prisma: {
+            pengajuanTitik: {
+              create: async (args) => {
+                calls.create.push(args);
+                if (gagalTulis) throw new Error('database mati');
+                return { id: 'pengajuan-1' };
+              },
+            },
+          },
+        },
+        '@/lib/rate-limit': {
+          rateLimit: (input) => {
+            calls.rate.push(input);
+            return batasLolos
+              ? { success: true, retryAfterSeconds: 0, remaining: 4, resetAt: Date.now() + 1000 }
+              : { success: false, retryAfterSeconds: 900, remaining: 0, resetAt: Date.now() + 1000 };
+          },
+          rateLimitHeaders: () => ({ 'X-RateLimit-Limit': '5' }),
+        },
+      });
+      return { route, calls };
+    }
+
+    function permintaan(isi, { tanpaAsal = false } = {}) {
+      const headers = tanpaAsal ? {} : { 'x-forwarded-for': '203.0.113.7' };
+      return new Request('https://contoh.test/api/sewakan-tempat', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          namaPemilik: 'Bu Sari',
+          nomorWa: '08123456789',
+          alamat: 'Jl. Contoh No. 10',
+          kota: 'Surabaya',
+          ...isi,
+        }),
+      });
+    }
+
+    it('pengajuan yang lengkap tersimpan dan dijawab 201', async () => {
+      const { route, calls } = buatRoute();
+      const response = await route.POST(permintaan({}));
+
+      assert.equal(response.status, 201);
+      assert.equal(calls.create.length, 1);
+      const data = calls.create[0].data;
+      assert.equal(data.namaPemilik, 'Bu Sari');
+      assert.equal(data.kota, 'Surabaya');
+    });
+
+    it('nomor WA disimpan sudah dinormalisasi, bukan apa adanya', async () => {
+      // Satu orang yang menulis nomornya dengan format berbeda tidak boleh
+      // tercatat sebagai dua orang, dan nomornya harus langsung bisa dipakai
+      // menyusun tautan WhatsApp di daftar admin.
+      const { route, calls } = buatRoute();
+      await route.POST(permintaan({ nomorWa: '0812-345-6789' }));
+
+      assert.equal(calls.create[0].data.nomorWa, '628123456789');
+    });
+
+    it('nomor dengan huruf ditolak, bukan disimpan sebagai sisa angkanya', async () => {
+      // Ini alasan `keE164` dipanggil SEBELUM `normalisasiNomorLokal`: yang
+      // kedua membuang huruf dan menyimpan sisanya, jadi `+62812ABC4567`
+      // tersimpan sebagai nomor lain yang kelihatan sah — dan pengaju tidak
+      // pernah diberi tahu nomornya diubah.
+      const { route, calls } = buatRoute();
+      const response = await route.POST(permintaan({ nomorWa: '+62812ABC4567' }));
+
+      assert.equal(response.status, 400);
+      assert.equal(calls.create.length, 0);
+    });
+
+    for (const kosong of ['namaPemilik', 'nomorWa', 'alamat', 'kota']) {
+      it(`${kosong} kosong ditolak 400 tanpa menulis apa pun`, async () => {
+        const { route, calls } = buatRoute();
+        const response = await route.POST(permintaan({ [kosong]: '   ' }));
+
+        assert.equal(response.status, 400);
+        assert.equal(calls.create.length, 0);
+      });
+    }
+
+    it('email salah tulis ditolak; email kosong diterima sebagai null', async () => {
+      const salah = buatRoute();
+      const responseSalah = await salah.route.POST(permintaan({ email: 'bukan-email' }));
+      assert.equal(responseSalah.status, 400);
+      assert.equal(salah.calls.create.length, 0);
+
+      const kosong = buatRoute();
+      await kosong.route.POST(permintaan({ email: '' }));
+      assert.equal(kosong.calls.create[0].data.email, null);
+    });
+
+    it('status dan catatanAdmin yang diselipkan penyerang tidak sampai ke Prisma', async () => {
+      // Pola allowlist yang sama dengan `api/register` menolak
+      // `role: 'SUPER_ADMIN'`. Tanpa ini, satu POST bisa membuat pengajuan yang
+      // langsung tampil sebagai "SELESAI" dengan catatan internal karangan.
+      const { route, calls } = buatRoute();
+      const response = await route.POST(
+        permintaan({ status: 'SELESAI', catatanAdmin: 'disetujui direktur', id: 'palsu' })
+      );
+
+      assert.equal(response.status, 201);
+      const data = calls.create[0].data;
+      assert.ok(!('status' in data), 'status ikut ke Prisma');
+      assert.ok(!('catatanAdmin' in data), 'catatanAdmin ikut ke Prisma');
+      assert.ok(!('id' in data), 'id ikut ke Prisma');
+      assert.ok(!('ditanganiById' in data), 'ditanganiById ikut ke Prisma');
+    });
+
+    it('teks yang kepanjangan dipotong, bukan membatalkan seluruh kiriman', async () => {
+      const { route, calls } = buatRoute();
+      await route.POST(permintaan({ catatan: 'x'.repeat(5000) }));
+
+      assert.equal(calls.create[0].data.catatan.length, 2000);
+    });
+
+    it('melewati batas dijawab 429 tanpa menyentuh database', async () => {
+      const { route, calls } = buatRoute({ batasLolos: false });
+      const response = await route.POST(permintaan({}));
+
+      assert.equal(response.status, 429);
+      assert.equal(calls.create.length, 0);
+      // Diperiksa SEBELUM body dibaca: menolak setelah pekerjaannya selesai
+      // tidak menghemat apa pun.
+      assert.equal(calls.rate.length, 1);
+    });
+
+    it('tanpa header asal, batasnya DILEWATI dan bukan diganti kunci tetap', async () => {
+      // Kunci tetap membuat semua pengunjung berbagi satu penghitung: lima
+      // kiriman dari siapa pun menutup formulir bagi semua orang selama sejam.
+      const { route, calls } = buatRoute();
+      const response = await route.POST(permintaan({}, { tanpaAsal: true }));
+
+      assert.equal(response.status, 201);
+      assert.equal(calls.rate.length, 0);
+    });
+
+    it('kunci batasnya alamat asal, bukan nomor WA yang datang dari pengirim', async () => {
+      const { route, calls } = buatRoute();
+      await route.POST(permintaan({}));
+
+      assert.match(calls.rate[0].key, /^sewakan-tempat:/);
+      assert.ok(
+        !calls.rate[0].key.includes('812345'),
+        'kunci batas memakai nomor WA — bisa diganti setiap permintaan'
+      );
+    });
+
+    it('galat database dijawab 500 tanpa membocorkan pesan Prisma', async () => {
+      const { route } = buatRoute({ gagalTulis: true });
+      const response = await route.POST(permintaan({}));
+      const isi = await response.json();
+
+      assert.equal(response.status, 500);
+      assert.doesNotMatch(isi.message, /database mati/);
+    });
+
+    it('barisnya tidak dibaca utuh setelah ditulis — hanya id', () => {
+      // Tanpa `select`, `create` membalas SELURUH baris termasuk `catatanAdmin`
+      // yang milik internal.
+      const kode = kodeSajaIdentitas(JALUR_ROUTE_PENGAJUAN);
+      assert.match(kode, /select: \{ id: true \}/);
+    });
+
+    it('tidak ada gerbang sesi: pengaju memang tidak punya akun', () => {
+      const kode = kodeSajaIdentitas(JALUR_ROUTE_PENGAJUAN);
+      assert.doesNotMatch(kode, /getServerSession/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // POST /api/admin/pengajuan-titik — penulis status
+  // ---------------------------------------------------------------------
+  describe('POST /api/admin/pengajuan-titik', () => {
+    function buatRouteAdmin({ peran = 'ADMIN', baris = { id: 'p-1', catatanAdmin: null } } = {}) {
+      const calls = { update: [] };
+      const route = muatDenganModulPalsu(JALUR_ROUTE_ADMIN_PENGAJUAN, {
+        'next/server': {
+          NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+        },
+        'next-auth': {
+          getServerSession: async () => (peran ? { user: { id: 'admin-1', role: peran } } : null),
+        },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': {
+          prisma: {
+            pengajuanTitik: {
+              findUnique: async () => baris,
+              update: async (args) => {
+                calls.update.push(args);
+                return { id: 'p-1' };
+              },
+            },
+          },
+        },
+      });
+      return { route, calls };
+    }
+
+    function permintaanAdmin(isi) {
+      return new Request('https://contoh.test/api/admin/pengajuan-titik', {
+        method: 'POST',
+        body: JSON.stringify({ id: 'p-1', status: 'DIHUBUNGI', ...isi }),
+      });
+    }
+
+    for (const peran of ['USER', 'CS', 'OPERATOR', null]) {
+      it(`${peran ?? 'tanpa sesi'} ditolak 401 tanpa menulis apa pun`, async () => {
+        // CS dan OPERATOR lolos `src/middleware.ts` ke `/api/admin/*` —
+        // ADMIN_ROLES di sana memuat empat role — jadi gerbang kedua di sini
+        // bukan pengulangan. Menolak penawaran lahan adalah keputusan komersial.
+        const { route, calls } = buatRouteAdmin({ peran });
+        const response = await route.POST(permintaanAdmin({}));
+
+        assert.equal(response.status, 401);
+        assert.equal(calls.update.length, 0);
+      });
+    }
+
+    it('SUPER_ADMIN diterima', async () => {
+      const { route, calls } = buatRouteAdmin({ peran: 'SUPER_ADMIN' });
+      const response = await route.POST(permintaanAdmin({}));
+
+      assert.equal(response.status, 200);
+      assert.equal(calls.update.length, 1);
+    });
+
+    it('status asing ditolak di pintu masuk, bukan oleh enum Postgres', async () => {
+      const { route, calls } = buatRouteAdmin();
+      const response = await route.POST(permintaanAdmin({ status: 'MENUNGGU' }));
+      const isi = await response.json();
+
+      assert.equal(response.status, 400);
+      assert.equal(calls.update.length, 0);
+      // Pesannya menyebut nilai apa saja yang sah — penolakan dari lapisan
+      // terdalam muncul sebagai "Gagal menyimpan" tanpa keterangan.
+      assert.match(isi.message, /BARU/);
+    });
+
+    it('DITOLAK tanpa alasan dijawab 422 dan tidak menulis apa pun', async () => {
+      // Pengajuan yang ditolak tanpa sebab tidak bisa ditinjau ulang oleh siapa
+      // pun, termasuk admin yang menolaknya sendiri tiga bulan kemudian.
+      const { route, calls } = buatRouteAdmin();
+      const response = await route.POST(permintaanAdmin({ status: 'DITOLAK' }));
+
+      assert.equal(response.status, 422);
+      assert.equal(calls.update.length, 0);
+    });
+
+    it('DITOLAK diterima bila alasannya sudah tersimpan sebelumnya', async () => {
+      const { route, calls } = buatRouteAdmin({
+        baris: { id: 'p-1', catatanAdmin: 'di luar jangkauan pemasangan' },
+      });
+      const response = await route.POST(permintaanAdmin({ status: 'DITOLAK' }));
+
+      assert.equal(response.status, 200);
+      assert.equal(calls.update.length, 1);
+    });
+
+    it('DITOLAK dengan catatan yang justru DIKOSONGKAN tetap ditolak 422', async () => {
+      // Urutannya penting: alasan lama yang dihapus di permintaan yang sama
+      // tidak boleh dihitung sebagai alasan yang masih ada.
+      const { route, calls } = buatRouteAdmin({
+        baris: { id: 'p-1', catatanAdmin: 'alasan lama' },
+      });
+      const response = await route.POST(
+        permintaanAdmin({ status: 'DITOLAK', catatanAdmin: '   ' })
+      );
+
+      assert.equal(response.status, 422);
+      assert.equal(calls.update.length, 0);
+    });
+
+    it('catatanAdmin yang tidak dikirim berarti kolomnya tidak disentuh', async () => {
+      // `undefined` di Prisma berarti kolomnya tidak ikut di-SET. Tanpa
+      // pembedaan ini, admin yang hanya memindahkan status kehilangan catatan
+      // yang sudah ia tulis sebelumnya.
+      const { route, calls } = buatRouteAdmin();
+      await route.POST(permintaanAdmin({}));
+
+      assert.equal(calls.update[0].data.catatanAdmin, undefined);
+    });
+
+    it('catatanAdmin berisi teks kosong berarti dikosongkan, bukan diabaikan', async () => {
+      const { route, calls } = buatRouteAdmin();
+      await route.POST(permintaanAdmin({ catatanAdmin: '   ' }));
+
+      assert.equal(calls.update[0].data.catatanAdmin, null);
+    });
+
+    it('catatanAdmin bukan teks ditolak 400', async () => {
+      const { route, calls } = buatRouteAdmin();
+      const response = await route.POST(permintaanAdmin({ catatanAdmin: { a: 1 } }));
+
+      assert.equal(response.status, 400);
+      assert.equal(calls.update.length, 0);
+    });
+
+    it('catatanAdmin yang kepanjangan dipotong di 2000 huruf', async () => {
+      const { route, calls } = buatRouteAdmin();
+      await route.POST(permintaanAdmin({ catatanAdmin: 'y'.repeat(9000) }));
+
+      assert.equal(calls.update[0].data.catatanAdmin.length, 2000);
+    });
+
+    it('penanganya diambil dari sesi, bukan dari body', async () => {
+      // Bila `ditanganiById` boleh dikirim, satu admin bisa mencatat
+      // keputusannya atas nama admin lain.
+      const { route, calls } = buatRouteAdmin();
+      await route.POST(permintaanAdmin({ ditanganiById: 'admin-lain' }));
+
+      assert.equal(calls.update[0].data.ditanganiById, 'admin-1');
+    });
+
+    it('data kiriman pengaju tidak bisa disunting dari route ini', async () => {
+      // Baris ini adalah CATATAN apa yang orang itu kirimkan. Admin yang
+      // memperbaiki alamatnya "supaya rapi" ikut menghapus bukti apa yang
+      // sebenarnya diterima.
+      const { route, calls } = buatRouteAdmin();
+      await route.POST(
+        permintaanAdmin({
+          namaPemilik: 'diganti',
+          nomorWa: '08999999999',
+          alamat: 'dirapikan',
+          kota: 'diganti',
+          ukuran: '9x9',
+          catatan: 'diubah',
+        })
+      );
+
+      const data = calls.update[0].data;
+      for (const kolom of ['namaPemilik', 'nomorWa', 'alamat', 'kota', 'ukuran', 'catatan']) {
+        assert.ok(!(kolom in data), `${kolom} bisa disunting lewat route admin`);
+      }
+    });
+
+    it('id yang tidak ada dijawab 404, bukan galat Prisma', async () => {
+      const { route, calls } = buatRouteAdmin({ baris: null });
+      const response = await route.POST(permintaanAdmin({}));
+
+      assert.equal(response.status, 404);
+      assert.equal(calls.update.length, 0);
+    });
+
+    it('id bukan teks ditolak 400', async () => {
+      const { route, calls } = buatRouteAdmin();
+      const response = await route.POST(permintaanAdmin({ id: 42 }));
+
+      assert.equal(response.status, 400);
+      assert.equal(calls.update.length, 0);
+    });
+
+    it('barisnya tidak dibaca utuh — hanya id dan catatanAdmin', () => {
+      const kode = kodeSajaIdentitas(JALUR_ROUTE_ADMIN_PENGAJUAN);
+      assert.match(kode, /select: \{ id: true, catatanAdmin: true \}/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Halaman publik dan formulirnya
+  // ---------------------------------------------------------------------
+  describe('halaman /sewakan-tempat', () => {
+    it('berkas halamannya dan formulirnya ada', () => {
+      assert.ok(fs.existsSync(JALUR_HALAMAN_PENGAJUAN), 'page.tsx tidak ada');
+      assert.ok(fs.existsSync(JALUR_FORM_PENGAJUAN), 'FormSewakanTempat.tsx tidak ada');
+    });
+
+    it('halamannya Server Component; hanya formulirnya yang Client', () => {
+      assert.doesNotMatch(kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN), /'use client'/);
+      assert.match(kodeSajaIdentitas(JALUR_FORM_PENGAJUAN), /'use client'/);
+    });
+
+    it('nama situs dibaca dari pengaturan, bukan dipatok di kode', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.match(kode, /ambilIdentitasSitus\(\)/);
+      assert.doesNotMatch(kode, /Utero ?Cloud/);
+    });
+
+    it('judulnya menumpang template layout akar', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.match(kode, /export async function generateMetadata\(\)/);
+      assert.doesNotMatch(kode, /template:/);
+    });
+
+    it('tidak ada klaim komersial yang tidak tersimpan di aplikasi ini', () => {
+      // "500+ mitra", "bagi hasil 40%", dan angka pendapatan adalah klaim
+      // tentang perjanjian yang tidak satu pun ada di database — pada halaman
+      // yang justru dibuka orang untuk menilai apakah penawarannya serius.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.doesNotMatch(kode, /\d\s*%/);
+      assert.doesNotMatch(kode, /Rp\s*[\d.]/);
+      assert.doesNotMatch(kode, /\d{3}\+/);
+    });
+
+    it('tautan WhatsApp hanya muncul bila nomornya sudah diatur admin', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.match(kode, /keTautanWa\(/);
+      assert.match(kode, /\{tautanWa && \(/);
+    });
+
+    it('tautan keluar membawa rel="noopener noreferrer"', () => {
+      for (const jalur of [JALUR_HALAMAN_PENGAJUAN, JALUR_FORM_PENGAJUAN]) {
+        const kode = kodeSajaIdentitas(jalur);
+        const target = (kode.match(/target="_blank"/g) || []).length;
+        const rel = (kode.match(/rel="noopener noreferrer"/g) || []).length;
+        assert.equal(rel, target, `${path.basename(jalur)}: target=_blank tanpa rel`);
+      }
+    });
+
+    it('punya tepat satu h1 dan Navbar-nya terpasang', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.equal((kode.match(/<h1\b/g) || []).length, 1);
+      assert.match(kode, /<Navbar \/>/);
+    });
+
+    it('daftar langkahnya memang urutan, jadi dirender sebagai <ol>', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_PENGAJUAN);
+      assert.match(kode, /<ol\b/);
+      assert.match(kode, /\{nomor \+ 1\}/);
+      // `key` indeks: menghapus satu langkah menggeser seluruh kunci di
+      // bawahnya, dan React memakai ulang DOM yang salah.
+      assert.doesNotMatch(kode, /key=\{(i|idx|index|nomor)\}/);
+    });
+  });
+
+  describe('formulir pengajuan tidak mengulang cacat register/page.tsx', () => {
+    it('nomor telepon pakai type="tel", bukan type="number"', () => {
+      // Spinner naik-turun pada nomor telepon tidak berarti apa pun, roda
+      // tetikus mengubah nilainya tanpa disadari, dan `0` di depan hilang di
+      // beberapa peramban.
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.match(kode, /name="nomorWa"[\s\S]{0,120}type="tel"/);
+      assert.doesNotMatch(kode, /type="number"/);
+    });
+
+    it('setiap label terhubung ke isiannya lewat htmlFor', () => {
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      const label = (kode.match(/<label\b/g) || []).length;
+      const htmlFor = (kode.match(/htmlFor=/g) || []).length;
+      assert.ok(label > 0, 'formulir tanpa label');
+      assert.equal(htmlFor, label, 'ada <label> tanpa htmlFor');
+    });
+
+    it('outline-none selalu punya pengganti jejak fokus', () => {
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      if (/outline-none/.test(kode)) {
+        assert.match(kode, /focus:ring-2/);
+      }
+    });
+
+    it('jawaban server dibaca lewat bacaJawaban, bukan res.json().catch()', () => {
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.match(kode, /bacaJawaban\(res\)/);
+      assert.match(kode, /alasanPenolakan\(res, jawaban\)/);
+      assert.doesNotMatch(kode, /res\.json\(\)\.catch/);
+    });
+
+    it('galat punya role="alert" supaya pembaca layar menyebutnya', () => {
+      assert.match(kodeSajaIdentitas(JALUR_FORM_PENGAJUAN), /role="alert"/);
+    });
+
+    it('tombol kembali hidup di finally, bukan hanya di jalur sukses', () => {
+      // Tanpa `finally`, `fetch` yang melempar meninggalkan tombol berbunyi
+      // "Mengirim..." selamanya.
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.match(kode, /\} finally \{\s*setLoading\(false\);/);
+    });
+
+    it('sukses menampilkan layar konfirmasi, bukan formulir yang kembali kosong', () => {
+      // Formulir yang kosong setelah dikirim terbaca seperti kiriman yang
+      // hilang, dan pengaju mengirimnya lagi.
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.match(kode, /setTerkirim\(true\)/);
+      assert.match(kode, /if \(terkirim\)/);
+    });
+
+    it('maxLength setiap isian sama dengan batas di route-nya', () => {
+      // Batas yang berbeda membuat pengaju mengetik 3.000 huruf, menekan kirim,
+      // dan menemukan catatannya terpotong tanpa pernah diberi tahu.
+      const form = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      const route = fs.readFileSync(JALUR_ROUTE_PENGAJUAN, 'utf8');
+      const blok = route.match(/const BATAS = \{[\s\S]*?\} as const;/);
+      assert.ok(blok, 'BATAS tidak ditemukan di route');
+
+      const pasangan = [...blok[0].matchAll(/(\w+): (\d+),/g)];
+      assert.ok(pasangan.length >= 5, 'BATAS terbaca kurang dari lima kolom');
+
+      for (const [, nama, nilai] of pasangan) {
+        // `nomorWa` sengaja tanpa `maxLength`: bentuknya dibuktikan `keE164`,
+        // bukan dipotong — nomor yang terpotong justru menjadi nomor lain.
+        const pola = new RegExp(`name="${nama}"[\\s\\S]{0,250}?maxLength=\\{${nilai}\\}`);
+        assert.match(form, pola, `maxLength ${nama} tidak sama dengan batas route (${nilai})`);
+      }
+    });
+
+    it('tidak ada kolom harga di formulir publik', () => {
+      // Angka yang diisi pemilik lahan sebelum lokasinya disurvei bukan
+      // kesepakatan, dan menyimpannya sebagai nominal membuat baris yang
+      // terlihat resmi padahal belum pernah disetujui siapa pun.
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.doesNotMatch(kode, /name="harga"|name="price"|name="nominal"/);
+    });
+
+    it('tidak ada isian unggah berkas — /api/upload dijaga sesi', () => {
+      const kode = kodeSajaIdentitas(JALUR_FORM_PENGAJUAN);
+      assert.doesNotMatch(kode, /type="file"/);
+      assert.doesNotMatch(kode, /\/api\/upload/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Pembaca admin: tabel ini TIDAK boleh tanpa pembaca
+  // ---------------------------------------------------------------------
+  describe('pembaca admin ada, dan tabelnya tidak jadi tempat data mengendap', () => {
+    it('halaman /admin/pengajuan dan kliennya ada', () => {
+      assert.ok(fs.existsSync(JALUR_HALAMAN_ADMIN_PENGAJUAN), 'page.tsx admin tidak ada');
+      assert.ok(fs.existsSync(JALUR_CLIENT_ADMIN_PENGAJUAN), 'PengajuanClient.tsx tidak ada');
+    });
+
+    it('menunya terpasang di sidebar admin', () => {
+      const kode = kodeSajaIdentitas(JALUR_LAYOUT_ADMIN_PENGAJUAN);
+      assert.match(kode, /link: "\/admin\/pengajuan"/);
+    });
+
+    it('OPERATOR tidak melihat menunya — route-nya menolak dia', () => {
+      // Menu yang membuka halaman yang tombolnya selalu gagal lebih buruk
+      // daripada menu yang tidak ada.
+      const kode = kodeSajaIdentitas(JALUR_LAYOUT_ADMIN_PENGAJUAN);
+      assert.match(kode, /m\.link !== '\/admin\/pengajuan'/);
+    });
+
+    it('tidak ada satu pun kolom User yang diambil utuh ke props client', () => {
+      // `include: { ditanganiOleh: true }` akan membawa `password` (hash bcrypt)
+      // ke props Client Component, dan props itu tertanam di HTML halaman.
+      // Cacat itu sudah pernah ada di `users/page.tsx`.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.doesNotMatch(kode, /include:/);
+      assert.match(kode, /ditanganiOleh: \{ select: \{ name: true \} \}/);
+      assert.doesNotMatch(kode, /password/);
+    });
+
+    it('daftarnya dibatasi per halaman, bukan mengambil seluruh tabel', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /take: PER_HALAMAN/);
+      assert.match(kode, /skip: \(halaman - 1\) \* PER_HALAMAN/);
+    });
+
+    it('searchParams di-await — Next 16 menjadikannya Promise', () => {
+      // Dibaca langsung, nilainya selalu `undefined` dan paginasi tidak pernah
+      // berlaku: tombol "Berikutnya" mengubah URL tapi daftar tetap halaman 1.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /await searchParams/);
+      assert.match(kode, /searchParams\?: Promise</);
+    });
+
+    it('status dari URL diperiksa terhadap enum, tidak diteruskan apa adanya', () => {
+      // `?status=DROP` yang lolos ke `where` membuat Prisma melempar, dan
+      // galatnya muncul sebagai layar error penuh alih-alih daftar kosong.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /nilaiEnumSah\(StatusPengajuanTitik, statusParam\)/);
+    });
+
+    it('saringan status ikut terbawa ke halaman berikutnya', () => {
+      // Tanpa itu, "Berikutnya" melompat ke seluruh pengajuan dan admin
+      // kehilangan tab yang sedang ia buka.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /&status=\$\{statusAktif\}/);
+    });
+
+    it('lencana "BARU" dihitung tanpa saringan tab supaya tetap jujur', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /count\(\{ where: \{ status: StatusPengajuanTitik\.BARU \} \}\)/);
+    });
+
+    it('ketiga query jalan dalam satu transaksi', () => {
+      // Daftar dan penghitungnya dibaca pada snapshot yang sama; tanpa itu
+      // paginasi bisa menampilkan "halaman 3 dari 2".
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /prisma\.\$transaction\(\[/);
+    });
+
+    it('Date tidak menyeberang sebagai props client — sudah jadi teks ISO', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /createdAt: p\.createdAt\.toISOString\(\)/);
+    });
+
+    it('tautan WhatsApp disusun di server, bukan disalin aturannya ke client', () => {
+      const halaman = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      const client = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(halaman, /keTautanWa\(/);
+      assert.doesNotMatch(client, /wa\.me/);
+    });
+
+    it('client tidak mengimpor nilai apa pun dari @prisma/client', () => {
+      // Mengimpor NILAI enum Prisma ke Client Component menarik runtime Prisma
+      // ke bundel browser.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.doesNotMatch(kode, /from '@prisma\/client'/);
+    });
+
+    it('client tidak memanggil Prisma sama sekali', () => {
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.doesNotMatch(kode, /@\/lib\/prisma/);
+    });
+
+    it('tombol status dimatikan per baris, bukan seluruh daftar sekaligus', () => {
+      // Dengan satu boolean global, mengklik satu baris mematikan tombol di
+      // seluruh daftar dan admin menyimpulkan layarnya hang.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /sibuk === p\.id/);
+      assert.match(kode, /setSibuk\(null\)/);
+    });
+
+    it('sibuk dilepas di finally, bukan hanya di jalur sukses', () => {
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /\} finally \{\s*setSibuk\(null\);/);
+    });
+
+    it('daftarnya dibaca ulang dari server setelah status berubah', () => {
+      // Tidak ada salinan status di state client yang bisa menyimpang dari
+      // database.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /router\.refresh\(\)/);
+    });
+
+    it('kepala baris yang bisa dibuka berupa <button>, bukan <div onClick>', () => {
+      // Pengguna papan tombol harus bisa membukanya dengan Enter, dan pembaca
+      // layar harus menyebutnya sebagai kontrol.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /aria-expanded=\{dibuka\}/);
+      assert.doesNotMatch(kode, /<div[^>]*onClick=\{\(\) => setTerbuka/);
+    });
+
+    it('jawaban server dibaca lewat bacaJawaban, dan galatnya ditampilkan', () => {
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /bacaJawaban\(res\)/);
+      assert.match(kode, /alasanPenolakan\(res, jawaban\)/);
+      assert.doesNotMatch(kode, /res\.json\(\)\.catch/);
+    });
+
+    it('alasan penolakan diminta lewat dialog, bukan window.prompt', () => {
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /useKonfirmasi/);
+      assert.doesNotMatch(kode, /window\.(prompt|confirm|alert)/);
+    });
+
+    it('hasil dialog dijaga dengan pemeriksaan tipe, bukan truthiness', () => {
+      // `!jawaban` KEBETULAN benar selama `wajib: true`. Tapi `wajib` di sini
+      // `!p.catatanAdmin`, jadi pada baris yang sudah punya alasan lama dialog
+      // memulangkan teks KOSONG — dan `!jawaban` menelannya sebagai
+      // pembatalan: admin menekan "Tolak pengajuan" dan tidak terjadi apa pun.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /typeof jawaban !== 'string'/);
+      assert.doesNotMatch(kode, /if \(!jawaban\) return;/);
+    });
+
+    it('alasan kosong berarti pakai alasan lama, bukan mengosongkannya', () => {
+      // Mengirim `''` menghapus alasan lama, lalu gerbang `DITOLAK` menolak
+      // 422 — permintaan yang seharusnya berhasil gagal karena isian yang
+      // memang boleh kosong.
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.match(kode, /jawaban\.trim\(\) === '' \? undefined : jawaban/);
+    });
+
+    it('teks dari pengaju dirender sebagai teks JSX, bukan innerHTML', () => {
+      const kode = kodeSajaIdentitas(JALUR_CLIENT_ADMIN_PENGAJUAN);
+      assert.doesNotMatch(kode, /dangerouslySetInnerHTML/);
+    });
+
+    it('layar kosong menjelaskan keadaannya, bukan ruang putih', () => {
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.match(kode, /daftar\.length === 0/);
+      assert.match(kode, /Belum ada pengajuan/);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Navbar: tombolnya kembali, dan kini punya tujuan
+  // ---------------------------------------------------------------------
+  describe('tombol Navbar menuju halaman yang benar-benar ada', () => {
+    it('kedua tautan /sewakan-tempat menunjuk berkas halaman yang ada', () => {
+      const kode = kodeSajaIdentitas(
+        path.join(__dirname, '..', 'src', 'components', 'Navbar.tsx')
+      );
+      assert.equal((kode.match(/href="\/sewakan-tempat"/g) || []).length, 2);
+      assert.ok(fs.existsSync(JALUR_HALAMAN_PENGAJUAN));
+    });
+
+    it('tautan mobile menutup panelnya saat diklik', () => {
+      // Tanpa `setIsOpen(false)` panel mobile tetap terbuka menutupi halaman
+      // tujuan, dan pengunjung menyimpulkan tautannya tidak bekerja.
+      const kode = kodeSajaIdentitas(
+        path.join(__dirname, '..', 'src', 'components', 'Navbar.tsx')
+      );
+      assert.match(
+        kode,
+        /href="\/sewakan-tempat" onClick=\{\(\) => setIsOpen\(false\)\}/
+      );
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Schema dan migrasinya
+  // ---------------------------------------------------------------------
+  describe('model PengajuanTitik dan migrasinya', () => {
+    const schema = fs.readFileSync(
+      path.join(__dirname, '..', 'prisma', 'schema.prisma'),
+      'utf8'
+    );
+
+    /** Blok model tanpa baris komentarnya. */
+    function modelTanpaKomentar() {
+      const blok = schema.match(/model PengajuanTitik \{[\s\S]*?\n\}/);
+      assert.ok(blok, 'model PengajuanTitik tidak ada');
+      return tanpaKomentarBaris(blok[0], /^\s*\/\//);
+    }
+
+    function sqlSemuaMigrasi() {
+      const akar = path.join(__dirname, '..', 'prisma', 'migrations');
+      return fs
+        .readdirSync(akar)
+        .filter((nama) => fs.statSync(path.join(akar, nama)).isDirectory())
+        .map((nama) => path.join(akar, nama, 'migration.sql'))
+        .filter((jalur) => fs.existsSync(jalur))
+        .map((jalur) => fs.readFileSync(jalur, 'utf8'))
+        .join('\n');
+    }
+
+    it('enum StatusPengajuanTitik punya tepat empat tahap', () => {
+      const blok = schema.match(/enum StatusPengajuanTitik \{[\s\S]*?\n\}/);
+      assert.ok(blok, 'enum StatusPengajuanTitik tidak ada');
+      for (const nilai of ['BARU', 'DIHUBUNGI', 'SELESAI', 'DITOLAK']) {
+        assert.match(blok[0], new RegExp(`\\b${nilai}\\b`));
+      }
+    });
+
+    it('modelnya tidak punya kolom uang', () => {
+      // Nominal di aplikasi ini bertipe `Decimal(15,2)` dan melewati
+      // `src/lib/money.ts`. Angka dari formulir publik yang belum diverifikasi
+      // tidak boleh tersimpan sebagai uang.
+      const model = modelTanpaKomentar();
+      assert.doesNotMatch(model, /Decimal/);
+      assert.doesNotMatch(model, /harga|price|nominal/i);
+    });
+
+    it('tidak punya kolom foto — tidak ada satu pun penulisnya', () => {
+      // Satu-satunya penulis unggahan di aplikasi ini adalah `/api/upload`, dan
+      // route itu dijaga sesi sementara pengaju di sini tidak punya akun.
+      // Kolomnya akan selalu `null` sambil ikut terkirim ke mana pun barisnya
+      // pergi — cacat yang sama dengan `otpCode` yang sudah dibuang dari `User`.
+      assert.doesNotMatch(modelTanpaKomentar(), /fotoUrl|imageUrl|photo/i);
+    });
+
+    it('menghapus akun admin tidak menghapus pengajuan yang ia tangani', () => {
+      const model = modelTanpaKomentar();
+      assert.match(model, /onDelete: SetNull/);
+      assert.doesNotMatch(model, /onDelete: Cascade/);
+    });
+
+    it('ada migrasi yang membuat tabel dan enum-nya', () => {
+      // Model yang hanya ada di schema tapi tidak di migrasi berarti kode ini
+      // melempar P2021 di database mana pun yang sudah berjalan.
+      const sql = sqlSemuaMigrasi();
+      assert.match(sql, /CREATE TABLE "PengajuanTitik"/);
+      assert.match(sql, /CREATE TYPE "StatusPengajuanTitik"/);
+    });
+
+    it('migrasinya hanya menambah — nol DROP atas objek yang sudah ada', () => {
+      // `prisma migrate diff` tidak mengenali `EXCLUDE USING gist`
+      // (`booking_tanpa_tumpang_tindih`) maupun indeks unik bersyarat
+      // `payment_satu_tagihan_menganggur`, dan akan MENYARANKAN membuang
+      // keduanya. Keduanya adalah penjaga terakhir terhadap tanggal sewa
+      // tumpang tindih dan tagihan ganda.
+      const jalur = path.join(
+        __dirname, '..', 'prisma', 'migrations', '20260928120000_pengajuan_titik', 'migration.sql'
+      );
+      assert.ok(fs.existsSync(jalur), 'migrasi pengajuan titik tidak ada');
+      const sql = tanpaKomentarBaris(fs.readFileSync(jalur, 'utf8'), /^\s*--/);
+      assert.doesNotMatch(sql, /\bDROP\b/i);
+      assert.doesNotMatch(sql, /booking_tanpa_tumpang_tindih/);
+      assert.doesNotMatch(sql, /payment_satu_tagihan_menganggur/);
+    });
+
+    it('tabelnya punya indeks untuk satu-satunya cara daftar admin membacanya', () => {
+      const sql = sqlSemuaMigrasi();
+      assert.match(sql, /CREATE INDEX "PengajuanTitik_status_createdAt_idx"/);
+    });
+
+    it('relasi baliknya ada di model User', () => {
+      // Tanpa sisi baliknya, `prisma validate` gagal dan `ditanganiOleh` tidak
+      // bisa di-`select`.
+      const model = schema.match(/model User \{[\s\S]*?\n\}/);
+      assert.ok(model, 'model User tidak ada');
+      assert.match(model[0], /PengajuanTitik\[\]/);
     });
   });
 });

@@ -122,6 +122,27 @@ enum ChatSender {
   SYSTEM
 }
 
+/// Tahap penanganan satu pengajuan titik dari pemilik lahan.
+///
+/// Sengaja hanya empat, dan sengaja BUKAN salinan `BookingStatus`: yang dicatat
+/// di sini adalah percakapan penjajakan, bukan pesanan. Tidak ada uang, tidak
+/// ada tanggal sewa, dan tidak ada tahap produksi — begitu kesepakatan tercapai,
+/// titiknya masuk sebagai `Billboard` lewat form inventaris yang sudah ada, dan
+/// baris pengajuannya ditutup `SELESAI`.
+enum StatusPengajuanTitik {
+  /// Baru masuk, belum disentuh siapa pun.
+  BARU
+
+  /// Admin sudah menghubungi pemilik lahan dan pembicaraan sedang berjalan.
+  DIHUBUNGI
+
+  /// Titiknya diterima dan sudah (atau akan) dibuat sebagai `Billboard`.
+  SELESAI
+
+  /// Tidak dilanjutkan. `catatanAdmin` menjelaskan sebabnya.
+  DITOLAK
+}
+
 // 1. MODEL USER
 model User {
   id            String    @id @default(cuid())
@@ -176,10 +197,13 @@ model User {
   // tanggal pendaftaran.
   updatedAt     DateTime  @updatedAt @default(now())
 
-  bookings          Booking[] 
+  bookings          Booking[]
   createdBillboards Billboard[] @relation("CreatedBy")
   updatedBillboards Billboard[] @relation("UpdatedBy")
-  auditLogs         BillboardHistory[] 
+  auditLogs         BillboardHistory[]
+
+  /// Pengajuan titik yang status penanganannya terakhir diubah akun ini.
+  pengajuanTitik    PengajuanTitik[]
 }
 
 
@@ -573,3 +597,104 @@ model BillboardHistory {
   @@index([changedById])
 }
 
+
+// 7. PENGAJUAN TITIK DARI PEMILIK LAHAN ("Sewakan Tempat")
+//
+// KENAPA TABEL INI ADA, DAN KENAPA BUKAN `Billboard`
+// --------------------------------------------------
+// Navbar dulu punya dua tombol "Sewakan Tempat" tanpa `onClick` dan tanpa
+// `href`: diklik, tidak terjadi apa-apa. Tombolnya dibuang karena alurnya tidak
+// ada (komentar di kepala `src/components/Navbar.tsx` mencatat alasannya).
+// Berkas ini adalah alurnya.
+//
+// Yang masuk dari pemilik lahan BUKAN billboard. `Billboard` adalah inventaris
+// yang dijual: ia punya harga, koordinat terverifikasi, `publishStatus`, dan
+// muncul di peta publik. Pengajuan adalah klaim dari orang asing yang belum
+// diperiksa siapa pun. Menuliskannya ke `Billboard` berarti satu dari dua
+// akibat, dan keduanya buruk: entah titik yang belum diverifikasi ikut terjual
+// di peta, atau tabel inventaris dipenuhi baris draft yang setiap query harus
+// menyaringnya. Karena itu tabel sendiri, tanpa relasi ke `Billboard` — bila
+// titiknya jadi, admin membuatnya lewat form inventaris yang sudah ada.
+//
+// TIDAK ADA RELASI KE `User`
+// --------------------------
+// Pemilik lahan tidak punya akun dan tidak perlu punya. Menuntut pendaftaran
+// sebelum ia bisa menawarkan tanahnya membuang mayoritas pengaju di langkah
+// pertama. Kontaknya karena itu disimpan sebagai kolom biasa, seperti
+// `ChatSession` menyimpan tamunya.
+//
+// TIDAK ADA KOLOM UANG
+// --------------------
+// Tidak ada `hargaSewa` atau nominal apa pun di sini, walaupun pemilik lahan
+// biasanya punya angka di kepalanya. Nominal di aplikasi ini bertipe `Decimal`
+// dan melewati `src/lib/money.ts`; menerima angka dari formulir publik yang
+// belum diverifikasi lalu menyimpannya sebagai uang membuat baris yang terlihat
+// resmi padahal belum pernah disepakati. Angkanya dibicarakan lewat WhatsApp,
+// dan tempatnya di `catatanAdmin`.
+model PengajuanTitik {
+  id             String               @id @default(cuid())
+
+  // === Kontak pengaju ===
+  namaPemilik    String
+  nomorWa        String
+  email          String?
+
+  // === Titiknya ===
+  /// Alamat atau patokan lokasi, apa adanya dari pengaju.
+  alamat         String
+
+  /// Kota — dipisah dari `alamat` supaya admin bisa mengelompokkan pengajuan
+  /// tanpa mengurai teks bebas.
+  kota           String
+
+  /// Ukuran bidang, sebagai teks.
+  ///
+  /// Sengaja `String`, bukan dua kolom angka: pemilik lahan menulis "4x6 m",
+  /// "sekitar 5 meteran", atau "bekas baliho lama". Memaksanya menjadi
+  /// `lebar`/`tinggi` numerik berarti menolak pengajuan yang sah karena
+  /// formatnya, dan ukuran sebenarnya diukur ulang saat survei.
+  ukuran         String?
+
+  /// Keterangan tambahan dari pengaju.
+  catatan        String?
+
+  // TIDAK ADA `fotoUrl` DI SINI, dan itu keputusan, bukan kelalaian.
+  //
+  // Foto lokasi jelas berguna bagi admin. Tapi satu-satunya penulis unggahan di
+  // aplikasi ini adalah `/api/upload`, dan route itu dijaga sesi: `middleware.ts`
+  // memasukkan `/api/upload` ke matcher-nya, dan route-nya sendiri membalas 401
+  // tanpa sesi. Pemilik lahan yang mengisi formulir ini TIDAK punya akun — itu
+  // justru inti rancangannya, karena menuntut pendaftaran lebih dulu membuang
+  // mayoritas pengaju di langkah pertama.
+  //
+  // Jadi kolom `fotoUrl` di sini tidak akan punya satu pun penulis: ia akan
+  // selalu `null`, sambil ikut terkirim ke mana pun barisnya pergi. Itu persis
+  // cacat `otpCode`/`otpExpires` yang sudah dibuang dari model `User` (task
+  // 3.27), dan alasannya sama.
+  //
+  // Bila unggahan tamu benar-benar dibutuhkan, yang harus dibangun lebih dulu
+  // adalah jalur unggah tanpa sesi beserta pembatas kuotanya — sebuah fitur
+  // tersendiri dengan permukaan serangannya sendiri. Kolomnya dibuat bersama
+  // kode itu, bukan sebelum. Sementara ini, pemilik lahan mengirim fotonya lewat
+  // WhatsApp saat admin menghubunginya.
+
+  // === Penanganan admin ===
+  status         StatusPengajuanTitik @default(BARU)
+
+  /// Catatan internal. TIDAK pernah dikirim ke pengaju.
+  catatanAdmin   String?
+
+  /// Admin yang terakhir mengubah status.
+  ///
+  /// `onDelete: SetNull` — menghapus akun admin tidak boleh menghapus jejak
+  /// pengajuannya.
+  ditanganiById  String?
+  ditanganiOleh  User?                @relation(fields: [ditanganiById], references: [id], onDelete: SetNull)
+
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  /// Daftar admin: pengajuan `BARU` lebih dulu, terbaru di atas.
+  @@index([status, createdAt])
+  @@index([ditanganiById])
+}

@@ -22,11 +22,17 @@
 //      daripada tidak ada tombolnya: pemilik lahan mengkliknya, tidak terjadi
 //      apa-apa, dan ia menyimpulkan situsnya rusak lalu pergi.
 //
+//      Alurnya SUDAH ADA sekarang: halaman `src/app/sewakan-tempat/page.tsx`,
+//      penerima `src/app/api/sewakan-tempat/route.ts`, dan tabel
+//      `PengajuanTitik` yang dibaca admin di `/admin/pengajuan`. Karena itu
+//      tombolnya dipasang kembali di menu desktop dan mobile — dalam commit
+//      yang sama dengan halamannya, urutan yang sama dengan `/about`.
+//
 // Keempatnya dibuang, bukan ditambal. Menambahkan halaman `/about` dan alur
 // "Sewakan Tempat" adalah fitur, dan fitur tidak boleh diselipkan lewat tautan
-// yang sudah dipasang sebelum halamannya ditulis.
-//
-// Alur "Sewakan Tempat" masih belum ada, jadi tombolnya masih tidak dipasang.
+// yang sudah dipasang sebelum halamannya ditulis. Dua-duanya kini ada, jadi
+// keduanya tertaut; `/list` tetap tidak dipasang karena alasannya tidak
+// berubah.
 
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -117,6 +123,18 @@ const Navbar = () => {
 
           {/* 3. USER AREA DESKTOP (Hidden di Mobile) */}
           <div className="hidden md:flex items-center space-x-4">
+            {/* Tombol pemilik lahan. Ditaruh di sini, bukan di kelompok menu di
+                atas, karena tujuannya berbeda: menu di atas untuk pengiklan yang
+                mencari billboard, tombol ini untuk orang yang menawarkan
+                lahannya. Tampil baik ada sesi maupun tidak — pemilik lahan tidak
+                perlu akun untuk mengajukan, dan pengiklan yang sudah masuk pun
+                bisa punya lahan. */}
+            <Link
+              href="/sewakan-tempat"
+              className="text-sm font-bold text-utero border border-utero/30 px-4 py-2 rounded-lg hover:bg-utero/5 transition"
+            >
+              Sewakan Tempat
+            </Link>
             {status === 'loading' ? (
                 <div className="w-20 h-8 bg-gray-100 rounded animate-pulse"></div>
             ) : session ? (
@@ -226,6 +244,12 @@ const Navbar = () => {
                 {/* Link Navigasi Biasa */}
                 <Link href="/" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
                 <Link href="/about" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">ℹ️ Tentang Kami</Link>
+                {/* `onClick={() => setIsOpen(false)}` sama seperti tautan mobile
+                    lainnya: tanpa itu menu tetap terbuka menutupi halaman
+                    tujuan. */}
+                <Link href="/sewakan-tempat" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-bold text-utero border border-utero/30 mt-3 text-center hover:bg-utero/5">
+                    Sewakan Tempat Anda
+                </Link>
             </div>
         </div>
       )}
