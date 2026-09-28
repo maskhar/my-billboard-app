@@ -12620,3 +12620,244 @@ describe('form billboard admin bertipe dan status tidak lagi hilang', () => {
     }
   });
 });
+
+// ====================================================================
+// A1 fase 2: form pengguna bertipe, dan komponen isian tidak lagi bertiga
+// ====================================================================
+describe('form pengguna bertipe dan komponen isian disatukan', () => {
+  const JALUR_FORM_PROFIL = 'src/app/admin/(dashboard)/users/[userId]/UserProfileForm.tsx';
+  const JALUR_HALAMAN_PROFIL = 'src/app/admin/(dashboard)/users/[userId]/page.tsx';
+  const JALUR_MODAL = 'src/app/admin/(dashboard)/users/UserFormModal.tsx';
+  const JALUR_PENGATURAN = 'src/app/dashboard/settings/AccountSettingsForm.tsx';
+  const JALUR_FIELD = 'src/components/FormField.tsx';
+  const JALUR_TIPE = 'src/lib/tipe-pengguna.ts';
+
+  // Komentar dibuang lebih dulu, termasuk komentar akhir-baris. Berkas repo ini
+  // ber-CRLF: `.split('\n')` menyisakan `\r` di ujung tiap baris, dan `.` pada
+  // regex JS tidak cocok dengan `\r` — polanya tidak akan pernah menyala.
+  const kodeSajaA1b = (jalur) => {
+    const isi = fs.readFileSync(path.join(__dirname, '..', jalur), 'utf8');
+    return isi
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  };
+
+  it('komponen isian bersama ada dan tidak menerima props `any`', () => {
+    const kode = kodeSajaA1b(JALUR_FIELD);
+
+    assert.ok(!/\bany\b/.test(kode), 'FormField tidak boleh memuat `any`');
+
+    // Props tambahan diwarisi dari atribut elemen asli, jadi nama atribut yang
+    // salah tulis tertangkap kompilator.
+    assert.match(kode, /React\.InputHTMLAttributes<HTMLInputElement>/);
+    assert.match(kode, /React\.SelectHTMLAttributes<HTMLSelectElement>/);
+
+    // `value`, `onChange`, `id`, dan `className` dikeluarkan dari props sisa:
+    // membiarkannya lewat `{...sisa}` berarti satu pemanggil bisa membatalkan
+    // kendali komponen tanpa terlihat.
+    assert.match(kode, /Omit<[\s\S]{0,200}'value' \| 'onChange' \| 'id' \| 'className'/);
+
+    // `name={id}` dipasang untuk SEMUA pemakai. Handler yang membaca
+    // `e.target.name` menulis ke kunci `undefined` tanpa atribut ini.
+    const jumlahName = (kode.match(/name=\{id\}/g) || []).length;
+    assert.equal(jumlahName, 2, 'input dan select keduanya harus memasang name={id}');
+  });
+
+  it('tiga salinan InputField/SelectField sudah tidak ada lagi', () => {
+    // Keduanya dulu ditulis ulang di tiga file dengan kelas Tailwind yang
+    // disalin tangan, dan salinannya sudah menyimpang: satu versi memaksa
+    // `required` pada setiap kolom, satu versi memasang `name={id}` dan dua
+    // lainnya tidak.
+    for (const jalur of [JALUR_FORM_PROFIL, JALUR_MODAL, JALUR_PENGATURAN]) {
+      const kode = kodeSajaA1b(jalur);
+      assert.ok(
+        !/const InputField = /.test(kode),
+        `${jalur} tidak boleh mendefinisikan InputField sendiri`
+      );
+      assert.ok(
+        !/const SelectField = /.test(kode),
+        `${jalur} tidak boleh mendefinisikan SelectField sendiri`
+      );
+      assert.match(kode, /from '@\/components\/FormField'/);
+    }
+  });
+
+  it('tipe pengguna sisi client tidak menyentuh runtime Prisma', () => {
+    const kode = kodeSajaA1b(JALUR_TIPE);
+
+    // Mengimpor nilai `Role` dari `@prisma/client` di modul yang dipakai
+    // Client Component menarik runtime Prisma ke bundle browser.
+    assert.ok(
+      !/from '@prisma\/client'/.test(kode),
+      'tipe-pengguna.ts tidak boleh mengimpor @prisma/client'
+    );
+
+    assert.match(kode, /export type RolePengguna =/);
+    for (const role of ['USER', 'ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS']) {
+      assert.ok(kode.includes(`'${role}'`), `role ${role} harus ada di daftar`);
+    }
+
+    // Guard-nya predikat tipe, bukan boolean biasa.
+    assert.match(kode, /export function sahRolePengguna\(nilai: unknown\): nilai is RolePengguna/);
+  });
+
+  it('daftar opsi role hidup di satu tempat, bukan dua <select>', () => {
+    const tipe = kodeSajaA1b(JALUR_TIPE);
+    assert.match(tipe, /export const OPSI_ROLE/);
+
+    // Dua `<select>` role dulu masing-masing menuliskan lima `<option>`
+    // sendiri. Role baru di schema tidak muncul di keduanya sampai seseorang
+    // ingat menyunting dua file.
+    for (const jalur of [JALUR_FORM_PROFIL, JALUR_MODAL]) {
+      const kode = kodeSajaA1b(jalur);
+      assert.ok(
+        !/<option value="SUPER_ADMIN">/.test(kode),
+        `${jalur} tidak boleh menulis daftar option role sendiri`
+      );
+      assert.match(kode, /OPSI_ROLE\.map\(/);
+    }
+  });
+
+  it('`plainUser as any` sudah hilang dari halaman profil', () => {
+    const kode = kodeSajaA1b(JALUR_HALAMAN_PROFIL);
+
+    // Objek berisi 13 kolom dulu diserahkan sebagai `plainUser as any` kepada
+    // form yang menuntut tipe baris LENGKAP — termasuk `password` dan
+    // `createdAt`, kolom yang tidak pernah ada di objek itu. Tuntutan tipenya
+    // bohong dan `as any` yang menutupinya.
+    assert.ok(!/as any/.test(kode), 'halaman profil tidak boleh memuat `as any`');
+    assert.match(kode, /const plainUser: PenggunaUntukForm =/);
+    assert.match(kode, /<UserProfileForm user=\{plainUser\} \/>/);
+  });
+
+  it('halaman profil memilih kolom, bukan memuat seluruh baris User', () => {
+    const kode = kodeSajaA1b(JALUR_HALAMAN_PROFIL);
+
+    // `findUnique` tanpa `select` memulangkan hash password,
+    // `xenditCustomerId`, dan setiap kolom yang ditambahkan ke tabel kemudian.
+    assert.match(kode, /prisma\.user\.findUnique\(\{[\s\S]{0,400}select: \{/);
+
+    for (const terlarang of ['password', 'xenditCustomerId']) {
+      assert.ok(
+        !new RegExp(`${terlarang}: true`).test(kode),
+        `${terlarang} tidak boleh ikut dipilih`
+      );
+    }
+  });
+
+  it('tipe pengguna sisi client tidak memuat kolom sensitif', () => {
+    const kode = kodeSajaA1b(JALUR_TIPE);
+    assert.match(kode, /export type PenggunaUntukForm =/);
+
+    for (const terlarang of ['password', 'xenditCustomerId', 'createdAt', 'updatedAt']) {
+      assert.ok(
+        !new RegExp(`\\b${terlarang}\\b`).test(kode),
+        `${terlarang} tidak boleh disebut di tipe sisi client`
+      );
+    }
+
+    // Penanda samaran wajib ada dan TIDAK opsional: form harus selalu tahu
+    // apakah nomor yang ia pegang asli atau titik-titik.
+    assert.match(kode, /identitasTersamar: boolean;/);
+  });
+
+  it('role dari server dilewatkan guard sebelum masuk state', () => {
+    const form = kodeSajaA1b(JALUR_FORM_PROFIL);
+
+    // `value={undefined}` membuat `<select>` TAK TERKENDALI: ia menampilkan
+    // pilihan pertama ("User") sementara state tetap kosong. Admin lalu
+    // menyimpan dan role akun berubah menjadi USER tanpa ia menyentuh kolom.
+    assert.match(form, /role: sahRolePengguna\(user\.role\) \? user\.role : 'USER'/);
+
+    const halaman = kodeSajaA1b(JALUR_HALAMAN_PROFIL);
+    assert.match(halaman, /role: sahRolePengguna\(user\.role\) \? user\.role : 'USER'/);
+  });
+
+  it('pembaca pesan galat menolak `[object Object]` dan nilai tanpa message', () => {
+    const { pesanGalat } = require('../src/lib/pesan-galat.ts');
+
+    assert.equal(pesanGalat(new Error('gagal menyimpan'), 'cadangan'), 'gagal menyimpan');
+
+    // `throw` boleh melempar apa saja. `error.message` pada nilai di bawah
+    // melemparkan TypeError DI DALAM catch — penanganan galatnya sendiri yang
+    // gagal, dan pengguna tidak melihat pesan apa pun.
+    assert.equal(pesanGalat(undefined, 'cadangan'), 'cadangan');
+    assert.equal(pesanGalat(null, 'cadangan'), 'cadangan');
+    assert.equal(pesanGalat({ kode: 500 }, 'cadangan'), 'cadangan');
+
+    // `String({})` menghasilkan `"[object Object]"`, lebih buruk daripada
+    // pesan cadangan yang setidaknya menyebut apa yang gagal.
+    assert.ok(!pesanGalat({}, 'cadangan').includes('[object Object]'));
+
+    // Error dengan message kosong juga jatuh ke cadangan.
+    assert.equal(pesanGalat(new Error(''), 'cadangan'), 'cadangan');
+    assert.equal(pesanGalat(new Error('   '), 'cadangan'), 'cadangan');
+
+    // String yang dilempar langsung memang sudah berupa pesan.
+    assert.equal(pesanGalat('sudah pesan', 'cadangan'), 'sudah pesan');
+    assert.equal(pesanGalat('   ', 'cadangan'), 'cadangan');
+  });
+
+  it('empat layar berhenti memakai `catch (error: any)`', () => {
+    for (const jalur of [JALUR_FORM_PROFIL, JALUR_MODAL, JALUR_PENGATURAN]) {
+      const kode = kodeSajaA1b(jalur);
+      assert.ok(
+        !/catch \((?:error|e|err): any\)/.test(kode),
+        `${jalur} tidak boleh memakai catch bertipe any`
+      );
+      assert.ok(!/\bany\b/.test(kode), `${jalur} tidak boleh memuat any`);
+      assert.match(kode, /pesanGalat\(/);
+    }
+  });
+
+  it('jawaban server yang bukan JSON tidak menelan pesan galatnya', () => {
+    const kode = kodeSajaA1b(JALUR_MODAL);
+
+    // `await res.json()` tanpa penjaga melempar SyntaxError pada respons 500
+    // yang berisi halaman HTML — galat itu menggantikan pesan server yang
+    // sebenarnya, dan admin membaca "Unexpected token <".
+    assert.match(kode, /await res\.json\(\)\.catch\(\(\) => null\)/);
+    assert.ok(
+      !/const errorData = await res\.json\(\);/.test(kode),
+      'res.json() tanpa .catch() masih ada'
+    );
+  });
+
+  it('kolom identitas tersamar tidak ikut terkirim saat disamarkan', () => {
+    const kode = kodeSajaA1b(JALUR_FORM_PROFIL);
+
+    // Mengirim string bertitik-titik berarti menimpa nomor KTP asli —
+    // kerusakan permanen yang terlihat seperti penyimpanan biasa yang
+    // berhasil.
+    assert.match(kode, /identitasTersamar[\s\S]{0,120}\{ ktp: businessDetails\.ktp, npwp: businessDetails\.npwp \}/);
+
+    // Muatannya disusun kolom per kolom. `body: JSON.stringify({ ...state })`
+    // mengirim setiap kolom yang kelak ditambahkan ke state, termasuk yang
+    // tersamar, tanpa seseorang menyadarinya di sini.
+    assert.match(kode, /const muatan = \{[\s\S]{0,400}userId: user\.id,/);
+    assert.match(kode, /body: JSON\.stringify\(muatan\)/);
+    assert.ok(
+      !/JSON\.stringify\(\{ \.\.\.businessDetails/.test(kode),
+      'state tidak boleh disebar langsung ke body permintaan'
+    );
+
+    // Kedua kolomnya juga dimatikan di layar saat tersamar, supaya admin tidak
+    // mengetik di atas titik-titik lalu menyangka nomornya tersimpan.
+    const jumlahDisabled = (kode.match(/disabled=\{identitasTersamar\}/g) || []).length;
+    assert.equal(jumlahDisabled, 2, 'KTP dan NPWP keduanya harus nonaktif saat tersamar');
+  });
+
+  it('tombol yang tidak melakukan apa pun sudah dibuang', () => {
+    const kode = kodeSajaA1b(JALUR_FORM_PROFIL);
+
+    // Tombol "Change Picture" tidak punya `onClick` sama sekali dan tidak ada
+    // endpoint yang menerima foto profil. Tombol mati membuat admin menyangka
+    // gambarnya gagal terunggah, lalu mencobanya berulang.
+    assert.ok(
+      !/Change Picture/.test(kode),
+      'tombol tanpa handler dan tanpa endpoint tidak boleh ada'
+    );
+  });
+});

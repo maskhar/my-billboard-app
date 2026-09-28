@@ -4,29 +4,24 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import type { User } from '@prisma/client';
+import { InputField } from '@/components/FormField';
+import { pesanGalat } from '@/lib/pesan-galat';
 
-type PlainUser = Pick<User, 'id' | 'name' | 'whatsapp' | 'email'>;
-
-const InputField = ({ label, id, value, onChange, ...props }: any) => (
-    <div>
-      <label htmlFor={id} className="block text-sm font-medium text-gray-700">{label}</label>
-      <input
-        type={props.type || "text"}
-        id={id}
-        name={id}
-        value={value}
-        onChange={onChange}
-        className="mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
-        {...props}
-      />
-    </div>
-  );
+// Halaman induk mengirim keempat kolom ini sebagai teks (`?? ''`), jadi tidak
+// ada yang `null` di sini. Sebelumnya tipenya `Pick<User, ...>` yang menyatakan
+// `name` dan `whatsapp` boleh `null` — pernyataan yang tidak benar dan
+// memaksa `|| ''` di tiap pembacaan.
+type PlainUser = {
+  id: string;
+  name: string;
+  whatsapp: string;
+  email: string;
+};
 
 export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     const [profileData, setProfileData] = useState({
-        name: user.name || '',
-        whatsapp: user.whatsapp || '',
+        name: user.name,
+        whatsapp: user.whatsapp,
     });
     const [passwordData, setPasswordData] = useState({
         currentPassword: '',
@@ -59,10 +54,10 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 const error = await res.json().catch(() => null);
                 throw new Error(error?.message || 'Gagal memperbarui profil.');
             }
-            alert('Profil berhasil diperbarui!');
+            alert('Profil berhasil diperbarui.');
             router.refresh();
-        } catch (error: any) {
-            alert(`Error: ${error.message}`);
+        } catch (error) {
+            alert(pesanGalat(error, 'Gagal memperbarui profil.'));
         } finally {
             setLoading(false);
         }
@@ -90,10 +85,10 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 const error = await res.json().catch(() => null);
                 throw new Error(error?.message || 'Gagal mengubah password.');
             }
-            alert('Password berhasil diubah!');
+            alert('Password berhasil diubah.');
             setPasswordData({ currentPassword: '', newPassword: '', confirmPassword: '' });
-        } catch (error: any) {
-            alert(`Error: ${error.message}`);
+        } catch (error) {
+            alert(pesanGalat(error, 'Gagal mengubah password.'));
         } finally {
             setPasswordLoading(false);
         }

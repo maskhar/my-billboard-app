@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import UserProfileForm from './UserProfileForm';
+import { sahRolePengguna, type PenggunaUntukForm } from '@/lib/tipe-pengguna';
 
 // KTP dan NPWP adalah identitas kependudukan dan perpajakan. Sebelumnya
 // keduanya dikirim utuh ke browser SETIAP admin yang membuka halaman ini,
@@ -41,8 +42,28 @@ export default async function UserProfilePage({ params }: PageProps) {
     notFound();
   }
 
+  // Kolomnya dipilih satu per satu. Tanpa `select`, `findUnique` memulangkan
+  // SELURUH baris — termasuk hash password, `xenditCustomerId`, dan setiap
+  // kolom yang ditambahkan ke tabel kemudian — ke memori proses hanya untuk
+  // merender sebelas isian. Daftar di bawah adalah tepat apa yang dipakai.
   const user = await prisma.user.findUnique({
     where: { id: userId },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      image: true,
+      role: true,
+      whatsapp: true,
+      companyName: true,
+      ktp: true,
+      npwp: true,
+      ktpAddress: true,
+      officeAddress: true,
+      username: true,
+      authProvider: true,
+      isVerified: true,
+    },
   });
 
   if (!user) {
@@ -52,14 +73,25 @@ export default async function UserProfilePage({ params }: PageProps) {
   const session = await getServerSession(authOptions);
   const bolehLihatIdentitas = session?.user?.role === 'SUPER_ADMIN';
 
-  // Create a serializable user object to pass to the client component.
-  // This prevents passing non-serializable types like `DateTime`.
-  const plainUser = {
+  // Objek yang bisa diserialisasi untuk komponen client — `DateTime` tidak
+  // pernah ikut.
+  //
+  // Bertipe `PenggunaUntukForm`, BUKAN `as any`. Sebelumnya objek ini
+  // diserahkan sebagai `plainUser as any` kepada form yang menuntut
+  // `User & { identitasTersamar?: boolean }`, yaitu tipe baris LENGKAP
+  // termasuk `password` dan `createdAt` — kolom yang tidak pernah ada di sini.
+  // Tuntutan tipenya bohong, dan `as any` yang menutupinya: form boleh membaca
+  // `user.password` dan TypeScript menyetujuinya walaupun nilainya `undefined`
+  // saat dijalankan. Sekarang kolom yang tidak dikirim menjadi galat kompilasi.
+  const plainUser: PenggunaUntukForm = {
     id: user.id,
     name: user.name ?? null,
     email: user.email, // email is not optional in schema
     image: user.image ?? null,
-    role: user.role,
+    // Nilai dari database sudah pasti anggota `enum Role`; guard-nya dipasang
+    // karena tipe di sisi client adalah union teks tersendiri, dan `USER`
+    // adalah satu-satunya cadangan yang tidak menaikkan hak akses siapa pun.
+    role: sahRolePengguna(user.role) ? user.role : 'USER',
     whatsapp: user.whatsapp ?? null,
     companyName: user.companyName ?? null,
     ktp: bolehLihatIdentitas ? (user.ktp ?? null) : samarkan(user.ktp ?? null),
@@ -85,7 +117,7 @@ export default async function UserProfilePage({ params }: PageProps) {
         <h1 className="text-2xl font-bold text-gray-800">Edit User Profile</h1>
         <p className="text-gray-500 text-sm">Update business and account details for {user.name || user.email}.</p>
       </div>
-      <UserProfileForm user={plainUser as any} />
+      <UserProfileForm user={plainUser} />
     </div>
   );
 }
