@@ -5,9 +5,9 @@ import { redirect } from "next/navigation";
 import Link from "next/link";
 
 // [PEMBARUAN] Impor komponen-komponen layout
-import LogoutButton from '../_components/LogoutButton';
 import CS_Layout from "../_components/cs/CS_Layout"; // Layout Baru untuk CS
-import { LayoutDashboard, Map, ShoppingCart, Users, Settings, LogOut, MessageCircle, ShieldAlert, Inbox, type LucideIcon } from 'lucide-react';
+import AdminShell, { type MenuAdmin } from "../_components/AdminShell";
+import { ShieldAlert } from 'lucide-react';
 import { Role } from "@/lib/enum-guard";
 
 // Bentuk yang BENAR-BENAR dibaca kedua layout di bawah, bukan `any`.
@@ -32,13 +32,14 @@ type SesiLayout = {
   };
 };
 
-/** Satu baris menu di sidebar admin. */
-type MenuAdmin = {
-  name: string;
-  /** Komponen ikon lucide-react, dipanggil sebagai `<item.icon size={20} />`. */
-  icon: LucideIcon;
-  link: string;
-};
+// `MenuAdmin` sekarang datang dari `AdminShell`, dan ikonnya berupa KUNCI TEKS
+// (`'transaksi'`, `'users'`, …), bukan komponen lucide-react.
+//
+// Berkas ini adalah Server Component. Komponen ikon adalah fungsi, dan fungsi
+// tidak bisa diserialisasi melewati batas server→client: mengirimnya sebagai
+// prop ke shell yang `'use client'` membuat render gagal saat dijalankan, bukan
+// saat `tsc`. Pemetaan kunci→komponen karena itu tinggal di dalam `AdminShell`,
+// dan yang menyeberang hanya teks biasa.
 
 // [OPSIONAL] Komponen untuk menjaga konsistensi
 const AccessDenied = ({ session }: { session: SesiLayout }) => (
@@ -61,51 +62,6 @@ const AccessDenied = ({ session }: { session: SesiLayout }) => (
                 </Link>
             </div>
         </div>
-    </div>
-);
-
-// [REFAKTOR] Layout Admin Standar
-const StandardAdminLayout = ({ children, session, menus }: { children: React.ReactNode, session: SesiLayout, menus: MenuAdmin[] }) => (
-    <div className="flex min-h-screen bg-gray-100 font-sans text-slate-800">
-        <aside className="w-64 bg-[#0F172A] text-white flex-shrink-0 hidden md:flex flex-col">
-            <div className="p-6 border-b border-gray-800">
-                <span className="text-2xl font-bold tracking-tight text-white">Utero<span className="text-red-500">Admin</span></span>
-            </div>
-            <nav className="flex-1 p-4 space-y-2 mt-4">
-                <div className="px-4 text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2">Menu Utama</div>
-                {menus.map((item, idx) => (
-                    <Link key={idx} href={item.link} className="flex items-center gap-3 px-4 py-3 text-gray-400 hover:bg-gray-800 hover:text-white rounded-xl transition group">
-                        <item.icon size={20} className="group-hover:text-red-500 transition-colors"/>
-                        <span className="font-medium text-sm">{item.name}</span>
-                    </Link>
-                ))}
-                <div className="pt-4 mt-4 border-t border-gray-800">
-                    <LogoutButton />
-                </div>
-            </nav>
-            <div className="p-4 border-t border-gray-800 bg-[#020617]">
-                 <div className="flex items-center gap-3 px-2 py-2">
-                    <div className="w-10 h-10 rounded-full bg-gradient-to-tr from-red-600 to-orange-500 flex items-center justify-center font-bold shadow-lg">
-                        {session.user.name?.charAt(0).toUpperCase()}
-                    </div>
-                    <div className="overflow-hidden">
-                        <p className="text-xs font-bold text-white truncate max-w-[120px]">{session.user.name}</p>
-                        <p className="text-[10px] text-gray-500 bg-gray-800 px-1.5 py-0.5 rounded w-fit mt-1">{session.user.role}</p>
-                    </div>
-                </div>
-            </div>
-        </aside>
-        <main className="flex-1 flex flex-col overflow-hidden h-screen">
-            <header className="bg-white shadow-sm border-b h-16 flex-shrink-0 flex items-center justify-between px-8 z-20">
-                <h1 className="font-bold text-gray-700 text-lg">Panel Kontrol</h1>
-                <Link href="/" className="text-xs font-bold text-gray-500 hover:text-red-600 flex items-center gap-2 border border-gray-200 px-4 py-2 rounded-full hover:bg-red-50 transition">
-                    <LogOut size={14}/> Keluar ke Web Utama
-                </Link>
-            </header>
-            <div className="flex-1 overflow-y-auto p-8 pb-32">
-                {children}
-            </div>
-        </main>
     </div>
 );
 
@@ -136,13 +92,13 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   // --- Untuk Role Selain CS ---
-  let menus = [
-      { name: "Overview", icon: LayoutDashboard, link: "/admin" },
-      { name: "Transaksi", icon: ShoppingCart, link: "/admin/orders" },
-      { name: "Inventory Billboard", icon: Map, link: "/admin/billboards" },
-      { name: "Pengajuan Titik", icon: Inbox, link: "/admin/pengajuan" },
-      { name: "Manage Users", icon: Users, link: "/admin/users" },
-      { name: "Live Chat CS", icon: MessageCircle, link: "/admin/live-chat" },
+  let menus: MenuAdmin[] = [
+      { name: "Overview", ikon: "overview", link: "/admin" },
+      { name: "Transaksi", ikon: "transaksi", link: "/admin/orders" },
+      { name: "Inventory Billboard", ikon: "inventory", link: "/admin/billboards" },
+      { name: "Pengajuan Titik", ikon: "pengajuan", link: "/admin/pengajuan" },
+      { name: "Manage Users", ikon: "users", link: "/admin/users" },
+      { name: "Live Chat CS", ikon: "chat", link: "/admin/live-chat" },
   ];
 
   // OPERATOR menangani chat dan pesanan, bukan inventaris atau daftar akun.
@@ -159,9 +115,17 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   if (userRole === 'SUPER_ADMIN') {
-      menus.push({ name: "Pengaturan Website", icon: Settings, link: "/admin/settings" });
+      menus.push({ name: "Pengaturan Website", ikon: "pengaturan", link: "/admin/settings" });
   }
 
-  return <StandardAdminLayout session={session} menus={menus}>{children}</StandardAdminLayout>;
+  // Hanya nama dan peran yang diserahkan ke shell, bukan seluruh objek sesi.
+  // Sesi NextAuth memuat id, email, dan apa pun yang ditambahkan callback di
+  // kemudian hari; shell adalah Client Component, jadi setiap kolom yang
+  // diserahkan ikut tertanam di HTML yang terkirim ke browser.
+  return (
+    <AdminShell menus={menus} nama={session.user.name ?? null} peran={userRole}>
+      {children}
+    </AdminShell>
+  );
 }
 

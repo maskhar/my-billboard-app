@@ -13816,10 +13816,22 @@ describe('tipe menggantikan `any` di batas server-client', () => {
       assert.match(kode, /session:\s*SesiLayout/);
     });
 
-    it('baris menu admin mengetik ikonnya sebagai komponen lucide', () => {
+    it('baris menu admin tetap bertipe, kini dengan ikon sebagai kunci teks', () => {
+      // Tipe `MenuAdmin` pindah ke `AdminShell.tsx` saat kerangka panel admin
+      // dijadikan Client Component, dan ikonnya berubah dari komponen lucide
+      // menjadi kunci teks: fungsi tidak bisa diserialisasi melewati batas
+      // server→client. Yang dijaga tetap sama — daftar menu tidak boleh
+      // kembali menjadi `any` atau objek literal tanpa tipe.
       const kode = kodeSaja(JALUR_LAYOUT_ADMIN);
-      assert.match(kode, /icon:\s*LucideIcon/);
       assert.match(kode, /menus:\s*MenuAdmin\[\]/);
+      assert.match(kode, /type MenuAdmin \} from "\.\.\/_components\/AdminShell"/);
+
+      const shell = kodeSaja(
+        path.join(__dirname, '..', 'src', 'app', 'admin', '_components', 'AdminShell.tsx')
+      );
+      assert.match(shell, /export type MenuAdmin = \{/);
+      assert.match(shell, /ikon:\s*IkonAdmin/);
+      assert.match(shell, /const PETA_IKON: Record<IkonAdmin, LucideIcon>/);
     });
 
     it('CS_Layout meneruskan pengguna bertipe, bukan objek sesi apa pun', () => {
@@ -17148,5 +17160,141 @@ describe('chat-server: kegagalan kirim tidak lagi senyap', () => {
     const blok = kodeWidget.slice(kodeWidget.indexOf('const handleSend'));
     const handler = blok.slice(0, blok.indexOf("emit('sendMessage'"));
     assert.match(handler, /setError\(''\)/);
+  });
+});
+
+describe('panel admin: navigasi terjangkau di layar sempit', () => {
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  const akar = path.join(__dirname, '..');
+  const jalurShell = path.join(akar, 'src', 'app', 'admin', '_components', 'AdminShell.tsx');
+  const jalurLayout = path.join(akar, 'src', 'app', 'admin', '(dashboard)', 'layout.tsx');
+  const kodeShell = kodeSaja(jalurShell);
+  const kodeLayout = kodeSaja(jalurLayout);
+
+  it('ada tombol pembuka menu yang hanya tampil di bawah md', () => {
+    // Sidebar admin `hidden md:flex` dulu TIDAK punya pengganti apa pun di
+    // bawah 768px. ADMIN, SUPER_ADMIN, dan OPERATOR hanya bisa berpindah
+    // halaman dengan mengetik URL, dan tombol keluar akun — yang berada di
+    // dalam aside itu — sama sekali tidak terjangkau.
+    assert.match(kodeShell, /aria-label="Buka menu panel admin"/);
+    const blokTombol = kodeShell.slice(
+      kodeShell.indexOf('aria-label="Buka menu panel admin"') - 500,
+      kodeShell.indexOf('aria-label="Buka menu panel admin"') + 200
+    );
+    assert.match(blokTombol, /md:hidden/);
+    assert.match(blokTombol, /aria-expanded=\{drawerTerbuka\}/);
+  });
+
+  it('drawer punya peran dialog dan jalan keluar yang terbaca', () => {
+    assert.match(kodeShell, /role="dialog"/);
+    assert.match(kodeShell, /aria-modal="true"/);
+    assert.match(kodeShell, /aria-label="Tutup menu"/);
+  });
+
+  it('drawer tidak dirender saat tertutup', () => {
+    // Menu yang selalu ada di DOM tetap bisa dijangkau Tab walau tak terlihat:
+    // pengguna papan tunjuk menemui tujuh tautan tersembunyi sebelum mencapai
+    // isi halaman.
+    assert.match(kodeShell, /\{drawerTerbuka && \(/);
+  });
+
+  it('keadaan drawer diturunkan dari path, bukan disetel di useEffect', () => {
+    // Menutup drawer lewat `useEffect` atas `usePathname()` berarti satu render
+    // tambahan di mana drawer masih menutupi halaman yang baru dimuat, dan
+    // `react-hooks/set-state-in-effect` menolaknya.
+    assert.match(kodeShell, /const drawerTerbuka = dibukaPada === pathAktif;/);
+    const efek = kodeShell.match(/useEffect\(\(\) => \{\s*setD\w+\(/);
+    assert.strictEqual(efek, null, 'tidak boleh ada setState langsung di dalam useEffect');
+  });
+
+  it('fokus dikembalikan ke tombol pemicu setelah drawer ditutup', () => {
+    // Tanpa pengembalian fokus, fokus tertinggal pada elemen yang baru saja
+    // disembunyikan dan Tab berikutnya mulai dari awal dokumen.
+    assert.match(kodeShell, /tombolRef\.current\?\.focus\(\)/);
+    assert.match(kodeShell, /event\.key === 'Escape'/);
+    assert.match(kodeShell, /drawerRef\.current\?\.focus\(\)/);
+  });
+
+  it('isi navigasi dipakai bersama sidebar lebar dan drawer sempit', () => {
+    // Dua salinan daftar menu berarti menu baru bisa muncul di satu tempat
+    // saja, dan yang hilang justru di layar tempat ia paling sulit diakali.
+    const pemakaian = kodeShell.match(/<IsiNavigasi/g) ?? [];
+    assert.strictEqual(pemakaian.length, 2);
+    assert.match(kodeShell, /<LogoutButton \/>/);
+    const isi = kodeShell.slice(kodeShell.indexOf('function IsiNavigasi'));
+    assert.match(isi.slice(0, isi.indexOf('function KartuAkun')), /<LogoutButton \/>/);
+  });
+
+  it('ikon menyeberang sebagai kunci teks, bukan komponen', () => {
+    // Komponen ikon lucide-react adalah fungsi, dan fungsi tidak bisa
+    // diserialisasi melewati batas server→client: mengirimnya sebagai prop
+    // membuat render gagal saat DIJALANKAN, bukan saat `tsc`.
+    assert.match(kodeShell, /const PETA_IKON: Record<IkonAdmin, LucideIcon>/);
+    assert.match(kodeLayout, /let menus: MenuAdmin\[\]/);
+    assert.doesNotMatch(kodeLayout, /icon: (LayoutDashboard|ShoppingCart|Map|Inbox|Users|MessageCircle|Settings)/);
+    assert.doesNotMatch(kodeLayout, /LucideIcon/);
+  });
+
+  it('setiap kunci ikon yang dipakai layout ada di peta shell', () => {
+    // Kunci yang salah tulis harus tertangkap `tsc` lewat union `IkonAdmin`,
+    // bukan muncul di layar sebagai menu tanpa ikon.
+    const kunciPeta = new Set(
+      [...kodeShell.matchAll(/^\s{2}(\w+): [A-Z]\w+,$/gm)].map((m) => m[1])
+    );
+    const kunciDipakai = [...kodeLayout.matchAll(/ikon: "(\w+)"/g)].map((m) => m[1]);
+    assert.ok(kunciDipakai.length >= 7);
+    for (const kunci of kunciDipakai) {
+      assert.ok(kunciPeta.has(kunci), `kunci ikon "${kunci}" tidak ada di PETA_IKON`);
+    }
+  });
+
+  it('shell menerima nama dan peran saja, bukan seluruh objek sesi', () => {
+    // Shell adalah Client Component: setiap kolom yang diserahkan ikut
+    // tertanam di HTML yang terkirim ke browser. Sesi NextAuth memuat id,
+    // email, dan apa pun yang ditambahkan callback di kemudian hari.
+    assert.match(kodeLayout, /<AdminShell menus=\{menus\} nama=\{session\.user\.name \?\? null\} peran=\{userRole\}>/);
+    assert.doesNotMatch(kodeShell, /session/);
+  });
+
+  it('layout admin berhenti menyalin kerangka sidebar sendiri', () => {
+    // `StandardAdminLayout` dihapus; kerangkanya kini hanya ada di satu tempat.
+    assert.doesNotMatch(kodeLayout, /StandardAdminLayout/);
+    assert.doesNotMatch(kodeLayout, /<aside/);
+    assert.match(kodeLayout, /import AdminShell, \{ type MenuAdmin \} from "\.\.\/_components\/AdminShell"/);
+  });
+
+  it('OPERATOR dan SUPER_ADMIN tetap dapat daftar menunya masing-masing', () => {
+    // Penyaringan peran tidak boleh ikut hilang saat kerangkanya dipindah.
+    assert.match(kodeLayout, /userRole === 'OPERATOR'/);
+    assert.match(kodeLayout, /m\.link !== '\/admin\/billboards'/);
+    assert.match(kodeLayout, /m\.link !== '\/admin\/users'/);
+    assert.match(kodeLayout, /m\.link !== '\/admin\/pengajuan'/);
+    assert.match(kodeLayout, /ikon: "pengaturan", link: "\/admin\/settings"/);
+  });
+
+  it('halaman yang sedang dibuka ditandai', () => {
+    // Tanpa penanda, drawer di ponsel hanyalah daftar tautan seragam dan
+    // pengguna kehilangan jejak posisinya. `/admin` diperlakukan khusus:
+    // sebagai awalan ia cocok dengan setiap halaman admin lainnya.
+    assert.match(kodeShell, /aria-current=\{aktif \? 'page' : undefined\}/);
+    assert.match(kodeShell, /item\.link === '\/admin' \? pathAktif === '\/admin'/);
+  });
+
+  it('layout CS tidak disentuh — rel ikonnya selalu tampak', () => {
+    const kodeSidebarCs = kodeSaja(
+      path.join(akar, 'src', 'app', 'admin', '_components', 'cs', 'CS_Sidebar.tsx')
+    );
+    assert.match(kodeSidebarCs, /w-16/);
+    assert.doesNotMatch(kodeSidebarCs, /hidden md:flex/);
+    assert.match(kodeLayout, /userRole === 'CS'/);
   });
 });
