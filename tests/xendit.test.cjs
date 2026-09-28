@@ -11521,7 +11521,17 @@ describe('kotak masuk CS membatasi kueri dan memilih kolomnya', () => {
     const q = dicatat.find((d) => d.jenis === 'findUnique').args;
     // `desc` + balik, bukan `asc` + take: `asc` memberi pembukaan percakapan —
     // bagian yang paling tidak dibutuhkan CS saat hendak menjawab.
-    assert.deepStrictEqual(q.select.messages.orderBy, { createdAt: 'desc' });
+    //
+    // `id` IKUT di `orderBy`, dan itu bukan kerapian. `ChatMessage.createdAt`
+    // berasal dari `@default(now())`, dan pesan tamu beserta balasan BOT
+    // atasnya ditulis dalam satu penanganan `sendMessage` — keduanya bisa lahir
+    // pada milidetik yang sama. Urutan yang tidak menentukan di antara dua
+    // baris itu membuat kursor halaman "muat lebih lama" menunjuk ke tempat
+    // yang salah, dan satu pesan hilang atau muncul dua kali.
+    assert.deepStrictEqual(q.select.messages.orderBy, [
+      { createdAt: 'desc' },
+      { id: 'desc' },
+    ]);
     // `+ 1` adalah cara mengetahui masih ada riwayat lebih lama tanpa `count`
     // kedua.
     assert.strictEqual(q.select.messages.take, 201);
@@ -11637,15 +11647,27 @@ describe('kotak masuk CS tidak lagi mengetik propnya `any`', () => {
     const kode = kodeSajaChat(JALUR_AKSI_CHAT);
     assert.match(kode, /getChatSessions\(\): Promise<SesiChat\[\]>/);
     assert.match(kode, /Promise<SesiChatLengkap \| null>/);
-    assert.match(kode, /import type \{ PesanChat, SesiChat, SesiChatLengkap \}/);
+    assert.match(kode, /import type \{ HalamanPesanChat, PesanChat, SesiChat, SesiChatLengkap \}/);
   });
 
   it('array asli tidak dibalik di tempat', () => {
     const kode = kodeSajaChat(JALUR_AKSI_CHAT);
     // `reverse()` mengubah array aslinya, dan array itu masih dibaca
     // `adaRiwayatLebihLama` di atasnya.
-    assert.match(kode, /\.slice\(\)\.reverse\(\)/);
+    //
+    // `slice().reverse()` sendiri sekarang berada di `@/lib/riwayat-chat`,
+    // dipakai bersama jalur "muat lebih lama" dan widget tamu — jadi yang
+    // dituntut di sini adalah action MEMANGGIL pemotong itu, bukan menulis
+    // pembaliknya lagi. Yang tetap dilarang sama: membalik array Prisma di
+    // tempat.
+    assert.match(kode, /potongHalaman\(/);
     assert.doesNotMatch(kode, /messages\.reverse\(\)/);
+    assert.doesNotMatch(kode, /baris\.reverse\(\)/);
+    const modul = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'riwayat-chat.ts'),
+      'utf8'
+    );
+    assert.match(modul, /\.slice\(\)\.reverse\(\)/);
   });
 });
 
@@ -14681,5 +14703,560 @@ describe('A3: dialog bawaan peramban diganti Toast dan Konfirmasi', () => {
     assert.match(blok, /historyItem\.archivedAt/);
     assert.match(blok, /historyItem\.changedBy/);
     assert.match(blok, /DITIMPA/);
+  });
+});
+
+// ===========================================================================
+// C4 — riwayat percakapan yang benar-benar bisa dimuat
+// ===========================================================================
+//
+// Dua cacat yang ditutup di sini, dan keduanya soal riwayat yang ADA di
+// database tapi tidak punya jalur untuk diambil:
+//
+//  1. Kotak masuk CS memuat 200 pesan terakhir dan MENGATAKAN riwayatnya
+//     dipotong, tanpa satu pun cara mengambil sisanya.
+//  2. Widget tamu tidak memuat riwayat sama sekali. Tamu yang kembali membawa
+//     `utero_chat_token` berhasil `joinRoom` dan melihat kotak KOSONG.
+
+describe('paginasi riwayat chat memakai kursor, bukan OFFSET', () => {
+  const JALUR_RIWAYAT = path.join(__dirname, '..', 'src', 'lib', 'riwayat-chat.ts');
+  const JALUR_RIWAYAT_SERVER = path.join(__dirname, '..', 'chat-server', 'riwayat-chat.js');
+
+  function muatRiwayat() {
+    delete require.cache[require.resolve(JALUR_RIWAYAT)];
+    return require(JALUR_RIWAYAT);
+  }
+
+  function pesanDb(id, ms) {
+    return {
+      id,
+      sessionId: 's1',
+      sender: 'USER',
+      message: `pesan ${id}`,
+      createdAt: new Date(ms),
+    };
+  }
+
+  it('modul riwayat tidak menyeret Prisma maupun `server-only`', () => {
+    // Bukan kerapian: chat-server adalah proses Node terpisah tanpa langkah
+    // build, dan logika yang sama perlu bisa dijelaskan serta diuji tanpa
+    // runtime Prisma. `server-only` juga akan membuat modul ini gagal di-
+    // `require` langsung dari test.
+    //
+    // Komentarnya dibuang dulu: modul itu MENJELASKAN kenapa ia tidak mengimpor
+    // `@prisma/client`, jadi namanya memang tertulis di sana sebagai prosa.
+    const kode = kodeSajaChat(JALUR_RIWAYAT);
+    assert.ok(!/from 'server-only'/.test(kode));
+    assert.ok(!/@prisma\/client/.test(kode));
+    assert.ok(!/@\/lib\/prisma/.test(kode));
+  });
+
+  it('kursornya (createdAt, id), bukan createdAt saja', () => {
+    // Ini inti cacatnya. `ChatMessage.createdAt` berasal dari
+    // `@default(now())`, dan pesan tamu beserta balasan BOT atasnya ditulis
+    // dalam satu penanganan `sendMessage` — keduanya bisa berbagi milidetik.
+    // Dengan `createdAt` saja, salah satunya hilang dari halaman berikutnya
+    // atau muncul dua kali.
+    const { syaratLebihLama } = muatRiwayat();
+    const waktu = new Date(Date.UTC(2026, 8, 27, 10, 0, 0, 500));
+    const w = syaratLebihLama('s1', { id: 'm9', createdAt: waktu });
+
+    assert.strictEqual(w.sessionId, 's1', 'kursor tidak diikat ke sesinya');
+    assert.strictEqual(w.OR.length, 2, 'perbandingan (createdAt, id) tidak lengkap');
+    assert.deepStrictEqual(w.OR[0], { createdAt: { lt: waktu } });
+    // Cabang kedua: waktu SAMA, id lebih kecil. Tanpa ini pesan berwaktu kembar
+    // tidak pernah terambil.
+    assert.deepStrictEqual(w.OR[1], { createdAt: waktu, id: { lt: 'm9' } });
+  });
+
+  it('tidak ada `skip` di mana pun — OFFSET menggeser halaman saat pesan baru masuk', () => {
+    // OFFSET dihitung dari ujung daftar. Satu pesan baru yang masuk selagi CS
+    // membaca menggeser seluruh daftar satu langkah, dan halaman berikutnya
+    // MENGULANG satu pesan yang sudah terbaca sambil MELEWATKAN satu yang
+    // belum. Ini terjadi tepat di percakapan tersibuk.
+    for (const jalur of [JALUR_RIWAYAT, JALUR_RIWAYAT_SERVER, JALUR_AKSI_CHAT]) {
+      const kode = fs.readFileSync(jalur, 'utf8').replace(/\/\/.*$/gm, '');
+      assert.ok(!/\bskip:/.test(kode), `${path.basename(jalur)} masih memakai OFFSET`);
+    }
+  });
+
+  it('`orderBy` wajib menyertakan id dan mengembalikan array baru tiap panggilan', () => {
+    const { urutanTerbaruDulu } = muatRiwayat();
+    assert.deepStrictEqual(urutanTerbaruDulu(), [{ createdAt: 'desc' }, { id: 'desc' }]);
+    // Array yang dibagi ke semua pemanggil adalah array yang bisa disortir
+    // ulang oleh salah satunya — dan urutan ini pasangan wajib kursornya.
+    assert.notStrictEqual(urutanTerbaruDulu(), urutanTerbaruDulu());
+  });
+
+  it('`take` selalu batas + 1 supaya `adaLagi` tidak perlu kueri kedua', () => {
+    const { takeDenganPengintip } = muatRiwayat();
+    assert.strictEqual(takeDenganPengintip(50), 51);
+    assert.strictEqual(takeDenganPengintip(200), 201);
+  });
+
+  it('halaman penuh + satu baris kelebihan: kelebihannya dibuang dan ditandai', () => {
+    const { potongHalaman } = muatRiwayat();
+    // Hasil kueri `desc`: terbaru duluan.
+    const baris = [pesanDb('m5', 500), pesanDb('m4', 400), pesanDb('m3', 300)];
+    const h = potongHalaman(baris, 2);
+
+    assert.strictEqual(h.adaLagi, true);
+    // Dipulihkan ke urutan lama-ke-baru, dan yang dibuang yang PALING LAMA.
+    assert.deepStrictEqual(h.pesan.map((p) => p.id), ['m4', 'm5']);
+  });
+
+  it('halaman tepat sebanyak batas TIDAK ditandai habis', () => {
+    const { potongHalaman } = muatRiwayat();
+    const h = potongHalaman([pesanDb('m2', 200), pesanDb('m1', 100)], 2);
+    assert.strictEqual(h.adaLagi, false);
+    assert.deepStrictEqual(h.pesan.map((p) => p.id), ['m1', 'm2']);
+  });
+
+  it('halaman kosong tidak melempar dan tidak mengaku masih ada lagi', () => {
+    const { potongHalaman } = muatRiwayat();
+    assert.deepStrictEqual(potongHalaman([], 50), { pesan: [], adaLagi: false });
+  });
+
+  it('array milik pemanggil TIDAK dibalik di tempat', () => {
+    // `reverse()` membalik array DI TEMPAT. Pemanggil yang membaca `baris[0]`
+    // setelah memanggil pemotong ini akan mendapat baris yang berbeda dari yang
+    // ia kirim — dan di `getMessagesForSession` baris itu adalah hasil Prisma
+    // yang masih dipakai.
+    const { potongHalaman } = muatRiwayat();
+    const baris = [pesanDb('m3', 300), pesanDb('m2', 200), pesanDb('m1', 100)];
+    potongHalaman(baris, 3);
+    assert.strictEqual(baris[0].id, 'm3', 'array pemanggil ikut dibalik');
+  });
+
+  it('kursor dari daftar kosong adalah null, bukan galat', () => {
+    const { kursorDari } = muatRiwayat();
+    assert.strictEqual(kursorDari([]), null);
+    const waktu = new Date(Date.UTC(2026, 8, 27, 10, 0));
+    assert.deepStrictEqual(kursorDari([{ id: 'm1', createdAt: waktu }]), {
+      id: 'm1',
+      createdAt: waktu,
+    });
+  });
+
+  it('salinan CommonJS chat-server sepakat dengan aslinya', () => {
+    // chat-server tidak bisa mengimpor TypeScript dari `src/`, jadi logikanya
+    // DISALIN — pola yang sama dengan `chat-server/rate-limit.js`. Yang
+    // berbahaya dari salinan adalah keduanya menyimpang tanpa ada yang tahu,
+    // jadi kesepakatannya diuji, bukan dipercaya.
+    const asli = muatRiwayat();
+    delete require.cache[require.resolve(JALUR_RIWAYAT_SERVER)];
+    const salinan = require(JALUR_RIWAYAT_SERVER);
+
+    const waktu = new Date(Date.UTC(2026, 8, 27, 10, 0, 0, 500));
+    assert.deepStrictEqual(
+      salinan.syaratLebihLama('s1', { id: 'm9', createdAt: waktu }),
+      asli.syaratLebihLama('s1', { id: 'm9', createdAt: waktu })
+    );
+    assert.deepStrictEqual(salinan.urutanTerbaruDulu(), asli.urutanTerbaruDulu());
+    assert.deepStrictEqual(salinan.PILIH_PESAN, asli.PILIH_PESAN);
+    assert.strictEqual(salinan.PESAN_RIWAYAT_TAMU, asli.PESAN_RIWAYAT_TAMU);
+    assert.strictEqual(salinan.takeDenganPengintip(50), asli.takeDenganPengintip(50));
+
+    const baris = [pesanDb('m3', 300), pesanDb('m2', 200), pesanDb('m1', 100)];
+    assert.deepStrictEqual(
+      salinan.potongHalaman(baris, 2),
+      asli.potongHalaman(baris, 2)
+    );
+
+    // Peringatan pemeliharaannya ada di kedua file — itulah satu-satunya yang
+    // memberi tahu pengubah berikutnya bahwa ada pasangan.
+    const kodeSalinan = fs.readFileSync(JALUR_RIWAYAT_SERVER, 'utf8');
+    assert.match(kodeSalinan, /KALAU SALAH SATU DIUBAH, UBAH JUGA YANG LAIN/);
+  });
+});
+
+describe('`getRiwayatLebihLama` menutup pemberitahuan tanpa jalan keluar', () => {
+  // Prisma palsu yang merekam argumen `chatMessage`, bukan hanya `chatSession`.
+  function prismaPalsu({ kursor = null, baris = [] } = {}) {
+    const dicatat = [];
+    return {
+      dicatat,
+      prisma: {
+        chatSession: {
+          findMany: async () => [],
+          findUnique: async () => null,
+        },
+        chatMessage: {
+          findFirst: async (args) => {
+            dicatat.push({ jenis: 'findFirst', args });
+            return kursor;
+          },
+          findMany: async (args) => {
+            dicatat.push({ jenis: 'findMany', args });
+            return baris;
+          },
+        },
+      },
+    };
+  }
+
+  function muat(hasil, peran = 'CS') {
+    const { dicatat, prisma } = prismaPalsu(hasil);
+    const modul = muatDenganModulPalsu(JALUR_AKSI_CHAT, {
+      'next-auth': { getServerSession: async () => ({ user: { id: 'u1', role: peran } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+    });
+    return { modul, dicatat };
+  }
+
+  const WAKTU_KURSOR = new Date(Date.UTC(2026, 8, 27, 10, 0, 0, 500));
+
+  function pesanBaris(id, ms) {
+    return {
+      id,
+      sessionId: 's1',
+      sender: 'USER',
+      message: `pesan ${id}`,
+      createdAt: new Date(ms),
+    };
+  }
+
+  it('peran di luar daftar chat ditolak SEBELUM kueri apa pun', async () => {
+    // Server Action adalah endpoint HTTP publik dengan id yang bisa ditemukan
+    // dari bundle JavaScript. Action ini mengembalikan isi percakapan
+    // pelanggan, jadi penjaganya wajib berjalan lebih dulu.
+    const { modul, dicatat } = muat({}, 'USER');
+    await assert.rejects(() => modul.getRiwayatLebihLama('s1', 'm9'), /Unauthorized/);
+    assert.strictEqual(dicatat.length, 0, 'kueri berjalan walau akses ditolak');
+  });
+
+  it('argumen kosong dijawab halaman habis tanpa menyentuh database', async () => {
+    const { modul, dicatat } = muat({});
+    assert.deepStrictEqual(await modul.getRiwayatLebihLama('', 'm9'), {
+      messages: [],
+      adaLagi: false,
+    });
+    assert.deepStrictEqual(await modul.getRiwayatLebihLama('s1', ''), {
+      messages: [],
+      adaLagi: false,
+    });
+    assert.strictEqual(dicatat.length, 0);
+  });
+
+  it('kursornya DIBACA dari database dan diikat ke sesinya', async () => {
+    // Dua hal sekaligus. `createdAt` kiriman client yang digeser satu milidetik
+    // membuat halaman melewatkan atau mengulang pesan, dan yang tidak bisa
+    // diparse menghasilkan `Invalid Date` — Prisma menerimanya dan kembali
+    // tanpa baris, jadi riwayat TAMPAK habis padahal tidak.
+    //
+    // Yang lebih penting: `where: { id, sessionId }` membuat id pesan dari
+    // percakapan LAIN tidak bisa dipakai sebagai titik potong. Tanpa itu,
+    // walaupun hasilnya tetap disaring `sessionId`, pemanggil diberi tahu kapan
+    // pesan orang lain ditulis.
+    const { modul, dicatat } = muat({
+      kursor: { id: 'm9', createdAt: WAKTU_KURSOR },
+      baris: [pesanBaris('m8', 400)],
+    });
+    await modul.getRiwayatLebihLama('s1', 'm9');
+
+    const cari = dicatat.find((d) => d.jenis === 'findFirst');
+    assert.ok(cari, 'kursor tidak dibaca dari database');
+    assert.deepStrictEqual(cari.args.where, { id: 'm9', sessionId: 's1' });
+    assert.deepStrictEqual(cari.args.select, { id: true, createdAt: true });
+  });
+
+  it('kursor milik sesi lain dijawab habis, bukan halaman pertama', async () => {
+    // `findFirst` yang tidak menemukan apa pun berarti id itu bukan milik sesi
+    // ini. Mengirim halaman terbaru sebagai gantinya akan menyisipkan pesan
+    // yang sudah tampil ke ATAS daftar — CS membaca percakapannya dua kali
+    // dalam urutan yang salah.
+    const { modul, dicatat } = muat({ kursor: null });
+    assert.deepStrictEqual(await modul.getRiwayatLebihLama('s1', 'm-asing'), {
+      messages: [],
+      adaLagi: false,
+    });
+    assert.ok(
+      !dicatat.some((d) => d.jenis === 'findMany'),
+      'halaman tetap diambil walau kursornya bukan milik sesi ini'
+    );
+  });
+
+  it('kuerinya keyset dengan urutan yang cocok dan pengintip 51', async () => {
+    const { modul, dicatat } = muat({
+      kursor: { id: 'm9', createdAt: WAKTU_KURSOR },
+      baris: [pesanBaris('m8', 400)],
+    });
+    await modul.getRiwayatLebihLama('s1', 'm9');
+
+    const q = dicatat.find((d) => d.jenis === 'findMany').args;
+    assert.strictEqual(q.where.sessionId, 's1');
+    assert.deepStrictEqual(q.where.OR[0], { createdAt: { lt: WAKTU_KURSOR } });
+    assert.deepStrictEqual(q.where.OR[1], { createdAt: WAKTU_KURSOR, id: { lt: 'm9' } });
+    // Urutan wajib cocok dengan kursornya, `id` ikut.
+    assert.deepStrictEqual(q.orderBy, [{ createdAt: 'desc' }, { id: 'desc' }]);
+    assert.strictEqual(q.take, 51, '`+ 1` hilang: `adaLagi` akan selamanya false');
+    assert.strictEqual(q.skip, undefined, 'OFFSET tidak boleh muncul di sini');
+    // Kolomnya dipilih eksplisit: hasil action ini menyeberang ke Client
+    // Component, jadi tertanam di HTML halaman.
+    assert.deepStrictEqual(
+      Object.keys(q.select).sort(),
+      ['createdAt', 'id', 'message', 'sender', 'sessionId']
+    );
+  });
+
+  it('halaman dipulihkan lama-ke-baru dengan createdAt berupa teks ISO', async () => {
+    const { modul } = muat({
+      kursor: { id: 'm9', createdAt: WAKTU_KURSOR },
+      // Hasil `desc`.
+      baris: [pesanBaris('m8', 800), pesanBaris('m7', 700), pesanBaris('m6', 600)],
+    });
+    const h = await modul.getRiwayatLebihLama('s1', 'm9');
+
+    assert.deepStrictEqual(h.messages.map((m) => m.id), ['m6', 'm7', 'm8']);
+    assert.strictEqual(h.adaLagi, false);
+    // Pesan socket tiba sebagai teks ISO dan pesan database sebagai `Date`;
+    // keduanya masuk ke satu array `messages`. Bentuknya disamakan di batas.
+    assert.strictEqual(typeof h.messages[0].createdAt, 'string');
+  });
+
+  it('51 baris yang kembali menjadi 50 pesan dan `adaLagi: true`', async () => {
+    const { modul } = muat({
+      kursor: { id: 'm99', createdAt: WAKTU_KURSOR },
+      baris: Array.from({ length: 51 }, (_, i) => pesanBaris(`m${51 - i}`, (51 - i) * 100)),
+    });
+    const h = await modul.getRiwayatLebihLama('s1', 'm99');
+
+    assert.strictEqual(h.messages.length, 50);
+    assert.strictEqual(h.adaLagi, true);
+    // Yang dibuang yang PALING LAMA: `m1`.
+    assert.strictEqual(h.messages[0].id, 'm2');
+    assert.strictEqual(h.messages[49].id, 'm51');
+  });
+
+  it('tipe kembaliannya diumumkan sebagai halaman, bukan array telanjang', () => {
+    const kode = kodeSajaChat(JALUR_AKSI_CHAT);
+    assert.match(kode, /getRiwayatLebihLama\([\s\S]*?\): Promise<HalamanPesanChat>/);
+    // `adaLagi` dibawa terpisah dari `messages.length`: halaman yang kembali
+    // tepat sebanyak batasnya tidak berarti riwayatnya habis.
+    const tipe = kodeSajaChat(JALUR_TIPE_CHAT);
+    assert.match(tipe, /export type HalamanPesanChat/);
+    assert.match(tipe, /adaLagi: boolean/);
+  });
+});
+
+describe('kotak masuk CS punya tombol muat-lama yang benar-benar bekerja', () => {
+  it('pemberitahuan terpotong sekarang sebuah tombol, bukan hanya teks', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    const mulai = kode.indexOf('{adaRiwayatLebihLama && (');
+    assert.ok(mulai !== -1, 'blok pemberitahuan riwayat terpotong hilang');
+    const blok = kode.slice(mulai, mulai + 1400);
+    assert.match(blok, /<button/, 'masih hanya pemberitahuan tanpa jalan keluar');
+    assert.match(blok, /onClick=\{handleMuatLama\}/);
+    // Tombol yang tidak mati saat permintaannya sedang jalan akan menyisipkan
+    // halaman yang sama dua kali.
+    assert.match(blok, /disabled=\{memuatLama\}/);
+  });
+
+  it('auto-scroll berhenti menyeret CS ke dasar saat pesan lama disisipkan', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    // `useEffect(scrollToBottom, [messages])` benar untuk pesan baru dan SALAH
+    // untuk pesan lama yang disisipkan di atas: riwayat yang baru dimuat
+    // tergulir keluar dari pandangan pada milidetik yang sama ia tiba.
+    assert.ok(
+      !/useEffect\(scrollToBottom, \[messages\]\)/.test(kode),
+      'setiap perubahan array masih menyeret panel ke dasar'
+    );
+    assert.match(kode, /idTerakhir !== idTerakhirRef\.current/);
+    // Posisi baca dipulihkan dengan selisih tinggi daftar: menyisipkan 50 pesan
+    // di ATAS menggeser seluruh isinya ke bawah.
+    assert.match(kode, /scrollTop \+= daftar\.scrollHeight - tinggiSebelum/);
+    // Tingginya dicatat SEBELUM permintaan, bukan setelah jawabannya tiba.
+    const mulai = kode.indexOf('const handleMuatLama = () =>');
+    assert.ok(mulai !== -1, 'pencatat tinggi di ChatRoom hilang');
+    const blok = kode.slice(mulai, kode.indexOf('};', mulai));
+    assert.match(blok, /tinggiSebelumRef\.current = daftarRef\.current\?\.scrollHeight/);
+    assert.ok(
+      blok.indexOf('tinggiSebelumRef') < blok.indexOf('onMuatLama()'),
+      'tinggi dicatat setelah permintaan dikirim — angka pembandingnya sudah hilang'
+    );
+  });
+
+  it('jawaban yang tiba setelah CS berpindah percakapan dibuang', () => {
+    // Tanpa penjaga ini, riwayat percakapan A disisipkan ke atas percakapan B
+    // yang sedang terbuka — dan keduanya tampil dengan gaya yang sama, jadi
+    // tidak ada satu pun tanda di layar bahwa itu pesan orang lain.
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    const mulai = kode.indexOf('const handleMuatLama = async ()');
+    assert.ok(mulai !== -1, 'penangan muat-lama di komponen induk hilang');
+    const blok = kode.slice(mulai, kode.indexOf('const handleSendMessage', mulai));
+
+    assert.match(blok, /idTerpilihRef\.current !== sesiId/);
+    // Titik potongnya pesan TERTUA yang tampil, bukan nomor halaman.
+    assert.match(blok, /messages\[0\]/);
+    // Penekanan ganda tidak boleh menyisipkan halaman yang sama dua kali:
+    // `key={msg.id}` yang kembar membuat React merender salah satu baris tanpa
+    // pernah memperbaruinya.
+    assert.match(blok, /sudahAda\.has/);
+    // `adaLagi` dari server yang memutuskan tombolnya, bukan panjang halaman.
+    assert.match(blok, /setAdaRiwayatLebihLama\(halaman\.adaLagi\)/);
+  });
+
+  it('kegagalan muat-lama TIDAK mengosongkan percakapan yang sudah tampil', () => {
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    const mulai = kode.indexOf('const handleMuatLama = async ()');
+    const blok = kode.slice(mulai, kode.indexOf('const handleSendMessage', mulai));
+
+    // `setMessages([])` di sini akan mengubah kegagalan kecil (tambahan riwayat
+    // gagal) menjadi kehilangan besar (percakapan yang sudah benar lenyap).
+    assert.ok(!/setMessages\(\[\]\)/.test(blok));
+    assert.match(blok, /e instanceof Error \? e\.message/);
+    // `finally` wajib: Promise yang ditolak tanpa itu meninggalkan tombolnya
+    // mati selamanya.
+    assert.match(blok, /finally \{[\s\S]*?setMemuatLama\(false\)/);
+  });
+
+  it('penanda muat-lama disetel ulang saat berpindah percakapan', () => {
+    // Tanpa ini, berpindah percakapan saat halaman lama sedang diminta
+    // meninggalkan tombolnya mati selamanya di percakapan yang baru dibuka.
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    const mulai = kode.indexOf('const handleSelectSession');
+    const blok = kode.slice(mulai, kode.indexOf('const handleMuatLama', mulai));
+    assert.match(blok, /setMemuatLama\(false\)/);
+  });
+
+  it('prop muat-lama benar-benar diteruskan ke ChatRoom', () => {
+    // Tipe prop yang menuntutnya tanpa call site yang mengirimnya adalah file
+    // yang tidak ter-compile; tapi prop yang dikirim `() => {}` juga lolos
+    // compiler dan tetap tidak melakukan apa pun.
+    const kode = kodeSajaChat(JALUR_INBOX_CS);
+    const mulai = kode.indexOf('<ChatRoom');
+    const blok = kode.slice(mulai, kode.indexOf('/>', mulai));
+    assert.match(blok, /memuatLama=\{memuatLama\}/);
+    assert.match(blok, /onMuatLama=\{handleMuatLama\}/);
+  });
+});
+
+describe('widget tamu memuat riwayatnya sendiri', () => {
+  const JALUR_WIDGET_C4 = path.join(__dirname, '..', 'src', 'components', 'ChatWidget.tsx');
+  const JALUR_SERVER_C4 = path.join(__dirname, '..', 'chat-server', 'index.js');
+
+  function kodeSajaWidget() {
+    return fs
+      .readFileSync(JALUR_WIDGET_C4, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  }
+
+  it('tamu yang kembali meminta riwayatnya setelah joinRoom', () => {
+    // Celah yang ditutup: tamu yang kembali membawa `utero_chat_token` berhasil
+    // `joinRoom` dan melihat kotak KOSONG, walaupun seluruh percakapannya
+    // tersimpan. Ia lalu mengulang pertanyaan yang sudah dijawab, dan petugas
+    // membaca dua percakapan yang tampak terpisah.
+    const kode = kodeSajaWidget();
+    assert.match(kode, /emit\('mintaRiwayat'/);
+    assert.match(kode, /\.on\('riwayatChat'/);
+    // Nama `loadHistory` tetap TIDAK dipakai: peristiwa itu dulu didengar tanpa
+    // pernah dipancarkan, dan menghidupkan namanya kembali akan menyamarkan
+    // jalur baru sebagai jalur lama yang mati.
+    assert.ok(!/loadHistory/.test(kode));
+  });
+
+  it('riwayat dari socket diperiksa bentuknya per baris sebelum dirender', () => {
+    // `renderMessageText` memanggil `text.split`. Satu baris dengan `message`
+    // bukan teks melempar di sana dan mematikan seluruh widget — dan payload
+    // socket berada di luar pemeriksaan tipe apa pun.
+    const kode = kodeSajaWidget();
+    const mulai = kode.indexOf(".on('riwayatChat'");
+    const blok = kode.slice(mulai, mulai + 1800);
+    assert.match(blok, /Array\.isArray\(h\.pesan\)/);
+    assert.match(blok, /typeof m\.message !== 'string'/);
+    assert.match(blok, /typeof m\.id !== 'string'/);
+    // Riwayat milik sesi lain dibuang: satu socket bisa berpindah sesi lewat
+    // `claimGuestSession`, dan jawaban permintaan lama yang tiba setelah itu
+    // akan menempelkan percakapan sebelumnya ke kotak yang baru.
+    assert.match(blok, /utero_chat_id/);
+    assert.match(blok, /sudahAda\.has/);
+  });
+
+  it('kegagalan riwayat TIDAK memakai authError — itu menghapus sesi tamu', () => {
+    // Ini cacat yang paling mudah luput. Widget memperlakukan setiap
+    // `authError` sebagai tanda sesinya dicabut: ia menghapus `utero_chat_id`
+    // dan `utero_chat_token` lalu memulai dari formulir kosong. Memakainya
+    // untuk penolakan jatah berarti tamu yang memuat ulang halaman beberapa
+    // kali KEHILANGAN seluruh percakapannya.
+    const server = fs.readFileSync(JALUR_SERVER_C4, 'utf8');
+    const mulai = server.indexOf('socket.on("mintaRiwayat"');
+    assert.ok(mulai !== -1, 'penangan mintaRiwayat tidak ada di chat-server');
+    const blok = server.slice(mulai, server.indexOf('socket.on("sendMessage"', mulai));
+
+    // Penjaga akses TETAP `authError` — di sana artinya memang benar.
+    assert.match(blok, /event: "mintaRiwayat"/);
+    // Tapi jatah dan galat database memakai peristiwa terpisah.
+    assert.match(blok, /riwayatGagal/);
+    const bagianJatah = blok.slice(blok.indexOf('rateLimit({'));
+    assert.ok(
+      !/authError/.test(bagianJatah),
+      'penolakan jatah memakai authError — sesi tamu ikut terhapus'
+    );
+
+    const kode = kodeSajaWidget();
+    assert.match(kode, /\.on\('riwayatGagal'/);
+    const blokWidget = kode.slice(kode.indexOf(".on('riwayatGagal'"));
+    const potong = blokWidget.slice(0, 900);
+    assert.ok(
+      !/removeItem/.test(potong),
+      'kegagalan riwayat menghapus sesi tamu yang masih sah'
+    );
+  });
+
+  it('galat yang muncul setelah percakapan dimulai ada tempatnya di layar', () => {
+    // `error` dulu hanya dirender di cabang formulir, jadi kegagalan setelah
+    // percakapan dimulai menyetel state yang tidak ada satu pun tempat
+    // menampilkannya.
+    const kode = fs.readFileSync(JALUR_WIDGET_C4, 'utf8');
+    const mulai = kode.indexOf('flex-1 flex flex-col min-h-0');
+    assert.ok(mulai !== -1, 'panel percakapan widget tidak ditemukan');
+    const blok = kode.slice(mulai, mulai + 900);
+    assert.match(blok, /\{error && \(/);
+    assert.match(blok, /role="alert"/);
+  });
+
+  it('kunci render pesan memakai id, bukan indeks array', () => {
+    // Riwayat disisipkan di ATAS daftar, jadi setiap pesan yang sudah tampil
+    // berpindah indeks — React lalu menganggap baris yang sama sebagai baris
+    // yang berbeda dan isi gelembungnya tertukar dengan pengirim yang salah.
+    const kode = kodeSajaWidget();
+    assert.match(kode, /messages\.map\(\(msg\) =>/);
+    assert.ok(!/key=\{i\}/.test(kode), 'indeks array masih dipakai sebagai kunci');
+  });
+
+  it('chat-server menjaga akses riwayat dengan penjaga yang sama seperti joinRoom', () => {
+    // Ini jalur BACA: tidak ada penulisan yang gagal dan tidak ada jejak yang
+    // tertinggal kalau penjaganya lupa dipasang. Satu id sesi orang lain sudah
+    // cukup untuk membaca seluruh percakapannya — nama, nomor telepon, dan apa
+    // pun yang ia ceritakan ke petugas.
+    const server = fs.readFileSync(JALUR_SERVER_C4, 'utf8');
+    const mulai = server.indexOf('socket.on("mintaRiwayat"');
+    const blok = server.slice(mulai, server.indexOf('socket.on("sendMessage"', mulai));
+
+    assert.match(blok, /canAccessSession\(identity, sessionId\)/);
+    assert.match(blok, /typeof sessionId !== "string"/);
+    // Kursornya dibaca dari database dan diikat ke sesinya, sama seperti di
+    // sisi Next.
+    assert.match(blok, /where: \{ id: sebelumId, sessionId \}/);
+    // Jawaban hanya ke socket peminta: `io.to(sessionId)` akan menyisipkan
+    // puluhan pesan lama ke kotak setiap tamu lain yang sedang terbuka.
+    assert.match(blok, /socket\.emit\("riwayatChat"/);
+    assert.ok(
+      !/io\.to\([^)]*\)\.emit\("riwayatChat"/.test(blok),
+      'riwayat disiarkan ke seluruh room, bukan ke peminta'
+    );
+    // [PRIVACY] Isi pesan pelanggan tidak ikut tercatat di log.
+    const logs = [...blok.matchAll(/console\.log\(([^\n]*)\)/g)].map((m) => m[1]);
+    for (const l of logs) {
+      assert.ok(
+        !/\.message/.test(l),
+        'isi pesan pelanggan ikut masuk ke log server'
+      );
+    }
   });
 });

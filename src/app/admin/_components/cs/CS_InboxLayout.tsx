@@ -3,8 +3,11 @@
 import { io } from "socket.io-client";
 import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Search, Loader2, MessageSquare, Send, ArrowRight } from 'lucide-react';
-import { getMessagesForSession } from '@/app/admin/(dashboard)/live-chat/actions';
+import { Search, Loader2, MessageSquare, Send, ArrowRight, ChevronUp } from 'lucide-react';
+import {
+    getMessagesForSession,
+    getRiwayatLebihLama,
+} from '@/app/admin/(dashboard)/live-chat/actions';
 import { alamatChat, PESAN_CHAT_BELUM_DIKONFIGURASI } from '@/lib/alamat-chat';
 import type { PesanChat, SesiChat } from '@/lib/tipe-chat';
 
@@ -161,24 +164,71 @@ const ChatRoom = ({
     messages,
     isLoading,
     adaRiwayatLebihLama,
+    memuatLama,
+    onMuatLama,
     onSendMessage,
 }: {
     session: SesiChat | null;
     messages: PesanChat[];
     isLoading: boolean;
     adaRiwayatLebihLama: boolean;
+    memuatLama: boolean;
+    onMuatLama: () => void;
     onSendMessage: (msg: string) => void;
 }) => {
     const [newMessage, setNewMessage] = useState("");
     const messagesEndRef = useRef<HTMLDivElement>(null);
+    const daftarRef = useRef<HTMLDivElement>(null);
 
-    const scrollToBottom = () => {
-        messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    };
+    // Tinggi daftar SEBELUM pesan lama disisipkan, dicatat saat tombolnya
+    // ditekan. Bukan kosmetik: menyisipkan 50 pesan di ATAS daftar menggeser
+    // seluruh isinya ke bawah, dan tanpa pemulihan ini CS yang baru saja
+    // menekan "muat pesan lama" melihat layarnya melompat ke bagian yang sama
+    // sekali lain — lalu menekan tombolnya lagi karena menyangka tidak
+    // terjadi apa-apa.
+    const tinggiSebelumRef = useRef<number | null>(null);
+
+    // Id pesan TERAKHIR pada render sebelumnya.
+    //
+    // Efek gulir di sini dulu berbunyi `useEffect(scrollToBottom, [messages])`:
+    // setiap perubahan array, apa pun sebabnya, menyeret panel ke dasar. Itu
+    // benar untuk pesan baru yang masuk dan SALAH untuk pesan lama yang
+    // disisipkan di atas — riwayat yang baru dimuat langsung tergulir keluar
+    // dari pandangan pada milidetik yang sama ia tiba.
+    const idTerakhirRef = useRef<string | null>(null);
 
     useEffect(() => {
-        scrollToBottom();
+        const daftar = daftarRef.current;
+        const tinggiSebelum = tinggiSebelumRef.current;
+        const idTerakhir = messages.length > 0 ? messages[messages.length - 1].id : null;
+
+        // Pesan lama baru saja disisipkan: pulihkan posisi baca, jangan
+        // menggulir ke dasar.
+        if (tinggiSebelum !== null) {
+            tinggiSebelumRef.current = null;
+            if (daftar) {
+                daftar.scrollTop += daftar.scrollHeight - tinggiSebelum;
+            }
+            idTerakhirRef.current = idTerakhir;
+            return;
+        }
+
+        // Gulir ke dasar hanya bila ujung daftar benar-benar berubah, yaitu
+        // ada pesan baru. Berpindah percakapan juga mengubahnya, dan itu
+        // memang perlu digulir.
+        if (idTerakhir !== idTerakhirRef.current) {
+            idTerakhirRef.current = idTerakhir;
+            messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
     }, [messages]);
+
+    const handleMuatLama = () => {
+        // Tingginya dicatat SEBELUM permintaan dikirim, bukan setelah
+        // jawabannya tiba: pada saat pesan lama sudah masuk ke state, tinggi
+        // daftarnya sudah berubah dan angka pembandingnya hilang.
+        tinggiSebelumRef.current = daftarRef.current?.scrollHeight ?? null;
+        onMuatLama();
+    };
 
     if (!session) {
         return (
@@ -216,24 +266,43 @@ const ChatRoom = ({
                     pun panel pengaturan percakapan di aplikasi ini untuk
                     dibukanya. */}
             </div>
-            <div className="flex-1 p-6 overflow-y-auto">
+            <div ref={daftarRef} className="flex-1 p-6 overflow-y-auto">
                 {isLoading ? (
                     <div className="flex justify-center items-center h-full">
                         <Loader2 className="animate-spin text-gray-400" />
                     </div>
                 ) : (
                     <>
-                    {/* Riwayat yang dipotong DINYATAKAN, bukan didiamkan.
-                        Kotak masuk hanya memuat 200 pesan terakhir; percakapan
-                        yang lebih panjang dari itu tampil seakan dimulai di
-                        tengah, dan CS yang membacanya dari atas menyimpulkan
-                        itu awal pembicaraan — lalu menjawab tanpa tahu apa yang
-                        sudah dijanjikan sebelumnya. */}
+                    {/* Riwayat yang dipotong tidak lagi hanya DINYATAKAN.
+                        Kotak masuk memuat 200 pesan terakhir, dan panel ini
+                        sejak awal sudah mengatakannya — tapi tanpa satu pun
+                        jalur untuk mengambil sisanya. Pemberitahuan tanpa jalan
+                        keluar: CS membaca percakapan panjang dari atas,
+                        menyimpulkan pesan ke-200 adalah awal pembicaraan, lalu
+                        menjawab tanpa tahu apa yang sudah dijanjikan. Sekarang
+                        ada tombolnya. */}
                     {adaRiwayatLebihLama && (
-                        <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] text-amber-800">
-                            Hanya 200 pesan terakhir yang ditampilkan. Percakapan ini punya
-                            riwayat yang lebih lama.
-                        </p>
+                        <div className="mb-4 text-center">
+                            <button
+                                type="button"
+                                onClick={handleMuatLama}
+                                disabled={memuatLama}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                                {memuatLama ? (
+                                    <Loader2 size={12} className="animate-spin" aria-hidden="true" />
+                                ) : (
+                                    <ChevronUp size={12} aria-hidden="true" />
+                                )}
+                                {memuatLama ? 'Memuat pesan lama…' : 'Muat pesan yang lebih lama'}
+                            </button>
+                            {/* Keterangan tetap ada di sampingnya: tombol
+                                sendiri tidak mengatakan bahwa yang tampil
+                                sekarang BUKAN awal percakapan. */}
+                            <p className="mt-1.5 text-[10px] text-gray-500">
+                                Percakapan ini punya riwayat yang lebih lama dari yang tampil.
+                            </p>
+                        </div>
                     )}
                     {messages.map((msg) => (
                         <div key={msg.id} className={`mb-4 flex ${msg.sender === 'USER' ? 'justify-end' : 'justify-start'}`}>
@@ -351,6 +420,7 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
   const [messages, setMessages] = useState<PesanChat[]>([]);
   const [adaRiwayatLebihLama, setAdaRiwayatLebihLama] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
+  const [memuatLama, setMemuatLama] = useState(false);
   const [galatChat, setGalatChat] = useState('');
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
 
@@ -470,6 +540,10 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
     }
     setSelectedSession(session);
     setIsLoadingMessages(true);
+    // Penanda muat-lama disetel ulang di sini. Tanpa ini, berpindah percakapan
+    // saat halaman lama sedang diminta meninggalkan tombolnya mati selamanya di
+    // percakapan yang baru dibuka.
+    setMemuatLama(false);
     // `getMessagesForSession` tidak lagi menelan galat databasenya sendiri
     // (dulu ia mengembalikan `null`, yang di sini menjadi `|| []` — percakapan
     // tampil kosong alih-alih gagal, dan CS menjawab pelanggan tanpa riwayat).
@@ -495,6 +569,56 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
       );
     } finally {
       setIsLoadingMessages(false);
+    }
+  };
+
+  const handleMuatLama = async () => {
+    const sesiId = selectedSession?.id;
+    // Pesan TERTUA yang sudah tampil adalah titik potongnya. `messages` selalu
+    // urut lama-ke-baru (server membaliknya di batas), jadi indeks 0.
+    const tertua = messages[0];
+    if (!sesiId || !tertua || memuatLama) return;
+
+    setMemuatLama(true);
+    try {
+      const halaman = await getRiwayatLebihLama(sesiId, tertua.id);
+
+      // Jawaban yang datang SETELAH CS berpindah percakapan dibuang.
+      //
+      // Tanpa penjaga ini, riwayat percakapan A disisipkan ke atas percakapan B
+      // yang sedang terbuka — dan karena keduanya tampil dengan gaya yang sama,
+      // tidak ada satu pun tanda di layar bahwa itu pesan orang lain. CS lalu
+      // menjawab B berdasarkan apa yang dikatakan A.
+      if (idTerpilihRef.current !== sesiId) return;
+
+      // Halaman kosong berarti riwayatnya benar-benar habis. `adaLagi` dari
+      // server tetap yang memutuskan tombolnya: halaman penuh tepat sebanyak
+      // batasnya BUKAN berarti sudah sampai awal percakapan.
+      setMessages((sebelumnya) => {
+        if (halaman.messages.length === 0) return sebelumnya;
+        // Id yang sudah ada disaring. Pesan lama tidak bisa berubah, tapi
+        // penekanan tombol yang ganda (dua klik cepat sebelum `memuatLama`
+        // terpasang di render berikutnya) akan menyisipkan halaman yang sama
+        // dua kali — dan `key={msg.id}` yang kembar membuat React merender
+        // salah satu baris tanpa pernah memperbaruinya.
+        const sudahAda = new Set(sebelumnya.map((m) => m.id));
+        const baru = halaman.messages.filter((m) => !sudahAda.has(m.id));
+        return baru.length === 0 ? sebelumnya : [...baru, ...sebelumnya];
+      });
+      setAdaRiwayatLebihLama(halaman.adaLagi);
+    } catch (e) {
+      // Kegagalan di sini TIDAK mengosongkan `messages`: yang gagal hanyalah
+      // penambahan riwayat lama, dan percakapan yang sudah tampil tetap benar.
+      // Membuangnya berarti mengubah kegagalan kecil menjadi kehilangan besar.
+      setGalatChat(
+        `Pesan lama gagal dimuat: ${
+          e instanceof Error ? e.message : 'galat tidak diketahui'
+        }. Pesan yang sudah tampil tetap benar; coba lagi.`
+      );
+    } finally {
+      // Tidak dijaga `idTerpilihRef`: penanda ini milik panel, bukan milik satu
+      // percakapan, dan `handleSelectSession` sudah menyetelnya ulang.
+      setMemuatLama(false);
     }
   };
 
@@ -584,6 +708,8 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
                 messages={messages}
                 isLoading={isLoadingMessages}
                 adaRiwayatLebihLama={adaRiwayatLebihLama}
+                memuatLama={memuatLama}
+                onMuatLama={handleMuatLama}
                 onSendMessage={handleSendMessage}
             />
         </div>

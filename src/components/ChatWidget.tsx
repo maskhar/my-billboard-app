@@ -66,6 +66,16 @@ export default function ChatWidget() {
         if (storedId && storedToken) {
             setSessionId(storedId);
             socketRef.current?.emit('joinRoom', storedId);
+            // Riwayat diminta HANYA di jalur tamu yang kembali, dan hanya
+            // setelah `joinRoom`. Sesi yang baru dibuat lewat
+            // `claimGuestSession` belum punya satu pun pesan, jadi memintanya
+            // di sana hanya menambah satu kueri yang selalu kosong.
+            //
+            // `sebelumId` tidak dikirim: yang diminta adalah halaman TERAKHIR,
+            // yaitu pesan terbaru. Widget ini tidak punya tombol muat-lama —
+            // tingginya 500px dan percakapan tamu jarang melewati satu halaman
+            // — jadi parameter itu memang tidak dipakai di sisi ini.
+            socketRef.current?.emit('mintaRiwayat', { sessionId: storedId });
         }
     });
 
@@ -94,19 +104,76 @@ export default function ChatWidget() {
         }
     });
 
-    // Pendengar `loadHistory` DIHAPUS dari sini.
+    // Riwayat percakapan, jawaban atas `mintaRiwayat` di atas.
     //
-    // chat-server tidak pernah menyiarkan peristiwa bernama itu — satu-satunya
-    // yang dipancarkannya adalah `authError`, `guestSessionClaimed`,
-    // `newMessage`, dan `presenceChanged`. Jadi pendengarnya tidak pernah
-    // berjalan sekali pun, dan keberadaannya membuat riwayat tampak seolah-olah
-    // sudah ditangani.
+    // Pendengar `loadHistory` yang dulu ada di sini SUDAH DIHAPUS, dan bukan
+    // diganti namanya begitu saja: chat-server tidak pernah memancarkan
+    // peristiwa bernama itu, jadi pendengarnya tidak pernah berjalan sekali pun
+    // sementara keberadaannya membuat riwayat tampak seolah-olah sudah
+    // ditangani. Yang tertutup sekarang adalah akibatnya: tamu yang kembali
+    // membawa `utero_chat_token` berhasil `joinRoom` tapi kotaknya KOSONG,
+    // seluruh riwayatnya ada di database tanpa satu pun jalur yang memintanya.
     //
-    // Akibat sebenarnya belum tertutup dan dicatat sebagai pekerjaan terpisah:
-    // tamu yang kembali membawa `utero_chat_token` berhasil `joinRoom`, tapi
-    // kotak percakapannya KOSONG — seluruh riwayatnya ada di database dan tidak
-    // ada jalur yang memintanya. Menambal itu berarti menambah endpoint atau
-    // peristiwa baru di chat-server, bukan mengubah tipe di file ini.
+    // Bentuknya diperiksa sebelum dipakai, alasannya sama seperti `newMessage`:
+    // ini jalur di luar pemeriksaan tipe apa pun, dan `message` yang bukan teks
+    // akan melempar di `renderMessageText` (`text.split`) lalu mematikan
+    // seluruh widget.
+    socketRef.current.on('riwayatChat', (masuk: unknown) => {
+        if (masuk === null || typeof masuk !== 'object') return;
+        const h = masuk as { sessionId?: unknown; pesan?: unknown };
+        // Riwayat milik sesi LAIN dibuang. Server hanya mengirimkannya ke socket
+        // yang memintanya, tapi satu socket bisa berpindah sesi lewat
+        // `claimGuestSession` — dan jawaban permintaan lama yang tiba setelah
+        // itu akan menempelkan percakapan sebelumnya ke kotak yang baru.
+        if (h.sessionId !== localStorage.getItem('utero_chat_id')) return;
+        if (!Array.isArray(h.pesan)) return;
+
+        const bersih: PesanChat[] = [];
+        for (const baris of h.pesan) {
+            if (baris === null || typeof baris !== 'object') continue;
+            const m = baris as Partial<PesanChat>;
+            if (typeof m.id !== 'string' || typeof m.message !== 'string') continue;
+            bersih.push({
+                id: m.id,
+                sessionId: typeof m.sessionId === 'string' ? m.sessionId : '',
+                sender: typeof m.sender === 'string' ? m.sender : 'USER',
+                message: m.message,
+                createdAt:
+                    typeof m.createdAt === 'string' ? m.createdAt : new Date().toISOString(),
+            });
+        }
+        if (bersih.length === 0) return;
+
+        // Disisipkan di ATAS, dan id yang sudah ada disaring. Riwayat diminta
+        // saat `connect` ketika daftarnya masih kosong, tapi pesan baru bisa
+        // tiba lewat `newMessage` sebelum jawabannya datang — dan `key` yang
+        // kembar membuat React merender salah satu baris tanpa memperbaruinya.
+        setMessages((sebelumnya) => {
+            const sudahAda = new Set(sebelumnya.map((m) => m.id));
+            const baru = bersih.filter((m) => !sudahAda.has(m.id));
+            return baru.length === 0 ? sebelumnya : [...baru, ...sebelumnya];
+        });
+    });
+
+    // Riwayat gagal dimuat, TERPISAH dari `authError`.
+    //
+    // Peristiwanya sendiri ada supaya penanganannya bisa berbeda: `authError` di
+    // atas menghapus `utero_chat_id` dan `utero_chat_token` lalu mengembalikan
+    // tamu ke formulir kosong, dan itu benar untuk sesi yang dicabut — tapi
+    // salah untuk riwayat yang tertolak jatah atau database yang sedang
+    // bermasalah. Sesinya masih sah; yang gagal hanya pemuatan riwayat, jadi
+    // yang dilakukan di sini cuma memberi tahu. Pesan yang baru dikirim tetap
+    // masuk lewat `newMessage`.
+    socketRef.current.on('riwayatGagal', (masuk: unknown) => {
+        const g = masuk !== null && typeof masuk === 'object'
+            ? (masuk as { message?: unknown })
+            : {};
+        setError(
+            typeof g.message === 'string' && g.message.trim() !== ''
+                ? g.message
+                : 'Riwayat percakapan gagal dimuat.'
+        );
+    });
 
     return () => {
       socketRef.current?.disconnect();
@@ -263,9 +330,24 @@ export default function ChatWidget() {
             </div>
           ) : (
             <div className="flex-1 flex flex-col min-h-0 bg-gray-50/50">
+              {/* `error` dulu hanya dirender di cabang formulir, jadi kegagalan
+                  yang terjadi SETELAH percakapan dimulai — riwayat yang gagal
+                  dimuat, misalnya — menyetel state yang tidak ada satu pun
+                  tempat menampilkannya. Tamu melihat kotak yang lebih kosong
+                  dari isi percakapannya dan tidak diberi tahu apa pun. */}
+              {error && (
+                <div role="alert" className="mx-3 mt-3 text-[11px] text-red-700 bg-red-50 border border-red-200 rounded-lg p-2.5 leading-relaxed">
+                  {error}
+                </div>
+              )}
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
-                {messages.map((msg, i) => (
-                  <div key={i} className={`flex ${msg.sender === 'USER' ? 'justify-end' : 'justify-start'}`}>
+                {/* `key={i}` diganti `key={msg.id}`. Indeks array sebagai kunci
+                    baru saja menjadi salah: riwayat disisipkan di ATAS daftar,
+                    jadi setiap pesan yang sudah tampil berpindah indeks — React
+                    lalu menganggap baris yang sama sebagai baris yang berbeda,
+                    dan isi gelembungnya tertukar dengan pengirim yang salah. */}
+                {messages.map((msg) => (
+                  <div key={msg.id} className={`flex ${msg.sender === 'USER' ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[85%] rounded-2xl p-3 text-xs shadow-sm leading-relaxed ${
                         msg.sender === 'USER' 
                             ? 'bg-blue-600 text-white rounded-br-none' 

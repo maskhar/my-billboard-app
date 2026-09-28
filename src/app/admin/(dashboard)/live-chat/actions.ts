@@ -4,7 +4,16 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
-import type { PesanChat, SesiChat, SesiChatLengkap } from '@/lib/tipe-chat';
+import type { HalamanPesanChat, PesanChat, SesiChat, SesiChatLengkap } from '@/lib/tipe-chat';
+import {
+  PESAN_PER_HALAMAN,
+  PESAN_TERAKHIR,
+  PILIH_PESAN,
+  potongHalaman,
+  syaratLebihLama,
+  takeDenganPengintip,
+  urutanTerbaruDulu,
+} from '@/lib/riwayat-chat';
 
 // Peran yang boleh membaca percakapan pelanggan.
 const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
@@ -20,15 +29,6 @@ const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
  * yang benar-benar dibaca.
  */
 const SESI_TERBARU = 50;
-
-/**
- * Pesan terakhir yang dimuat saat satu percakapan dibuka.
- *
- * Alasannya sama, dengan satu tambahan: `ChatMessage.message` tidak dibatasi
- * panjangnya di schema, jadi satu percakapan panjang bisa membawa payload yang
- * jauh lebih besar daripada seluruh daftar sesi.
- */
-const PESAN_TERAKHIR = 200;
 
 // Kolom yang MEMANG dipakai layar, ditulis eksplisit.
 //
@@ -49,13 +49,10 @@ const PILIH_SESI = {
   createdAt: true,
 } as const;
 
-const PILIH_PESAN = {
-  id: true,
-  sessionId: true,
-  sender: true,
-  message: true,
-  createdAt: true,
-} as const;
+// `PILIH_PESAN` dan batas-batasnya datang dari `@/lib/riwayat-chat`, bukan
+// ditulis ulang di sini: widget tamu memakai kolom yang sama persis, dan kolom
+// yang ditambahkan di satu sisi saja berarti dua bentuk `PesanChat` yang
+// berbeda mengalir ke satu tipe yang sama.
 
 // Tanggal diubah menjadi teks DI SINI, sebelum menyeberang.
 //
@@ -154,8 +151,13 @@ export async function getMessagesForSession(
     select: {
       ...PILIH_SESI,
       messages: {
-        orderBy: { createdAt: 'desc' },
-        take: PESAN_TERAKHIR + 1,
+        // `id` ikut di `orderBy`, bukan `createdAt` saja. Dua pesan bisa lahir
+        // pada milidetik yang sama — pesan tamu dan balasan BOT atasnya
+        // ditulis dalam satu penanganan `sendMessage` — dan urutan yang tidak
+        // menentukan di antara keduanya membuat kursor halaman berikutnya
+        // menunjuk ke tempat yang salah.
+        orderBy: urutanTerbaruDulu(),
+        take: takeDenganPengintip(PESAN_TERAKHIR),
         select: PILIH_PESAN,
       },
     },
@@ -163,17 +165,67 @@ export async function getMessagesForSession(
 
   if (!sesi) return null;
 
-  const adaRiwayatLebihLama = sesi.messages.length > PESAN_TERAKHIR;
-  const terbaruDuluan = adaRiwayatLebihLama
-    ? sesi.messages.slice(0, PESAN_TERAKHIR)
-    : sesi.messages;
+  // Pemotongnya bersama dengan jalur "muat lebih lama" dan dengan widget tamu.
+  // `+ 1` di `take` dan `slice().reverse()` di sini dulu ditulis di tempat ini
+  // saja; begitu ada pemanggil kedua, salah satunya akan lupa salah satunya.
+  const halaman = potongHalaman(sesi.messages, PESAN_TERAKHIR);
 
   return {
     ...sesi,
     createdAt: sesi.createdAt.toISOString(),
-    // `slice().reverse()`: `reverse()` mengubah array aslinya di tempat, dan
-    // array itu masih dipakai `adaRiwayatLebihLama` di atas.
-    messages: terbaruDuluan.slice().reverse().map(keTeksPesan),
-    adaRiwayatLebihLama,
+    messages: halaman.pesan.map(keTeksPesan),
+    adaRiwayatLebihLama: halaman.adaLagi,
   };
+}
+
+/**
+ * Satu halaman pesan yang LEBIH LAMA dari pesan tertua yang sudah tampil.
+ *
+ * Ini yang menutup pemberitahuan tanpa jalan keluar di kotak masuk: panel
+ * percakapan sudah mengatakan "hanya 200 pesan terakhir yang ditampilkan"
+ * sejak awal, tapi tidak ada satu pun jalur yang bisa mengambil sisanya. CS
+ * yang membaca percakapan panjang dari atas menyimpulkan pesan ke-200 adalah
+ * awal pembicaraan, lalu menjawab tanpa tahu apa yang sudah dijanjikan.
+ *
+ * `sebelumId` adalah id pesan tertua di layar, bukan nomor halaman. Alasannya
+ * ada di `syaratLebihLama`: percakapan ini bisa menerima pesan baru selagi CS
+ * membacanya, dan OFFSET yang dihitung dari ujung daftar akan menggeser
+ * seluruh halaman setiap kali itu terjadi.
+ */
+export async function getRiwayatLebihLama(
+  sessionId: string,
+  sebelumId: string
+): Promise<HalamanPesanChat> {
+  await pastikanBolehLihatChat();
+
+  if (!sessionId || !sebelumId) return { messages: [], adaLagi: false };
+
+  // Kursornya DIBACA DARI DATABASE, tidak diterima dari client.
+  //
+  // Dua hal sekaligus. Pertama, `createdAt` yang dikirim client adalah teks
+  // ISO yang bisa apa saja: nilai yang digeser satu milidetik membuat halaman
+  // melewatkan atau mengulang pesan, dan nilai yang tidak bisa diparse
+  // menghasilkan `Invalid Date` yang membuat SELURUH perbandingan `lt` palsu —
+  // Prisma menerimanya dan kembali tanpa satu baris pun, jadi riwayat tampak
+  // habis padahal tidak.
+  //
+  // Kedua, dan ini yang lebih penting: `where: { id, sessionId }` mengikat
+  // kursor pada sesi yang diminta. Tanpa itu, id pesan dari percakapan LAIN
+  // bisa dipakai sebagai titik potong — dan walaupun hasilnya tetap disaring
+  // `sessionId`, ia memberi tahu pemanggil kapan pesan orang lain ditulis.
+  const kursorBaris = await prisma.chatMessage.findFirst({
+    where: { id: sebelumId, sessionId },
+    select: { id: true, createdAt: true },
+  });
+  if (!kursorBaris) return { messages: [], adaLagi: false };
+
+  const baris = await prisma.chatMessage.findMany({
+    where: syaratLebihLama(sessionId, kursorBaris),
+    orderBy: urutanTerbaruDulu(),
+    take: takeDenganPengintip(PESAN_PER_HALAMAN),
+    select: PILIH_PESAN,
+  });
+
+  const halaman = potongHalaman(baris, PESAN_PER_HALAMAN);
+  return { messages: halaman.pesan.map(keTeksPesan), adaLagi: halaman.adaLagi };
 }

@@ -6,6 +6,14 @@ const { Server } = require("socket.io");
 const cors = require("cors");
 const { PrismaClient } = require("@prisma/client");
 const { rateLimit } = require("./rate-limit");
+const {
+  PESAN_RIWAYAT_TAMU,
+  PILIH_PESAN,
+  potongHalaman,
+  syaratLebihLama,
+  takeDenganPengintip,
+  urutanTerbaruDulu,
+} = require("./riwayat-chat");
 const { buatPelacakKehadiran, ROOM_PETUGAS } = require("./kehadiran");
 
 // [SECURITY] Daftar origin yang boleh mengakses chat server.
@@ -250,6 +258,17 @@ function tolakanBalasanAI(sessionId) {
 
   return null;
 }
+
+// Permintaan riwayat per socket per menit.
+//
+// Dibatasi karena `mintaRiwayat` adalah satu-satunya jalur yang menjalankan
+// kueri database atas permintaan langsung tamu TANPA menulis apa pun — jadi
+// tidak ada satu pun biaya alami yang memperlambatnya. Satu klien yang
+// memanggilnya dalam loop bisa menghabiskan koneksi pool Prisma dan membuat
+// pesan tamu lain berhenti tersimpan. 20 per menit jauh di atas kebutuhan
+// widget, yang hanya memintanya sekali saat kotak dibuka.
+const BATAS_RIWAYAT_PER_SOCKET = 20;
+const JENDELA_RIWAYAT_MS = 60 * 1000;
 
 // ---------------------------------------------------------------------------
 // Kehadiran tamu: diukur dari socket, bukan dikira-kira
@@ -524,6 +543,109 @@ io.on("connection", (socket) => {
   socket.on("leaveRoom", (sessionId) => {
     if (typeof sessionId !== "string") return;
     socket.leave(sessionId);
+  });
+
+  // Riwayat percakapan untuk klien yang baru membuka kotaknya.
+  //
+  // Ini yang menutup celah paling kasar di widget tamu: tamu yang kembali
+  // membawa `utero_chat_token` berhasil `joinRoom` dan melihat kotak KOSONG,
+  // walaupun seluruh percakapannya tersimpan. Ia lalu mengulang pertanyaan yang
+  // sudah dijawab, dan petugas membaca dua percakapan yang tampak terpisah.
+  //
+  // `sebelumId` opsional: tanpa itu yang dikirim adalah halaman TERAKHIR
+  // (pesan terbaru), dengan itu satu halaman yang lebih lama dari pesan
+  // tersebut.
+  socket.on("mintaRiwayat", async (masuk) => {
+    try {
+      const payload = masuk && typeof masuk === "object" ? masuk : {};
+      const sessionId = payload.sessionId;
+      const sebelumId =
+        typeof payload.sebelumId === "string" && payload.sebelumId
+          ? payload.sebelumId
+          : null;
+
+      // [SECURITY] Penjaga yang sama dengan `joinRoom` dan `sendMessage`.
+      // Tanpa ini, satu id sesi orang lain sudah cukup untuk MEMBACA seluruh
+      // percakapannya — nama, nomor telepon, dan apa pun yang ia ceritakan ke
+      // petugas. Ini jalur baca, jadi tidak ada penulisan yang gagal dan tidak
+      // ada jejak apa pun yang tertinggal kalau penjaganya lupa dipasang.
+      if (typeof sessionId !== "string" || !canAccessSession(identity, sessionId)) {
+        socket.emit("authError", {
+          event: "mintaRiwayat",
+          message: "Tidak berhak membaca riwayat room ini.",
+        });
+        console.warn(`Penolakan mintaRiwayat: socket ${socket.id} (${identity.type})`);
+        return;
+      }
+
+      // Penolakan jatah dipancarkan sebagai `riwayatGagal`, BUKAN `authError`.
+      //
+      // Bukan pilihan nama: widget tamu memperlakukan setiap `authError` sebagai
+      // tanda sesinya sudah dicabut — ia menghapus `utero_chat_id` dan
+      // `utero_chat_token` dari localStorage lalu memulai dari formulir kosong.
+      // Memakai `authError` di sini berarti tamu yang memuat ulang halamannya
+      // beberapa kali KEHILANGAN seluruh percakapannya, hanya karena meminta
+      // riwayat terlalu sering. Sesinya masih sah; yang ditolak permintaannya.
+      const jatah = rateLimit({
+        key: `chat-riwayat:${socket.id}`,
+        limit: BATAS_RIWAYAT_PER_SOCKET,
+        windowMs: JENDELA_RIWAYAT_MS,
+      });
+      if (!jatah.success) {
+        socket.emit("riwayatGagal", {
+          sessionId,
+          message: `Riwayat diminta terlalu sering. Coba lagi dalam ${jatah.retryAfterSeconds} detik.`,
+        });
+        return;
+      }
+
+      // Kursornya DIBACA DARI DATABASE, bukan diterima dari client — sama
+      // seperti `getRiwayatLebihLama` di sisi Next. `createdAt` kiriman client
+      // yang digeser satu milidetik membuat halaman melewatkan atau mengulang
+      // pesan, dan `where: { id, sessionId }` mengikat kursornya pada sesi yang
+      // diminta sehingga id pesan dari percakapan LAIN tidak bisa dipakai
+      // sebagai titik potong.
+      let kursor = null;
+      if (sebelumId) {
+        kursor = await prisma.chatMessage.findFirst({
+          where: { id: sebelumId, sessionId },
+          select: { id: true, createdAt: true },
+        });
+        // Kursor yang tidak ditemukan BUKAN diperlakukan sebagai "kirim halaman
+        // terakhir": itu akan mengirim ulang pesan terbaru ke klien yang sedang
+        // menggulir ke atas, yang lalu menampilkannya dua kali di tempat yang
+        // salah. Riwayatnya dinyatakan habis.
+        if (!kursor) {
+          socket.emit("riwayatChat", { sessionId, pesan: [], adaLagi: false });
+          return;
+        }
+      }
+
+      const baris = await prisma.chatMessage.findMany({
+        where: kursor ? syaratLebihLama(sessionId, kursor) : { sessionId },
+        orderBy: urutanTerbaruDulu(),
+        take: takeDenganPengintip(PESAN_RIWAYAT_TAMU),
+        select: PILIH_PESAN,
+      });
+
+      const halaman = potongHalaman(baris, PESAN_RIWAYAT_TAMU);
+      // Hanya ke socket peminta, BUKAN `io.to(sessionId)`: riwayat adalah
+      // jawaban atas permintaan satu klien, dan menyiarkannya ke room akan
+      // menyisipkan puluhan pesan lama ke kotak setiap tamu lain yang sedang
+      // terbuka di sesi itu.
+      socket.emit("riwayatChat", {
+        sessionId,
+        pesan: halaman.pesan,
+        adaLagi: halaman.adaLagi,
+      });
+      // [PRIVACY] Hanya metadata, jangan isi pesan pelanggan.
+      console.log(`Riwayat dikirim (n=${halaman.pesan.length}, adaLagi=${halaman.adaLagi})`);
+    } catch (error) {
+      console.error("Error handling mintaRiwayat:", error);
+      // `riwayatGagal` juga di sini, dengan alasan yang sama seperti di atas:
+      // database yang sedang bermasalah tidak boleh mengosongkan sesi tamu.
+      socket.emit("riwayatGagal", { message: "Riwayat percakapan gagal dimuat." });
+    }
   });
 
   socket.on("sendMessage", async ({ sessionId, message }) => {

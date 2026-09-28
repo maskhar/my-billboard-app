@@ -51,6 +51,20 @@ export type SesiChat = {
   messages: PesanChat[];
 };
 
+/**
+ * Satu halaman riwayat yang lebih lama, hasil menekan "muat pesan lama".
+ *
+ * `adaLagi` dibawa terpisah dari `messages.length`: halaman yang kembali
+ * dengan tepat sebanyak batasnya tidak berarti riwayatnya habis, dan tombolnya
+ * tidak boleh hilang karena kebetulan angkanya pas. Halaman KOSONG dengan
+ * `adaLagi: false` adalah satu-satunya yang berarti "sudah sampai awal
+ * percakapan".
+ */
+export type HalamanPesanChat = {
+  messages: PesanChat[];
+  adaLagi: boolean;
+};
+
 /** Sesi dengan seluruh riwayatnya, hasil membuka satu percakapan. */
 export type SesiChatLengkap = Omit<SesiChat, 'messages'> & {
   messages: PesanChat[];
