@@ -18,12 +18,9 @@
     "test:xendit": "node --conditions=react-server --test tests/xendit.test.cjs"
   },
   "dependencies": {
-    "@clerk/nextjs": "^6.36.5",
-    "@google/generative-ai": "^0.24.1",
     "@headlessui/react": "^2.2.9",
     "@prisma/client": "^5.22.0",
     "bcryptjs": "^3.0.3",
-    "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
     "leaflet": "^1.9.4",
     "lucide-react": "^0.300.0",
@@ -37,9 +34,7 @@
     "react-leaflet": "^4.2.1",
     "recharts": "^3.6.0",
     "server-only": "^0.0.1",
-    "sharp": "^0.34.5",
     "socket.io-client": "^4.8.1",
-    "tailwind-merge": "^3.4.0",
     "xendit-components-web": "0.0.35"
   },
   "devDependencies": {
