@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { 
     CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, 
     Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck
@@ -11,6 +12,7 @@ import Link from 'next/link';
 
 export default function OrderActions({ order, currentUserRole }: { order: any, currentUserRole: string }) {
   const router = useRouter();
+  const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
   
   // STATE MODALS
@@ -38,12 +40,27 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
   const updateStatus = async (newStatus: string, extraData: any = {}) => {
       setLoading(true);
             const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/orders/update-status`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id, newStatus, ...extraData })
-      });
-      setLoading(false);
+
+      try {
+          const res = await fetch(`${apiUrl}/api/orders/update-status`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ orderId: order.id, newStatus, adminEmail: session?.user?.email, ...extraData })
+          });
+
+          if (!res.ok) {
+              const data = await res.json().catch(() => null);
+              const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Error tidak diketahui');
+              alert("❌ Gagal update status: " + msg);
+              return;
+          }
+      } catch (e) {
+          alert("❌ Gagal update status: tidak bisa menghubungi server.");
+          return;
+      } finally {
+          setLoading(false);
+      }
+
       setShowTransferModal(false);
       setShowInstallModal(false);
       router.refresh();
