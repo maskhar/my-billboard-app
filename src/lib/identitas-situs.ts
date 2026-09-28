@@ -30,6 +30,7 @@
 import 'server-only';
 
 import { cache } from 'react';
+import { connection } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { NAMA_PENJUAL } from '@/lib/penjual';
 
@@ -67,6 +68,32 @@ export const IDENTITAS_BAWAAN: IdentitasSitus = {
  * langsung terlihat.
  */
 export const ambilIdentitasSitus = cache(async function ambilIdentitasSitus(): Promise<IdentitasSitus> {
+  // `connection()` MENANDAI pemanggilnya sebagai halaman yang dirender saat
+  // diminta, bukan saat build — dan tanpa ini seluruh maksud modul ini hilang
+  // tepat di production.
+  //
+  // Next me-prerender halaman tanpa penanda dinamis pada `next build`. Prisma
+  // bukan salah satu penanda itu, jadi `/about`, `/admin/login`, dan
+  // `generateMetadata` layout akar terbit sebagai `○ (Static)`: nama usaha yang
+  // tertulis di HTML-nya adalah nama yang ada di database PADA SAAT BUILD. Admin
+  // mengganti `siteName`, menekan Simpan, menerima "Pengaturan Disimpan" — dan
+  // halaman-halaman itu tetap menyebut nama lama sampai ada yang men-deploy
+  // ulang. Persis cacat yang modul ini dibuat untuk menutup, kembali lewat pintu
+  // yang berbeda, dan hanya di production: `next dev` merender setiap
+  // permintaan, jadi di mesin pengembang semuanya tampak benar.
+  //
+  // Ditaruh DI SINI, bukan sebagai `export const dynamic = 'force-dynamic'` di
+  // tiap halaman: pemanggil berikutnya akan lupa menuliskannya, dan lupanya
+  // tidak menghasilkan satu pun galat — hanya nama usaha yang basi.
+  //
+  // DI LUAR `try`, dan ini bukan pilihan gaya. Cara Next membatalkan prerender
+  // adalah MELEMPAR sebuah sinyal yang harus lolos sampai ke rendernya.
+  // `catch` di bawah akan menelannya, lalu mengembalikan `IDENTITAS_BAWAAN`
+  // dengan tenang — halamannya tetap dipanggang statis, kini berisi nama
+  // bawaan, dan satu-satunya jejaknya hanya baris `console.error` di log build
+  // yang mengaku "gagal membaca pengaturan situs".
+  await connection();
+
   try {
     const baris = await prisma.systemSetting.findUnique({
       where: { id: 'default_config' },

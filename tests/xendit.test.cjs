@@ -10253,12 +10253,17 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
   describe('Navbar tidak lagi menautkan ke halaman yang tidak ada', () => {
     const kode = kodeSaja('components', 'Navbar.tsx');
 
-    it('tautan /list dan /about dibuang karena rutenya tidak ada', () => {
-      // Keduanya membalas 404. Diverifikasi ulang di bawah terhadap isi
-      // src/app/ yang sebenarnya, supaya test ini tetap benar bila salah satu
-      // halaman itu nanti dibuat.
+    it('tautan /list tetap dibuang karena rutenya tidak ada', () => {
+      // `/list` membalas 404, dan tidak perlu ada: halaman depan sudah berupa
+      // peta + pencarian seluruh billboard PUBLISHED.
+      //
+      // `/about` DIKELUARKAN dari kasus ini. Dulu ia berdiri di sini bersama
+      // `/list` karena rutenya belum ada; sekarang `src/app/about/page.tsx`
+      // sudah ada, jadi tautannya justru WAJIB terpasang — dituntut di suite
+      // "halaman /about ada, dan tautannya ikut terpasang". Kasus di bawah
+      // tetap memverifikasi keduanya terhadap isi `src/app/` yang sebenarnya,
+      // jadi tautan ke rute yang tidak ada tetap tertangkap.
       assert.doesNotMatch(kode, /href="\/list"/);
-      assert.doesNotMatch(kode, /href="\/about"/);
     });
 
     it('setiap href internal di Navbar menunjuk rute yang benar-benar ada', () => {
@@ -11696,8 +11701,17 @@ describe('nama situs dibaca dari pengaturan, bukan ditulis di kode', () => {
   // kedua dari hasil kasus pertama.
   function muat(baris, { melempar = false } = {}) {
     const dicatat = [];
+    const sambungan = [];
     const modul = muatDenganModulPalsu(JALUR_IDENTITAS_SITUS, {
       'server-only': {},
+      // `connection()` menandai pemanggilnya sebagai halaman yang dirender saat
+      // diminta. Di luar Next ia tidak punya arti; yang perlu dicatat di sini
+      // hanya bahwa ia DIPANGGIL, dan kasusnya sendiri ada di bawah.
+      'next/server': {
+        connection: async () => {
+          sambungan.push(Date.now());
+        },
+      },
       '@/lib/prisma': {
         prisma: {
           systemSetting: {
@@ -11713,7 +11727,7 @@ describe('nama situs dibaca dari pengaturan, bukan ditulis di kode', () => {
       // hanya meneruskan fungsinya apa adanya.
       react: { cache: (fn) => fn },
     });
-    return { modul, dicatat };
+    return { modul, dicatat, sambungan };
   }
 
   it('nilai dari database dipakai apa adanya', async () => {
@@ -11787,6 +11801,59 @@ describe('nama situs dibaca dari pengaturan, bukan ditulis di kode', () => {
   it('nama panjang dipotong sebelum masuk prompt', () => {
     const { modul } = muat(null);
     assert.strictEqual(modul.namaUntukPrompt('a'.repeat(200)).length, 60);
+  });
+
+  it('halamannya ditandai dirender saat diminta, bukan saat build', async () => {
+    // Tanpa penanda ini seluruh maksud modul ini hilang tepat di production.
+    // Next me-prerender halaman yang tidak punya penanda dinamis pada
+    // `next build`, dan Prisma bukan salah satunya — jadi `/about`,
+    // `/admin/login`, dan `generateMetadata` layout akar terbit sebagai
+    // `○ (Static)` berisi nama usaha yang ada di database PADA SAAT BUILD.
+    // Admin menggantinya, menekan Simpan, dan tidak ada satu huruf pun yang
+    // berubah sampai ada yang men-deploy ulang. `next dev` merender setiap
+    // permintaan, jadi cacat ini tidak pernah terlihat di mesin pengembang.
+    const { modul, sambungan } = muat({ siteName: 'A', siteDesc: 'B' });
+    await modul.ambilIdentitasSitus();
+    assert.strictEqual(sambungan.length, 1);
+  });
+
+  it('penanda dinamis berada DI LUAR try — `catch` akan menelannya', async () => {
+    // Cara Next membatalkan prerender adalah MELEMPAR sinyal yang harus lolos
+    // sampai ke rendernya. Bila `connection()` dipanggil di dalam `try` yang
+    // sama dengan query-nya, `catch` di bawah menangkap sinyal itu dan
+    // mengembalikan `IDENTITAS_BAWAAN` dengan tenang: halamannya tetap
+    // dipanggang statis — sekarang berisi nama bawaan, bukan nama admin — dan
+    // satu-satunya jejaknya sebaris `console.error` di log build yang mengaku
+    // "gagal membaca pengaturan situs". Ini pernah terjadi, sekali.
+    const kode = kodeSajaIdentitas(JALUR_IDENTITAS_SITUS);
+    const posConnection = kode.indexOf('await connection()');
+    const posTry = kode.indexOf('try {');
+    assert.ok(posConnection !== -1, 'connection() tidak dipanggil sama sekali');
+    assert.ok(posTry !== -1, 'blok try tidak ditemukan');
+    assert.ok(
+      posConnection < posTry,
+      'connection() berada di dalam try — sinyal bailout prerender akan ditelan catch'
+    );
+  });
+
+  it('sinyal pembatalan prerender lolos, galat database tetap ditelan', async () => {
+    // Dua janji yang harus berlaku bersama: fungsi ini tidak pernah melempar
+    // karena database (pemanggil pertamanya `generateMetadata` layout akar,
+    // yang dijalankan untuk setiap halaman termasuk halaman galat), TAPI ia
+    // juga tidak boleh menahan sinyal pembatalan prerender.
+    const dilempar = new Error('bailout prerender');
+    const modul = muatDenganModulPalsu(JALUR_IDENTITAS_SITUS, {
+      'server-only': {},
+      'next/server': {
+        connection: async () => {
+          throw dilempar;
+        },
+      },
+      '@/lib/prisma': { prisma: { systemSetting: { findUnique: async () => null } } },
+      react: { cache: (fn) => fn },
+    });
+
+    await assert.rejects(() => modul.ambilIdentitasSitus(), (galat) => galat === dilempar);
   });
 });
 
@@ -15259,4 +15326,192 @@ describe('widget tamu memuat riwayatnya sendiri', () => {
       );
     }
   });
+});
+
+// ===========================================================================
+// HALAMAN `/about`: TAUTAN YANG DULU 404 SEKARANG PUNYA HALAMANNYA
+// ===========================================================================
+//
+// Navbar dulu memasang tautan `/about` sementara `src/app/about/` tidak ada.
+// Tautannya dibuang dengan alasan yang masih berlaku — halaman dulu, tautan
+// kemudian — dan suite ini menjaga urutan itu dari kedua arah: halamannya wajib
+// ada, dan tautannya wajib terpasang.
+
+const JALUR_ABOUT = path.join(__dirname, '..', 'src', 'app', 'about', 'page.tsx');
+const JALUR_NAVBAR = path.join(__dirname, '..', 'src', 'components', 'Navbar.tsx');
+
+describe('halaman /about ada, dan tautannya ikut terpasang', () => {
+  it('berkas halamannya benar-benar ada di src/app/about', () => {
+    // Inilah pemeriksaan yang dulu tidak ada: tautan `/about` di Navbar tidak
+    // pernah diperiksa terhadap keberadaan rutenya, jadi 404-nya baru terlihat
+    // setelah ada pengunjung yang mengkliknya.
+    assert.ok(fs.existsSync(JALUR_ABOUT), 'src/app/about/page.tsx tidak ada');
+  });
+
+  it('halamannya Server Component, tanpa JavaScript yang ikut ke browser', () => {
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.doesNotMatch(kode, /'use client'/);
+    assert.doesNotMatch(kode, /useState|useEffect/);
+  });
+
+  it('nama dan keterangan situs dibaca dari pengaturan, bukan dipatok', () => {
+    // Persoalan yang sama dengan halaman login admin: nama usaha yang ditulis
+    // langsung di kode membuat admin mengganti `siteName`, menekan Simpan, lalu
+    // menemukan halaman "Tentang Kami" masih menyebut nama lama.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.match(kode, /ambilIdentitasSitus\(\)/);
+    assert.doesNotMatch(kode, /Utero ?Cloud/);
+  });
+
+  it('identitas penjual diambil dari src/lib/penjual, bukan ditulis ulang', () => {
+    // `penjual.ts` ada justru karena nama, alamat, dan surel penjual pernah
+    // ditulis ulang di empat tempat dengan tiga isi yang berbeda — dan yang
+    // paling banyak dibaca pelanggan adalah dokumen penagihan. Halaman publik
+    // yang menuliskannya sendiri akan menjadi tempat kelima.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.match(kode, /from '@\/lib\/penjual'/);
+    assert.match(kode, /ALAMAT_PENJUAL/);
+    assert.match(kode, /EMAIL_PENJUAL/);
+    assert.match(kode, /BADAN_USAHA_PENJUAL/);
+
+    const sumberPenjual = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'penjual.ts'),
+      'utf8'
+    );
+    for (const nama of ['ALAMAT_PENJUAL', 'EMAIL_PENJUAL', 'BADAN_USAHA_PENJUAL']) {
+      const cocok = sumberPenjual.match(new RegExp(`${nama}\\s*=\\s*'([^']+)'`));
+      assert.ok(cocok, `${nama} tidak ditemukan di src/lib/penjual.ts`);
+      assert.ok(
+        !kode.includes(cocok[1]),
+        `nilai ${nama} ditulis ulang di halaman /about, bukan diimpor`
+      );
+    }
+  });
+
+  it('tidak ada satu pun nominal atau persentase tarif di halamannya', () => {
+    // PPN 11%, biaya admin Rp 50.000, dan DP 60% punya satu sumber di
+    // `api/booking/create/route.ts`, dan `CheckoutForm` sudah menjadi tempat
+    // kedua yang WAJIB sama dengannya. Menyebut angkanya di halaman perusahaan
+    // membuat tempat ketiga — yang paling mungkin terlupakan saat tarif
+    // bergeser, dan yang dibaca pembeli sebelum ia memesan.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.doesNotMatch(kode, /\d+\s*%/);
+    assert.doesNotMatch(kode, /Rp\s*[\d.]/);
+    assert.doesNotMatch(kode, /50[._]?000/);
+    assert.doesNotMatch(kode, /\b11\b|\b60\b/);
+  });
+
+  it('jenis media yang disebut sama dengan yang bisa disaring di peta', () => {
+    // Jenis yang dijanjikan di sini tapi tidak ada di filter pencarian adalah
+    // janji tanpa jalan telusur: pengunjung membacanya, membuka peta, dan tidak
+    // punya cara menemukan satu pun titiknya.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    const filter = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'components', 'SearchFilter.tsx'),
+      'utf8'
+    );
+    const opsi = [...filter.matchAll(/<option>([^<]+)<\/option>/g)]
+      .map((m) => m[1].trim())
+      .filter((v) => v !== 'Semua');
+    assert.ok(opsi.length >= 3, 'opsi jenis di SearchFilter tidak terbaca');
+
+    const disebut = [...kode.matchAll(/nama: '([^']+)'/g)].map((m) => m[1]);
+    assert.deepStrictEqual([...disebut].sort(), [...new Set(opsi)].sort());
+  });
+
+  it('kartu jenis media menautkan ke filternya, bukan ke halaman mati', () => {
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    // Nilainya di-`encodeURIComponent`: ia masuk ke query string, dan jenis
+    // media adalah teks yang boleh berisi spasi.
+    assert.match(kode, /href=\{`\/\?type=\$\{encodeURIComponent\(media\.nama\)\}`\}/);
+  });
+
+  it('daftar tahap pesanan memang urutan, dan dirender sebagai urutan', () => {
+    // Penomoran hanya sah bila isinya benar-benar berurutan. Di sini memang:
+    // menunggu bayar, terverifikasi, produksi, pasang, tayang — mengikuti
+    // `TRANSISI_SAH`. Karena itu wadahnya `<ol>`, bukan `<div>` bernomor:
+    // pembaca layar mengumumkan "daftar 4 butir" dan nomor urutnya.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.match(kode, /<ol\b/);
+    assert.match(kode, /<\/ol>/);
+    // Nomornya dihitung dari indeks, bukan diketik satu per satu — daftar yang
+    // nomornya ditulis manual akan salah urut begitu ada tahap yang disisipkan.
+    assert.match(kode, /\{nomor \+ 1\}/);
+  });
+
+  it('daftar berulang memakai key yang stabil, bukan indeks', () => {
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.doesNotMatch(kode, /key=\{(i|idx|index|nomor)\}/);
+    assert.match(kode, /key=\{media\.nama\}/);
+    assert.match(kode, /key=\{tahap\.judul\}/);
+  });
+
+  it('judul halamannya menumpang template layout akar, tidak menempel nama lagi', () => {
+    // Layout akar sudah menetapkan `template: '%s | {nama}'`. Halaman yang
+    // menempelkan nama usaha sendiri menghasilkan judul tab dengan nama yang
+    // tertulis dua kali.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.match(kode, /export async function generateMetadata\(\)/);
+    assert.match(kode, /title: 'Tentang Kami'/);
+    assert.doesNotMatch(kode, /template:/);
+  });
+
+  it('halamannya boleh diindeks — beda dengan halaman privat', () => {
+    // `METADATA_PRIVAT` dan `robots: { index: false }` dipakai halaman yang
+    // hanya berarti bagi satu orang (checkout, invoice, dashboard). Halaman
+    // perusahaan justru salah satu yang paling perlu ditemukan mesin pencari.
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.doesNotMatch(kode, /METADATA_PRIVAT/);
+    assert.doesNotMatch(kode, /index: false/);
+
+    const robots = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'app', 'robots.ts'),
+      'utf8'
+    );
+    assert.ok(!/'\/about'/.test(robots), '/about masuk daftar terlarang robots.txt');
+  });
+
+  it('halamannya punya tepat satu h1, dan Navbar-nya terpasang', () => {
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.strictEqual((kode.match(/<h1\b/g) || []).length, 1);
+    assert.match(kode, /<Navbar \/>/);
+  });
+
+  it('surel kontaknya bisa diklik, bukan teks mati', () => {
+    const kode = kodeSajaIdentitas(JALUR_ABOUT);
+    assert.match(kode, /href=\{`mailto:\$\{EMAIL_PENJUAL\}`\}/);
+  });
+
+  it('Navbar memasang tautan /about di desktop DAN di mobile', () => {
+    // Dua blok terpisah, dan itu sudah pernah menjadi sumber cacat di berkas
+    // ini: tautan yang hanya ada di satu blok hilang pada separuh pengunjung.
+    const kode = kodeSajaIdentitas(JALUR_NAVBAR);
+    const tautan = [...kode.matchAll(/href="\/about"/g)];
+    assert.strictEqual(tautan.length, 2, 'tautan /about tidak ada di kedua blok menu');
+  });
+
+  it('tautan /about versi mobile menutup menunya saat diklik', () => {
+    // Tanpa `onClick`, panel mobile tetap terbuka menutupi halaman baru setelah
+    // navigasi — pengunjung menyimpulkan kliknya tidak berfungsi lalu
+    // mengkliknya lagi. Komentar di Navbar sudah mencatat cacat ini untuk
+    // tautan yang lain.
+    const kode = kodeSajaIdentitas(JALUR_NAVBAR);
+    const baris = kode
+      .split('\n')
+      .filter((b) => b.includes('href="/about"'));
+    assert.strictEqual(baris.length, 2);
+    const mobile = baris.filter((b) => b.includes('setIsOpen(false)'));
+    assert.strictEqual(mobile.length, 1, 'tautan /about mobile tidak menutup menu');
+  });
+
+  // Pemeriksaan "setiap href Navbar menunjuk rute yang ada" TIDAK ditulis lagi
+  // di sini. Ia sudah ada di suite "UI mati dan UI yang berbohong dibuang", dan
+  // versi di sana lebih benar: ia menjelajah `src/app/` sambil MEMBUANG segmen
+  // grup `(dashboard)` — yang tidak muncul di URL — jadi `/admin` dikenalinya
+  // walaupun halamannya berada di `admin/(dashboard)/page.tsx`. Versi kedua di
+  // sini akan memvonis `/admin` sebagai tautan mati.
+  //
+  // Hal yang sama untuk `/list` dan tombol "Sewakan Tempat": keduanya sudah
+  // dijaga di suite itu, dan menuntutnya dua kali berarti dua tempat yang harus
+  // diubah bersama saat alurnya akhirnya ditulis.
 });

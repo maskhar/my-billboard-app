@@ -11,6 +11,11 @@
 //      peta + pencarian seluruh billboard yang PUBLISHED, jadi "List Billboard"
 //      dan "Home" menunjuk hal yang sama. Tautan `/list` dibuang dan "Home"
 //      diberi nama yang menjelaskan isinya.
+//
+//      `/about` SUDAH ADA sekarang (`src/app/about/page.tsx`), jadi tautannya
+//      dipasang kembali di menu desktop dan mobile — dalam commit yang sama
+//      dengan halamannya, sesuai urutan yang dituntut catatan di bawah.
+//      `/list` tetap tidak dipasang: alasannya tidak berubah.
 //   2. Dua tombol "Sewakan Tempat" (desktop dan mobile) tidak punya `onClick`,
 //      tidak punya `href`, dan tidak ada satu pun alur pendaftaran pemilik
 //      lahan di aplikasi ini. Tombol yang tidak melakukan apa pun lebih buruk
@@ -20,6 +25,8 @@
 // Keempatnya dibuang, bukan ditambal. Menambahkan halaman `/about` dan alur
 // "Sewakan Tempat" adalah fitur, dan fitur tidak boleh diselipkan lewat tautan
 // yang sudah dipasang sebelum halamannya ditulis.
+//
+// Alur "Sewakan Tempat" masih belum ada, jadi tombolnya masih tidak dipasang.
 
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -102,6 +109,7 @@ const Navbar = () => {
           {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas) */}
           <div className="hidden md:flex items-center space-x-8">
               <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Cari Billboard</Link>
+              <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
               {session && (
                 <Link href="/dashboard" className="text-sm font-medium text-gray-700 hover:text-utero transition">Pesanan Saya</Link>
               )}
@@ -217,6 +225,7 @@ const Navbar = () => {
 
                 {/* Link Navigasi Biasa */}
                 <Link href="/" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
+                <Link href="/about" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">ℹ️ Tentang Kami</Link>
             </div>
         </div>
       )}
