@@ -26,9 +26,10 @@ function showHeader() {
   console.log(dim + "Tekan angka menu untuk memilih (Tanpa Enter)" + reset);
   console.log("");
   console.log(` ${green}[1]${reset} Jalankan Server (npm run dev)`);
-  console.log(` ${green}[2]${reset} Push Database (npx prisma db push)`);
+  console.log(` ${green}[2]${reset} Terapkan Migrasi (npx prisma migrate deploy)`);
   console.log(` ${green}[3]${reset} Buka Database GUI (Prisma Studio)`);
   console.log(` ${green}[4]${reset} Generate Client (Prisma Generate)`);
+  console.log(` ${green}[5]${reset} Status Migrasi (npx prisma migrate status)`);
   console.log(` ${red}[0]${reset} Keluar`);
   console.log("");
   process.stdout.write(yellow + "Menunggu input... " + reset);
@@ -59,7 +60,7 @@ function handleKeypress(str, key) {
   // Cek Inputan
   const choice = key.name || key.sequence;
   
-  if (['1', '2', '3', '4'].includes(choice)) {
+  if (['1', '2', '3', '4', '5'].includes(choice)) {
     // Jalankan perintah
     runTask(choice);
   } else if (choice === '0') {
@@ -75,10 +76,46 @@ function runTask(choice) {
   let args = [];
 
   // Mapping Perintah
+  //
+  // MENU [2] DULU MENJALANKAN `prisma db push`, DAN ITU BERBAHAYA DI REPO INI.
+  //
+  // `db push` tidak membaca `prisma/migrations/` sama sekali. Ia MEMBANDINGKAN
+  // `schema.prisma` dengan keadaan database, lalu menulis perbedaannya
+  // langsung. Masalahnya: dua penjaga terkeras di database ini TIDAK BISA
+  // dinyatakan di `schema.prisma`, jadi dari sudut pandang pembanding itu
+  // keduanya adalah "objek asing yang tidak ada di schema":
+  //
+  //   · `booking_tanpa_tumpang_tindih` — `EXCLUDE USING gist`, satu-satunya
+  //     hal yang mencegah dua pesanan menyewa papan yang sama pada tanggal
+  //     yang bertabrakan.
+  //   · `payment_satu_tagihan_menganggur` — indeks unik bersyarat yang
+  //     membatasi satu tagihan menganggur per (pesanan, tujuan), yaitu yang
+  //     mencegah tagihan ganda.
+  //
+  // Komentar di berkas migrasinya sudah memperingatkan bahwa `migrate diff`
+  // menyarankan membuang keduanya. `db push` mengikuti saran itu TANPA
+  // membuat berkas migrasi, jadi tidak ada jejak apa pun tentang apa yang
+  // hilang — dan cacatnya baru terlihat sebagai pesanan bertumpang tindih
+  // atau pembayaran ganda, berhari-hari kemudian.
+  //
+  // Penggantinya `migrate deploy`: ia HANYA menjalankan berkas migrasi yang
+  // belum dijalankan, apa adanya, tanpa pernah membandingkan schema. Berkas
+  // migrasi di repo ini ditulis tangan justru supaya saran berbahaya itu tidak
+  // pernah ikut.
+  //
+  // (Cacat ini bukan teori: migrasi `20260929090000_token_reset_sandi` sempat
+  // ada di repo tanpa pernah diterapkan, sementara tiga berkas kode dan
+  // halaman "Lupa sandi" sudah hidup di atas tabel yang belum ada. Menu yang
+  // menawarkan `db push` alih-alih `migrate deploy` adalah sebabnya: ia tidak
+  // pernah memberi tahu bahwa ada migrasi yang menunggu.)
   if (choice === '1') args = ['run', 'dev'];
-  if (choice === '2') { command = 'npx'; args = ['prisma', 'db', 'push']; }
+  if (choice === '2') { command = 'npx'; args = ['prisma', 'migrate', 'deploy']; }
   if (choice === '3') { command = 'npx'; args = ['prisma', 'studio']; }
   if (choice === '4') { command = 'npx'; args = ['prisma', 'generate']; }
+  // [5] hanya membaca: memberi tahu migrasi mana yang belum diterapkan tanpa
+  // menyentuh apa pun. Ini yang dijalankan lebih dulu saat sesuatu terlihat
+  // aneh, bukan [2].
+  if (choice === '5') { command = 'npx'; args = ['prisma', 'migrate', 'status']; }
 
   // 1. Matikan Mode Raw (Supaya server/child process bisa terima input normal/Ctrl+C)
   if (process.stdin.isTTY) {

@@ -4,9 +4,39 @@ import { useState, useEffect } from 'react';
 import { CldUploadWidget, type CloudinaryUploadWidgetResults } from 'next-cloudinary';
 // `Image as ImageIcon` dibuang dari impor: ia tidak dirender di satu tempat pun
 // di berkas ini.
-import { Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
+import { Trash, Loader2, UploadCloud, Server, Cloud, CloudOff } from 'lucide-react';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
+
+// APA YANG DITUTUP DI SINI: menekan tab CDN MENJATUHKAN SELURUH FORM.
+//
+// `CldUploadWidget` memanggil pembacanya sendiri atas
+// `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` di dalam badan render, dan bila variabel
+// itu kosong ia MELEMPAR, bukan mengembalikan pesan:
+//
+//     "A Cloudinary Cloud name is required, please make sure
+//      NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME is set and configured"
+//
+// Lemparan di badan render Client Component ditangkap batas galat terdekat —
+// `src/app/admin/(dashboard)/error.tsx`. Akibatnya bagi admin yang sedang
+// mengisi form billboard: seluruh halaman form lenyap, SETIAP kolom yang sudah
+// ia ketik hilang, dan yang ia baca adalah "Data halaman ini gagal dimuat …
+// kegagalannya ada pada pengambilan data" — kalimat yang menunjuk ke arah yang
+// sama sekali salah, karena tidak ada satu pun pengambilan data yang gagal. Ia
+// akan memuat ulang, mengetik ulang, menekan tab yang sama, dan kehilangan
+// isiannya lagi.
+//
+// Variabelnya juga TIDAK pernah tercatat di `.env.example`, jadi setiap klon
+// baru repo ini punya cacat itu sejak menit pertama tanpa petunjuk apa pun.
+//
+// `NEXT_PUBLIC_*` DITANAM saat `next build`, bukan dibaca saat server jalan,
+// jadi pemeriksaan ini adalah perbandingan konstanta setelah build — sama
+// seperti `src/lib/alamat-chat.ts`. Bentuk penulisannya harus tetap PENUH
+// (`process.env.NEXT_PUBLIC_...`): destructuring atau `process.env[nama]` tidak
+// ditanam Next dan di browser selalu terbaca `undefined`, yang akan membuat tab
+// CDN terlihat "belum dikonfigurasi" walau sebenarnya terisi.
+const cloudinarySiap =
+    (process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || '').trim() !== '';
 
 interface ImageUploadProps {
     value: string;
@@ -130,16 +160,27 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
                 <p className="text-xs font-bold text-gray-500 uppercase mb-2">{label}</p>
                 {/* A. SWITCHER MODE (TAB) */}
                 <div className="flex bg-gray-100 p-1 rounded-lg mb-3">
-                    <button 
+                    <button
                         type="button"
                         onClick={() => setStorageMode('LOCAL')}
+                        aria-pressed={storageMode === 'LOCAL'}
                         className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-2 transition ${storageMode === 'LOCAL' ? 'bg-white shadow text-utero' : 'text-gray-500 hover:bg-gray-200'}`}
                     >
                         <Server size={14}/> Server Lokal (Compress)
                     </button>
-                    <button 
+                    {/* `aria-pressed` pada kedua tab: keduanya tombol biasa, jadi
+                        tanpa ini pembaca layar mengumumkan "Server Lokal, button"
+                        dan "CDN, button" tanpa satu pun tanda mana yang sedang
+                        aktif — padahal perbedaannya hanya warna latar.
+
+                        Tab CDN tidak dinonaktifkan saat konfigurasinya kosong:
+                        tombol mati tidak memberi tahu SEBABNYA, dan admin akan
+                        menyangka fiturnya rusak. Ia tetap bisa ditekan, dan yang
+                        muncul adalah keterangan apa yang harus diisi. */}
+                    <button
                         type="button"
                         onClick={() => setStorageMode('CLOUD')}
+                        aria-pressed={storageMode === 'CLOUD'}
                         className={`flex-1 py-2 text-xs font-bold rounded-md flex items-center justify-center gap-2 transition ${storageMode === 'CLOUD' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:bg-gray-200'}`}
                     >
                         <Cloud size={14}/> CDN (Cloudinary)
@@ -169,15 +210,26 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
                     )}
     
                     {/* --- MODE CLOUD --- */}
-                    {storageMode === 'CLOUD' && (
-                        <CldUploadWidget 
+                    {storageMode === 'CLOUD' && !cloudinarySiap && (
+                        <div className="w-full aspect-video flex flex-col items-center justify-center gap-2 border-2 border-dashed border-amber-300 bg-amber-50/60 p-4 rounded-xl text-center">
+                            <CloudOff size={32} className="text-amber-500" />
+                            <p className="font-bold text-sm text-amber-800">Unggahan CDN belum dikonfigurasi</p>
+                            <p className="text-xs text-amber-700 max-w-xs leading-relaxed">
+                                Pakai tab <span className="font-bold">Server Lokal</span> untuk sekarang. Agar
+                                CDN bisa dipakai, isi <span className="font-mono">NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME</span>{' '}
+                                lalu <span className="font-bold">build ulang</span>.
+                            </p>
+                        </div>
+                    )}
+                    {storageMode === 'CLOUD' && cloudinarySiap && (
+                        <CldUploadWidget
                             uploadPreset={process.env.NEXT_PUBLIC_CLOUDINARY_PRESET}
                             options={{ maxFiles: 1, resourceType: "image" }}
                             onSuccess={onCloudUpload}
                         >
                             {({ open }) => (
-                                <button 
-                                    type="button" 
+                                <button
+                                    type="button"
                                     onClick={() => open?.()}
                                     className="w-full aspect-video flex flex-col items-center justify-center gap-2 border-2 border-dashed border-blue-300 p-4 rounded-xl text-center text-blue-500 hover:border-blue-500 hover:bg-blue-50 transition"
                                 >

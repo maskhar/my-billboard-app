@@ -70,7 +70,7 @@
 | 5 | 🔶 sebagian | 5.5, 5.6, 5.7, 5.9, 5.12, 5.18–5.29, 5.30, 5.33 |
 | 6 | 🔶 sebagian | 6.12–6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
 | 7 | 🔶 sebagian | 7.17, 7.18 |
-| 8 | 🔶 sebagian | 8.5, 8.9, 8.11 |
+| 8 | 🔶 sebagian | 8.9 (8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.16 temuan baru, semuanya tuntas) |
 
 ### Commit terbaru (branch `feat/fondasi-xendit-aman`)
 
@@ -685,13 +685,17 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | 8.2 | Perbaiki error TypeScript (bertahap, setelah 8.1). **Tuntas: 0 galat.** | — | `[03]#13` | [x] |
 | 8.3 | Perbaiki script lint — `next lint` sudah dihapus di Next 16, `npm run lint` rusak | `package.json` | `[03]#13` | [x] |
 | 8.4 | Tambah security headers: CSP, HSTS, X-Frame-Options via `headers()` | `next.config.ts:27-33` | `[01]F-24` | [x] |
-| 8.5 | Ganti kredensial default & jangan publish port di `docker-compose.yml` | `docker-compose.yml:6-8` | `[01]F-31` | [ ] |
+| 8.5 | Ganti kredensial default & jangan publish port di `docker-compose.yml`. **Tuntas, dan lebih dalam dari yang diminta:** kredensial pindah ke `.env` lewat `${VAR:?pesan}` (compose MENOLAK jalan bila kosong — `POSTGRES_PASSWORD` kosong membuat image jatuh ke mode `trust`, yaitu menerima siapa pun tanpa sandi), port diikat `127.0.0.1:15436:5432`, dan healthcheck ditambah. Memperbaiki berkasnya saja TIDAK cukup: Postgres hanya memakai variabel itu saat volume masih kosong, jadi sandi lemahnya bertahan di volume dan harus diganti dengan `ALTER ROLE` — sudah dilakukan, sandi lama diverifikasi ditolak | `docker-compose.yml` | `[01]F-31` | [x] |
 | 8.6 | Hapus baris password Supabase yang dikomentari di `.env:10-12,20` | `.env` | `[01]F-32` | [x] |
 | 8.7 | Perbaiki nama file rusak `prisma.config-ts` (titik hilang → tidak pernah terbaca) | `prisma.config-ts` | `[03]#9` | [x] |
 | 8.8 | Hapus `@clerk/nextjs` bila tidak dipakai (terpasang berdampingan dengan `next-auth`) | `package.json` | `[03]#7` | [x] |
 | 8.9 | Audit dependency tak terpakai lain | `package.json` | `[03]#7` | [ ] |
 | 8.10 | Nasib `src/lib/dummy-data.ts` — **dihapus.** Data palsu memang berasal dari hardcode inline, bukan dari berkas itu, jadi penghapusannya tidak memperbaiki 5.9/5.12 (masih terbuka) | — | `[05]` | [x] |
-| 8.11 | Tentukan nasib `manager.js`, `.continue/` | — | `[03]#9` | [ ] |
+| 8.11 | ❌ **Rekomendasinya salah — tidak dikerjakan.** "Untrack `manager.js`" akan merusak `npm run menu` di setiap klon, karena `package.json:17` merujuknya dan `package.json` tidak boleh di-stage di fase ini. Berkasnya nol rahasia. Yang benar-benar salah di dalamnya adalah hal lain, dan sudah diperbaiki: menu `[2]` menjalankan `prisma db push` (lihat 8.13) | `manager.js` | `[03]#9` | [—] |
+| 8.13 | ⚠️ **Menu `[2]` menjalankan `prisma db push`, yang bisa membuang dua penjaga terkeras database.** `db push` tidak membaca `prisma/migrations/` sama sekali: ia membandingkan schema dengan database lalu menulis perbedaannya, tanpa berkas migrasi. `booking_tanpa_tumpang_tindih` (EXCLUDE USING gist) dan `payment_satu_tagihan_menganggur` (indeks unik bersyarat) TIDAK bisa dinyatakan di `schema.prisma`, jadi pembanding apa pun membacanya sebagai objek asing yang pantas dibuang — hilang tanpa jejak, dan cacatnya baru terlihat sebagai pesanan tumpang tindih atau tagihan ganda. Diganti `migrate deploy`, ditambah `[5] migrate status` yang hanya membaca | `manager.js:29,32,112,118` | temuan sendiri | [x] |
+| 8.14 | ⚠️ **Menekan tab "CDN (Cloudinary)" menjatuhkan seluruh form billboard.** `CldUploadWidget` MELEMPAR di badan render bila `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` kosong. Lemparan di badan render Client Component ditangkap batas galat terdekat, yang menukar SELURUH segmen rute: setiap kolom yang sudah diketik admin hilang, dan yang ia baca adalah "kegagalannya ada pada pengambilan data" — padahal tidak ada satu pun pengambilan data. Variabelnya juga tidak pernah tercatat di `.env.example`, jadi setiap klon punya cacat ini sejak menit pertama tanpa petunjuk | `src/components/ImageUpload.tsx:38,213-224` | temuan sendiri | [x] |
+| 8.15 | ⚠️ **Migrasi `20260929090000_token_reset_sandi` ter-commit tanpa pernah diterapkan**, sementara `request-reset/route.ts`, `reset-password/route.ts`, `sapu-token-reset.ts`, `forgot-password/page.tsx`, dan `FormResetSandi.tsx` semuanya sudah hidup di atas tabel `PasswordResetToken` yang belum ada. Sebabnya 8.13: menu yang menawarkan `db push` tidak pernah melaporkan ada migrasi yang menunggu. Diterapkan dengan `migrate deploy` (yang tidak pernah membandingkan schema); kedua penjaga diverifikasi utuh sebelum dan sesudah | `prisma/migrations/20260929090000_token_reset_sandi/` | temuan sendiri | [x] |
+| 8.16 | **`chat-server/.env` menunjuk port database yang salah** (`localhost:5432`, yaitu container proyek lain `central-postgres` yang tidak punya database maupun role proyek ini). Chat-server tidak pernah bisa terhubung ke database sejak awal. Diperbaiki ke `15436` | `chat-server/.env` (di luar Git) | temuan sendiri | [x] |
 | 8.12 | Mitigasi prompt injection Gemini — delimiter + sanitasi input user | `chat-server/index.js:65` | `[01]F-29` | [x] |
 
 ---
@@ -778,13 +782,13 @@ jalur lain.
 | **5.4** — sidebar admin tanpa pengganti mobile | Sudah ada drawer di `AdminShell.tsx:5` ("sidebar tetap di layar lebar, drawer di layar sempit"). Yang salah adalah **jalur** di laporan, bukan kodenya. |
 | `CheckoutForm` memformat uang sendiri | Formatnya benar; nominalnya datang sudah dihitung server. |
 | **`<img>` bukan `next/image`** (33 titik) | Dicatat sebagai utang performa, **bukan bug**. Tidak ada satu pun yang salah render. |
-| "Ada env var yang hilang" | `.env.example` **lengkap dan benar**. Yang ada justru sebaliknya: variabel mati yang belum dibersihkan (lihat catatan drift di bawah). |
+| "Ada env var yang hilang" | ⚠️ **Penilaian saya sendiri ini SALAH, dan saya yang mengoreksinya.** `.env.example` tidak lengkap: `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` tidak tercatat di dalamnya sama sekali, dan variabel kosong itulah yang menjatuhkan form billboard (8.14). Saya menyimpulkan "lengkap" dari kecocokan variabel yang dibaca **server**, tanpa memindai `process.env.NEXT_PUBLIC_*` di komponen client. Sekarang ada test yang memindai seluruh `src/` dan menuntut setiap `NEXT_PUBLIC_*` yang dibaca kode punya barisnya di `.env.example` — jenis kesimpulan ini tidak lagi bergantung pada ketelitian pembacaan saya. Variabel mati yang belum dibersihkan tetap berlaku (lihat catatan drift di bawah). |
 | `designFileUrl` sebagai jalur XSS | Tertutup oleh `src/lib/url-bukti.ts`. |
 | **DB-01c** — `sender` chat bisa diatur pengirim | Sudah ditentukan server: `chat-server/index.js:810` → `const sender = identity.type === "staff" ? "ADMIN" : "USER"`. |
 | **7.16** — kolom `otpCode` menganggur | Kolomnya **sudah dihapus** (task 3.27). |
 | **3.24** — password seed `123456` | Sudah diganti; `prisma/seed.ts:58-60` menjelaskan penggantinya. |
 | **DB-04** — "empat `DATABASE_URL` bertumpuk" | Tepat **satu**, dan menunjuk localhost. |
-| **8.11** — `manager.js` dianggap membocorkan rahasia | **Nol rahasia** di dalamnya; ia menu dev berbasis keypress. Yang tersisa murni kebersihan repo: berkasnya masih ter-track padahal dirujuk `package.json:17`, yang tidak boleh di-stage. |
+| **8.11** — `manager.js` dianggap membocorkan rahasia | **Nol rahasia** di dalamnya; ia menu dev berbasis keypress. **Rekomendasinya (untrack) juga salah:** `package.json:17` merujuknya, jadi untrack merusak `npm run menu` di setiap klon — dan `package.json` tidak boleh di-stage di fase ini. Laporannya menebak jenis masalah yang salah: yang sungguhan berbahaya di berkas itu adalah menu `[2]` yang menjalankan `prisma db push` (8.13), dan tidak satu pun laporan menyebutnya. |
 | **7.18** — rekomendasi "gerbang `isVerified`" | Temuan intinya benar (`isVerified` hanya di-`select` di `auth.ts:207`, tidak pernah jadi gerbang), tapi **rekomendasi laporannya salah arah** — memblokir login atas kolom itu akan mengunci seluruh akun existing. |
 | Sapuan 17 route admin: `role` bisa diatur pemanggil, kolom enum diberi string sembarang, uang mentah masuk `Prisma.Decimal`, nilai non-string di `where` | **Nol temuan** pada keempatnya. |
 

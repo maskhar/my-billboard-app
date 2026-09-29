@@ -23532,3 +23532,307 @@ describe('semantik dialog dan kelas animasi', () => {
     assert.match(isi, /animation: 'none'/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Konfigurasi yang hanya salah di mesin orang lain
+// ---------------------------------------------------------------------------
+//
+// Empat cacat di bawah punya satu sifat sama: tidak satu pun terlihat di mesin
+// yang sudah dikonfigurasi benar. Mereka hanya muncul pada klon baru, pada
+// mesin lain, atau pada database yang volume-nya sudah pernah dibuat — yaitu
+// tepat di tempat tidak ada yang sedang menonton.
+describe('konfigurasi lingkungan dan penjaga database', () => {
+  const AKAR_KONF = path.join(__dirname, '..');
+  const kJalur = (...bagian) => path.join(AKAR_KONF, ...bagian);
+
+  // Komentar dibuang seperti di `barisKode`: `.env.example`, `docker-compose.yml`,
+  // dan komentar di `ImageUpload.tsx` SENGAJA menyebut nama variabel, pemetaan
+  // port lama, dan potongan `process.env.NEXT_PUBLIC_` sebagai penjelasan.
+  // Pemindai yang ikut membaca komentar akan menganggap penjelasan itu sebagai
+  // kode — dan lulus tanpa ada satu baris kode sungguhan yang memenuhinya.
+  function kodeSajaKonf(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/^[ \t]*\{?\/\*[\s\S]*?\*\/\}?/gm, '')
+      .split(/\r?\n/)
+      .filter((teks) => !/^\s*(\/\/|\*|#)/.test(teks))
+      .join('\n');
+  }
+
+  describe('tab CDN tidak lagi menjatuhkan form billboard', () => {
+    const JALUR_UNGGAH = kJalur('src', 'components', 'ImageUpload.tsx');
+
+    it('penjaganya ada dan ditulis dalam bentuk yang DITANAM Next', () => {
+      // Bentuk penulisannya bukan gaya, melainkan syarat teknis. Next hanya
+      // mengganti ekspresi yang tertulis PENUH `process.env.NEXT_PUBLIC_X`
+      // dengan nilainya saat build. `const { NEXT_PUBLIC_X } = process.env`
+      // atau `process.env[nama]` TIDAK diganti, jadi di browser keduanya
+      // terbaca `undefined` — dan penjaga ini akan berkata "belum
+      // dikonfigurasi" pada proyek yang sebenarnya sudah terisi, selamanya.
+      const kode = kodeSajaKonf(JALUR_UNGGAH);
+      assert.match(
+        kode,
+        /process\.env\.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME/,
+        'nama cloud harus dibaca penuh sebagai `process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME`'
+      );
+      assert.doesNotMatch(
+        kode,
+        /\{[^}]*NEXT_PUBLIC_CLOUDINARY[^}]*\}\s*=\s*process\.env/,
+        'destructuring dari process.env tidak ditanam Next dan selalu undefined di browser'
+      );
+      assert.doesNotMatch(
+        kode,
+        /process\.env\[/,
+        'akses process.env dengan kurung siku tidak ditanam Next'
+      );
+    });
+
+    it('`CldUploadWidget` tidak pernah dirender saat nama cloud kosong', () => {
+      // Ini inti cacatnya. Pustakanya MELEMPAR di badan render bila nama cloud
+      // kosong; lemparan di badan render Client Component ditangkap batas galat
+      // terdekat, yang menukar SELURUH segmen rute — form billboard beserta
+      // setiap kolom yang sudah diketik admin. Karena itu penjaganya harus ada
+      // di syarat render, bukan di dalam widget-nya.
+      const kode = kodeSajaKonf(JALUR_UNGGAH);
+      assert.match(kode, /<CldUploadWidget/, '`<CldUploadWidget` tidak ditemukan lagi');
+      assert.match(
+        kode,
+        /storageMode === 'CLOUD' && cloudinarySiap && \(\s*<CldUploadWidget/,
+        'cabang render `CldUploadWidget` harus dijaga `cloudinarySiap`'
+      );
+      // Dan harus ada cabang lain yang menerangkan keadaan kosong. Tanpa ini
+      // tab CDN menjadi tombol yang tidak melakukan apa pun — sama
+      // membingungkannya dengan halaman yang hilang, hanya lebih sunyi.
+      assert.match(
+        kode,
+        /storageMode === 'CLOUD' && !cloudinarySiap/,
+        'keadaan "belum dikonfigurasi" harus punya cabang rendernya sendiri'
+      );
+    });
+
+    it('kedua tab mode membawa `aria-pressed`', () => {
+      // Keduanya `<button>` biasa yang bedanya hanya warna latar. Tanpa
+      // `aria-pressed` pembaca layar mengumumkan dua tombol yang identik dan
+      // tidak pernah menyebut mana yang sedang aktif.
+      const kode = kodeSajaKonf(JALUR_UNGGAH);
+      assert.match(kode, /aria-pressed=\{storageMode === 'LOCAL'\}/);
+      assert.match(kode, /aria-pressed=\{storageMode === 'CLOUD'\}/);
+    });
+  });
+
+  describe('`.env.example` mencatat setiap variabel yang dibaca kode', () => {
+    function berkasKode(dir, hasil = []) {
+      for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) {
+          if (entri.name === 'node_modules' || entri.name === '.next') continue;
+          berkasKode(penuh, hasil);
+          continue;
+        }
+        if (/\.(ts|tsx|js|mjs|cjs)$/.test(entri.name)) hasil.push(penuh);
+      }
+      return hasil;
+    }
+
+    it('tidak ada `NEXT_PUBLIC_*` yang dibaca kode tapi tak tercatat di contoh', () => {
+      // `NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME` TIDAK pernah ada di `.env.example`,
+      // dan itulah sebabnya cacat tab CDN di atas ada sejak menit pertama pada
+      // setiap klon: tidak ada satu pun tempat yang memberi tahu bahwa variabel
+      // itu perlu diisi. Variabel yang tak tercatat adalah cacat yang menunggu.
+      const contoh = fs.readFileSync(kJalur('.env.example'), 'utf8');
+      const dibaca = new Set();
+      for (const jalur of berkasKode(kJalur('src'))) {
+        for (const m of kodeSajaKonf(jalur).matchAll(
+          /process\.env\.(NEXT_PUBLIC_[A-Z0-9_]+)/g
+        )) {
+          dibaca.add(m[1]);
+        }
+      }
+      assert.ok(dibaca.size > 0, 'pemindainya tidak menemukan apa pun — polanya rusak');
+
+      const hilang = [...dibaca]
+        .filter((nama) => !new RegExp(`^${nama}=`, 'm').test(contoh))
+        .sort();
+      assert.deepEqual(
+        hilang,
+        [],
+        `dibaca kode tapi tidak ada di .env.example: ${hilang.join(', ')}`
+      );
+    });
+
+    it('`.env.example` memuat setiap variabel yang dibaca `docker-compose.yml`', () => {
+      // Compose sekarang MENOLAK jalan bila variabelnya kosong. Itu benar, dan
+      // justru karena itu contohnya harus lengkap: tanpa barisnya di
+      // `.env.example`, klon baru menabrak penolakan compose tanpa tahu nama
+      // variabel apa yang sebenarnya diminta.
+      const compose = kodeSajaKonf(kJalur('docker-compose.yml'));
+      const contoh = fs.readFileSync(kJalur('.env.example'), 'utf8');
+      const diminta = new Set(
+        [...compose.matchAll(/\$\{([A-Z_][A-Z0-9_]*)[:?}-]/g)].map((m) => m[1])
+      );
+      assert.ok(diminta.size >= 3, 'compose tidak lagi membaca variabel apa pun?');
+      const hilang = [...diminta]
+        .filter((nama) => !new RegExp(`^${nama}=`, 'm').test(contoh))
+        .sort();
+      assert.deepEqual(hilang, [], `tidak ada di .env.example: ${hilang.join(', ')}`);
+    });
+  });
+
+  describe('database pengembangan tidak terbuka ke jaringan', () => {
+    const JALUR_COMPOSE = kJalur('docker-compose.yml');
+
+    it('port Postgres diikat ke 127.0.0.1, bukan ke semua antarmuka', () => {
+      // `'15436:5432'` tanpa alamat berarti `0.0.0.0` — port ini terbuka di
+      // SETIAP antarmuka jaringan mesin, termasuk Wi-Fi kafe dan jaringan
+      // kantor. Docker menulis aturannya langsung ke tabel penerusan, jadi
+      // firewall Windows tidak selalu menahannya. Yang ada di balik port itu
+      // adalah data pesanan dan pembayaran sungguhan.
+      const kode = kodeSajaKonf(JALUR_COMPOSE);
+      const pemetaan = [...kode.matchAll(/^\s*-\s*'([^']*:\d+)'/gm)].map((m) => m[1]);
+      assert.ok(pemetaan.length > 0, 'tidak ada pemetaan port yang terbaca');
+      const terbuka = pemetaan.filter((p) => !p.startsWith('127.0.0.1:'));
+      assert.deepEqual(
+        terbuka,
+        [],
+        `pemetaan port tanpa ikatan 127.0.0.1: ${terbuka.join(', ')}`
+      );
+    });
+
+    it('kredensial dibaca dari `.env` dan compose menolak jalan bila kosong', () => {
+      // Dulu berkas ini menulis `user`/`password` apa adanya, di berkas yang
+      // ikut masuk Git. Dan `POSTGRES_PASSWORD` kosong BUKAN "tanpa sandi":
+      // image Postgres jatuh ke mode `trust`, yaitu MENERIMA SIAPA PUN TANPA
+      // SANDI. Karena itu keduanya wajib memakai `${VAR:?pesan}` yang membuat
+      // compose berhenti, bukan `${VAR:-}` atau `${VAR}` yang diam-diam
+      // meneruskan nilai kosong.
+      const kode = kodeSajaKonf(JALUR_COMPOSE);
+      for (const nama of ['POSTGRES_USER', 'POSTGRES_PASSWORD']) {
+        const baris = kode
+          .split(/\r?\n/)
+          .find((teks) => new RegExp(`^\\s*-\\s*${nama}=`).test(teks));
+        assert.ok(baris, `${nama} tidak lagi disetel di docker-compose.yml`);
+        assert.match(
+          baris,
+          new RegExp(`\\$\\{${nama}:\\?`),
+          `${nama} harus memakai \`\${${nama}:?pesan}\` agar compose berhenti saat kosong`
+        );
+      }
+      assert.doesNotMatch(
+        kode,
+        /^\s*-\s*POSTGRES_(?:USER|PASSWORD)=(?!\$\{)/m,
+        'kredensial tidak boleh ditulis apa adanya di berkas yang masuk Git'
+      );
+    });
+  });
+
+  describe('menu manager tidak menawarkan perintah yang membuang penjaga', () => {
+    const JALUR_MANAGER = kJalur('manager.js');
+
+    it('tidak satu pun menu menjalankan `prisma db push`', () => {
+      // `db push` tidak membaca `prisma/migrations/` sama sekali: ia
+      // MEMBANDINGKAN schema dengan keadaan database lalu menulis
+      // perbedaannya. Dua penjaga terkeras di database ini tidak bisa
+      // dinyatakan di `schema.prisma`, jadi pembanding apa pun membacanya
+      // sebagai objek asing yang pantas dibuang:
+      //
+      //   · `booking_tanpa_tumpang_tindih` (EXCLUDE USING gist) — penghalang
+      //     dua pesanan menyewa papan yang sama pada tanggal bertabrakan.
+      //   · `payment_satu_tagihan_menganggur` — indeks unik bersyarat yang
+      //     mencegah tagihan ganda.
+      //
+      // Dan karena `db push` tidak membuat berkas migrasi, tidak ada jejak
+      // apa pun tentang apa yang hilang.
+      const kode = kodeSajaKonf(JALUR_MANAGER);
+      assert.doesNotMatch(
+        kode,
+        /'db'\s*,\s*'push'|db\s+push/,
+        '`prisma db push` bisa membuang dua penjaga yang tidak ada di schema.prisma'
+      );
+      assert.match(
+        kode,
+        /'migrate'\s*,\s*'deploy'/,
+        'penerap migrasi harus `prisma migrate deploy`, yang tidak pernah membandingkan schema'
+      );
+    });
+
+    it('setiap tombol yang diterima punya perintahnya, dan sebaliknya', () => {
+      // Menu [5] ditambahkan ke tampilan bersama daftar tombolnya; bila salah
+      // satu saja tertinggal, hasilnya tombol yang tercetak di layar tapi
+      // hanya menggambar ulang menu. Kebalikannya lebih buruk: tombol yang
+      // diterima tanpa perintah menjalankan `npm` tanpa argumen sama sekali.
+      const kode = kodeSajaKonf(JALUR_MANAGER);
+      const daftar = kode.match(/\[((?:'\d'\s*,\s*)*'\d')\]\.includes\(choice\)/);
+      assert.ok(daftar, 'daftar tombol yang diterima tidak ditemukan');
+      const diterima = [...daftar[1].matchAll(/'(\d)'/g)].map((m) => m[1]).sort();
+      const dipetakan = [
+        ...new Set([...kode.matchAll(/choice === '(\d)'/g)].map((m) => m[1])),
+      ]
+        .filter((c) => c !== '0')
+        .sort();
+      assert.deepEqual(
+        diterima,
+        dipetakan,
+        `tombol diterima ${diterima.join(',')} tapi dipetakan ${dipetakan.join(',')}`
+      );
+    });
+  });
+
+  it('setiap direktori migrasi punya `migration.sql`-nya', () => {
+    // `migrate deploy` menjalankan berkas migrasi apa adanya. Direktori tanpa
+    // `migration.sql` membuatnya gagal di tengah jalan — sebagian migrasi sudah
+    // diterapkan, sebagian belum, dan riwayatnya tercatat setengah.
+    const dirMigrasi = kJalur('prisma', 'migrations');
+    const tanpaSql = fs
+      .readdirSync(dirMigrasi, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .filter((e) => !fs.existsSync(path.join(dirMigrasi, e.name, 'migration.sql')))
+      .map((e) => e.name);
+    assert.deepEqual(
+      tanpaSql,
+      [],
+      `direktori migrasi tanpa migration.sql: ${tanpaSql.join(', ')}`
+    );
+  });
+
+  it('tidak ada migrasi yang membuang penjaga tanpa memasangnya kembali', () => {
+    // Pemeriksaan ini yang menangkap saran `migrate diff` bila ia pernah ikut
+    // ter-commit: kedua penjaga di bawah tidak bisa dinyatakan di
+    // `schema.prisma`, jadi setiap alat berbasis pembandingan akan
+    // mengusulkannya untuk dibuang — dan usul itu terlihat wajar di diff.
+    //
+    // Yang dilarang adalah DROP tanpa pemasangan kembali, bukan DROP itu
+    // sendiri. `20260923140000_samakan_status_pengunci_tanggal` membuang
+    // `booking_tanpa_tumpang_tindih` lalu MEMASANGNYA KEMBALI di berkas yang
+    // sama, dengan daftar status pengunci yang diperbaiki — itu justru cara
+    // satu-satunya mengubah definisi `EXCLUDE`, dan melarangnya akan melarang
+    // perbaikan penjaga itu sendiri. Yang berbahaya adalah berkas yang
+    // membuangnya lalu berhenti di situ.
+    const dirMigrasi = kJalur('prisma', 'migrations');
+    const PENJAGA = ['payment_satu_tagihan_menganggur', 'booking_tanpa_tumpang_tindih'];
+    const pelanggar = [];
+    for (const entri of fs.readdirSync(dirMigrasi, { withFileTypes: true })) {
+      if (!entri.isDirectory()) continue;
+      const jalurSql = path.join(dirMigrasi, entri.name, 'migration.sql');
+      if (!fs.existsSync(jalurSql)) continue;
+      const sql = fs
+        .readFileSync(jalurSql, 'utf8')
+        .split(/\r?\n/)
+        .filter((teks) => !/^\s*--/.test(teks))
+        .join('\n');
+      for (const nama of PENJAGA) {
+        const dibuang = new RegExp(`DROP\\s+(?:INDEX|CONSTRAINT)[^;]*${nama}`, 'i').test(sql);
+        if (!dibuang) continue;
+        // Dipasang kembali: `ADD CONSTRAINT <nama>` atau `CREATE ... INDEX <nama>`.
+        const dipasangUlang =
+          new RegExp(`ADD\\s+CONSTRAINT\\s+"?${nama}"?`, 'i').test(sql) ||
+          new RegExp(`CREATE\\s+(?:UNIQUE\\s+)?INDEX[^;]*"?${nama}"?`, 'i').test(sql);
+        if (!dipasangUlang) pelanggar.push(`${entri.name}: ${nama}`);
+      }
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      `migrasi membuang penjaga tanpa memasangnya kembali: ${pelanggar.join('; ')}`
+    );
+  });
+});

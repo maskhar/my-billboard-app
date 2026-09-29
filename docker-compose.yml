@@ -1,21 +1,77 @@
-version: '3.8'
+# Postgres untuk PENGEMBANGAN LOKAL saja.
+#
+# Bukan berkas deploy: tidak ada layanan aplikasi di sini, dan tidak ada
+# `depends_on`. Satu-satunya tugasnya adalah menyediakan database yang ditunjuk
+# `DATABASE_URL` di `.env` saat `npm run dev`.
+#
+# `version:` dibuang. Docker Compose v2 mengabaikannya dan memperingatkan pada
+# setiap perintah ("the attribute `version` is obsolete").
 services:
   postgres:
     image: postgres:13
     restart: always
+
+    # KREDENSIAL DIBACA DARI `.env`, TIDAK LAGI DITULIS DI SINI.
+    #
+    # Sebelumnya berkas ini menulis `POSTGRES_USER=user` dan
+    # `POSTGRES_PASSWORD=password` apa adanya — dua nilai yang ada di baris
+    # pertama setiap daftar sandi umum, di berkas yang ikut masuk Git dan bisa
+    # dibaca siapa pun yang membuka repo ini.
+    #
+    # Yang membuatnya lebih dari sekadar rapi-rapi: Postgres HANYA memakai
+    # variabel ini saat volume datanya masih kosong. Begitu database sudah
+    # pernah dibuat, mengganti nilai di sini TIDAK mengganti sandi yang
+    # tersimpan — jadi sandi lemah itu bertahan di volume walau berkasnya sudah
+    # diperbaiki, dan satu-satunya cara menggantinya adalah `ALTER ROLE` di
+    # dalam database (atau membuang volume-nya, yang berarti membuang datanya).
+    #
+    # `${VAR:?pesan}` membuat compose MENOLAK jalan bila variabelnya kosong,
+    # bukan diam-diam memakai nilai kosong. Sandi kosong pada Postgres bukan
+    # "tidak ada sandi": `POSTGRES_PASSWORD` kosong membuat image-nya jatuh ke
+    # `trust`, yaitu MENERIMA SIAPA PUN TANPA SANDI.
+    #
+    # Nilainya harus SAMA dengan yang ada di `DATABASE_URL`. Bila berbeda,
+    # container tetap naik dengan sehat dan yang gagal adalah aplikasinya,
+    # dengan P1000 — galat yang menunjuk ke Prisma, bukan ke berkas ini.
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=utero-cloud-db
-    # Port 5432 di mesin ini sudah dipakai container Postgres milik proyek
-    # lain (`central-postgres`). Selama compose ini masih menulis '5432:5432',
-    # container di sini gagal naik — dan aplikasi diam-diam menyapa server
-    # milik proyek lain, yang menolaknya dengan P1000. Digeser ke 15436,
-    # mengikuti pola container database lain di mesin ini (15432-15435).
+      - POSTGRES_USER=${POSTGRES_USER:?POSTGRES_USER wajib diisi di .env (samakan dengan DATABASE_URL)}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi di .env — kosong membuat Postgres menerima koneksi tanpa sandi}
+      - POSTGRES_DB=${POSTGRES_DB:-utero-cloud-db}
+
+    # DIIKAT KE 127.0.0.1, BUKAN KE SEMUA ANTARMUKA.
+    #
+    # `'15436:5432'` tanpa alamat berarti `0.0.0.0` — port ini terbuka di
+    # SETIAP antarmuka jaringan mesin, termasuk Wi-Fi kafe dan jaringan kantor.
+    # Docker menulis aturannya langsung ke tabel penerusan, jadi firewall
+    # Windows tidak selalu menahannya. Hasilnya: database pengembangan, berisi
+    # data pesanan dan pembayaran sungguhan, bisa disapa siapa pun di jaringan
+    # yang sama — dan sampai perubahan di atas, dengan sandi `password`.
+    #
+    # `127.0.0.1` tetap cukup untuk `npm run dev` di mesin ini. Yang hilang
+    # hanya kemampuan menyapa database ini dari mesin LAIN, dan itu memang yang
+    # dituju.
+    #
+    # Port 15436 dipertahankan: 5432 di mesin ini sudah dipakai container
+    # proyek lain (`central-postgres`), dan selama compose ini menulis
+    # '5432:5432' container di sini gagal naik sementara aplikasi diam-diam
+    # menyapa server milik proyek lain, yang menolaknya dengan P1000. Pola
+    # 15432-15435 sudah dipakai container database lain di mesin ini.
     ports:
-      - '15436:5432'
+      - '127.0.0.1:15436:5432'
+
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+    # Tanpa ini "Up" hanya berarti prosesnya hidup, bukan bahwa ia sudah siap
+    # menerima kueri. Postgres menolak koneksi selama beberapa detik pertama
+    # saat memulihkan data, dan `npm run dev` yang dijalankan di detik itu
+    # gagal dengan galat koneksi yang terlihat seperti salah konfigurasi.
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   postgres_data:
