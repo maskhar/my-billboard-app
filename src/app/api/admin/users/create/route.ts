@@ -12,6 +12,7 @@ import bcrypt from 'bcryptjs';
 import { Role, daftarNilai, sahRole } from '@/lib/enum-guard';
 import { adalahDuplikatUnik } from '@/lib/db-error';
 import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -21,7 +22,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/users/create');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { role } = body;
 
     // 1. Validasi input dasar

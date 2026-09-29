@@ -11,6 +11,7 @@ import {
   sahPublishStatus,
 } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -20,7 +21,9 @@ export async function POST(req: Request) {
   }
 
   try {
-      const body = await req.json();
+      const hasilBody = await bacaBodyJson(req, 'admin/billboards/quick-update');
+      if (!hasilBody.ok) return hasilBody.jawaban;
+      const body = hasilBody.body;
       const { id: idMentah, status, publishStatus } = body;
 
       // Kedua enum di bawah sudah dijaga; `id` dulu hanya diperiksa

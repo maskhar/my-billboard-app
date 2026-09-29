@@ -10,6 +10,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Field yang boleh diubah lewat route ini. Sengaja ditulis eksplisit:
 // `role`, `password`, `email`, `isVerified`, dan kolom OTP TIDAK ada di sini.
@@ -36,7 +37,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/users/update-account');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { userId } = body;
 
     if (!userId || typeof userId !== 'string') {

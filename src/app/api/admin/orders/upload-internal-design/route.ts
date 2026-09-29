@@ -15,6 +15,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { urlBuktiSah } from "@/lib/url-bukti";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -24,14 +25,14 @@ export async function POST(req: Request) {
   }
 
   try {
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json({ message: "Body bukan JSON yang sah." }, { status: 400 });
-    }
-
-    const { orderId, designUrl } = (body ?? {}) as Record<string, unknown>;
+    // Dulu `try` lokal di sini, dengan `(body ?? {}) as Record<string, unknown>`
+    // di bawahnya: body `[1,2]`, `5`, atau `"teks"` lolos cast itu apa adanya dan
+    // baru tertahan pemeriksaan `typeof` per field. Penjaga bersama menolak bentuk
+    // yang bukan objek di pintu masuk, jadi tidak ada lagi dua pembaca body dengan
+    // dua pesan galat berbeda di repo ini. Lihat `src/lib/body-json.ts`.
+    const hasilBody = await bacaBodyJson(req, 'admin/orders/upload-internal-design');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const { orderId, designUrl } = hasilBody.body;
 
     // `orderId` dulu hanya diperiksa truthy, lalu diteruskan ke Prisma. Nilai
     // selain teks gagal di lapisan paling dalam sebagai "Gagal mengunggah

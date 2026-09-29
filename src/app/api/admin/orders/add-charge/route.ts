@@ -13,11 +13,12 @@ import { PaymentStatus, PaymentTujuan } from "@prisma/client";
 import { authOptions } from "@/lib/auth";
 import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
-import { bulat, keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
+import { uangDariBody, bulat, keAngka, lebihBesar, rupiah } from "@/lib/money";
 import { STATUS_BOLEH_BAYAR_LANJUTAN, sisaTambahan } from "@/lib/pembayaran";
 import { sapuTagihanKedaluwarsa } from "@/lib/tutup-tagihan";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { nomorPesanan } from "@/lib/nomor-pesanan";
+import { bacaBodyJson } from "@/lib/body-json";
 
 /** Penolakan yang sudah punya status HTTP-nya, dilempar dari dalam transaksi. */
 class GalatBiayaTambahan extends Error {
@@ -38,7 +39,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/orders/add-charge');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { orderId, amount } = body;
 
     // Keterangan biaya tampil di invoice pelanggan dan dikirim lewat email.
@@ -57,7 +60,7 @@ export async function POST(req: Request) {
     // disimpan ke kolom `Decimal(15, 2)` — persis kebalikan dari alasan kolom
     // itu dibuat Decimal. Nilai seperti 1.005 dibulatkan ke arah yang tidak
     // bisa diduga. `keDecimal` menjaga angkanya apa adanya sampai ke database.
-    const nominal = keDecimal(amount);
+    const nominal = uangDariBody(amount);
     if (!lebihBesar(nominal, 0)) {
         return NextResponse.json({ message: "Jumlah biaya tidak valid" }, { status: 400 });
     }

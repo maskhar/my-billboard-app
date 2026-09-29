@@ -6,22 +6,32 @@
 // -------------------
 // `await req.json()` MELEMPAR untuk body yang bukan JSON — termasuk body yang
 // kosong, yang terpotong di tengah jalan, dan `Content-Type` apa pun yang isinya
-// bukan JSON. Di enam route, panggilan itu berada DI LUAR `try`:
+// bukan JSON. Cacatnya muncul dalam dua bentuk:
 //
-//     src/app/api/admin/chat/close/route.ts
-//     src/app/api/admin/chat/join/route.ts
-//     src/app/api/admin/chat/reply/route.ts
-//     src/app/api/admin/settings/route.ts
-//     src/app/api/admin/update-order/route.ts
-//     src/app/api/booking/request-refund/route.ts
+//   - Di ENAM route, panggilan itu berada DI LUAR `try` mana pun. Lemparan tanpa
+//     penangkap dijawab Next sebagai galat runtime, bukan 400, dan jejaknya masuk
+//     log sebagai KERUSAKAN SERVER. Jadi permintaan yang salah bentuk terbaca
+//     sama seperti database yang tumbang: tiap body rusak menambah satu baris
+//     palsu ke tempat yang dilihat orang saat mencari kerusakan sungguhan.
 //
-// Lemparan tanpa penangkap dijawab Next sebagai galat runtime, bukan 400, dan
-// jejaknya masuk log sebagai KERUSAKAN SERVER. Jadi permintaan yang salah bentuk
-// terbaca sama seperti database yang tumbang: tiap body rusak menambah satu
-// baris palsu ke tempat yang dilihat orang saat mencari kerusakan sungguhan.
-// Catatan yang sama sudah ditulis di
-// `src/app/api/admin/billboards/rollback/route.ts`, tempat cacat ini pertama
-// ditutup — hanya saja di sana ditutup dengan satu `try` lokal.
+//   - Di DUA PULUH TIGA route lain, panggilan itu ada di dalam `try` yang
+//     melingkupi seluruh handler. Lemparannya tertahan, tapi `catch`-nya menjawab
+//     500 (20 route) atau 409 (`admin/billboards/rollback`, `admin/users/create`,
+//     `booking/create`, `register`) — dan pemanggil yang melihat 500 atau 409
+//     akan MENGULANG permintaan yang tidak akan pernah berhasil.
+//
+// Seluruh dua puluh sembilan route sekarang membaca body lewat file ini, dan satu
+// gerbang di `tests/xendit.test.cjs` membaca seluruh `src/app/api` dari disk
+// supaya route yang belum ada hari ini tetap terjaga. Satu-satunya pengecualian
+// adalah `xendit/webhook`, yang menjawab provider dan karena itu perlu kode galat
+// mesinnya sendiri (`PAYLOAD_TIDAK_SAH`) beserta `Cache-Control: no-store`.
+//
+// Lubang yang paling lama tersembunyi bukan salah satu di antara keduanya: karena
+// `req.json()` bertipe `any`, nilai mentah dari browser masuk ke `keDecimal()`
+// dan `new Date()` TANPA satu keluhan compiler pun. Begitu body bertipe
+// `Record<string, unknown>`, lima titik itu langsung ditolak `tsc` — lihat
+// `uangDariBody` di `src/lib/money.ts` dan pemeriksaan `startDateString` di
+// `src/app/api/booking/create/route.ts`.
 //
 // KENAPA BUKAN SEKADAR MEMBUNGKUSNYA DENGAN `try` YANG LEBIH BESAR
 // ---------------------------------------------------------------

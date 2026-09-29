@@ -27,6 +27,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { bacaIdentitasPenyewa } from '@/lib/identitas-penyewa';
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -36,7 +37,9 @@ export async function POST(req: Request) {
     }
 
     try {
-        const body = await req.json();
+        const hasilBody = await bacaBodyJson(req, 'user/update-profile');
+        if (!hasilBody.ok) return hasilBody.jawaban;
+        const body = hasilBody.body;
 
         // `perluFaktur: false` — NPWP tidak wajib di halaman pengaturan. Bila
         // terisi ia tetap disimpan, sama seperti di checkout.

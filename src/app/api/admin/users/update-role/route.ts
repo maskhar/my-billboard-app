@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Role, daftarNilai, sahRole } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -15,7 +16,9 @@ export async function POST(req: Request) {
     }
 
     try {
-        const { userId: userIdMentah, newRole } = await req.json();
+        const hasilBody = await bacaBodyJson(req, 'admin/users/update-role');
+        if (!hasilBody.ok) return hasilBody.jawaban;
+        const { userId: userIdMentah, newRole } = hasilBody.body;
 
         // `newRole` sudah dijaga `sahRole` di bawah; `userId` dulu hanya
         // diperiksa keberadaannya. Objek selalu truthy, jadi `{"not":""}`

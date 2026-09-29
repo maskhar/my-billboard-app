@@ -34,7 +34,7 @@ import { PaymentStatus, PaymentTujuan } from "@prisma/client";
 import { authOptions } from "@/lib/auth";
 import { amankanHtml } from "@/lib/html";
 import { prisma } from "@/lib/prisma";
-import { bulat, keAngka, keDecimal, lebihBesar, rupiah } from "@/lib/money";
+import { uangDariBody, bulat, keAngka, lebihBesar, rupiah } from "@/lib/money";
 import {
   STATUS_BOLEH_BAYAR_LANJUTAN,
   sisaTagihan,
@@ -42,6 +42,7 @@ import {
 } from "@/lib/pembayaran";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { nomorPesanan } from "@/lib/nomor-pesanan";
+import { bacaBodyJson } from "@/lib/body-json";
 
 /** Penolakan yang sudah punya status HTTP-nya, dilempar dari dalam transaksi. */
 class GalatCatatPembayaran extends Error {
@@ -62,7 +63,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/orders/record-payment');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { orderId, amount } = body;
 
     // Keterangan cara pembayaran ikut tercetak di surat ke pembeli. Dipotong dan
@@ -80,7 +83,7 @@ export async function POST(req: Request) {
 
     // `parseFloat` akan mengubah nominal menjadi pecahan basis 2 sebelum masuk
     // kolom `Decimal(15,2)` — persis kebalikan dari alasan kolom itu Decimal.
-    const nominal = keDecimal(amount);
+    const nominal = uangDariBody(amount);
     if (!lebihBesar(nominal, 0)) {
       return NextResponse.json({ message: "Nominal pembayaran tidak valid." }, { status: 400 });
     }

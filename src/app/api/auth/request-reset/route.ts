@@ -42,6 +42,7 @@ import {
   tautanResetSandi,
   terbitkanTokenReset,
 } from '@/lib/reset-sandi';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // DUA KUNCI, DUA PENYALAHGUNAAN YANG BERBEDA — pola yang sama dengan
 // `src/lib/auth.ts`, dan di sini keduanya lebih perlu:
@@ -98,7 +99,9 @@ export async function POST(req: Request) {
       }
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'auth/request-reset');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // Dinormalkan sebelum dijadikan kunci pembatas DAN sebelum dicari, sama
     // seperti `auth.ts` dan `api/register`. Tanpa ini `Budi@X.test` dan

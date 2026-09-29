@@ -16,6 +16,7 @@ import {
   hitungTenggatPembayaran,
   sapuPesananKedaluwarsa,
 } from "@/lib/transisi-status";
+import { bacaBodyJson } from "@/lib/body-json";
 
 // ============================================================================
 // TARIF — nilainya dari `src/lib/tarif.ts`, penerapannya di sini.
@@ -78,7 +79,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: "Admin dilarang membuat pesanan." }, { status: 403 });
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'booking/create');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // `totalPrice` dan `dpAmount` SENGAJA tidak diambil dari body. Bila suatu
     // saat ada yang menambahkannya kembali ke sini, harganya kembali ditentukan
@@ -133,6 +136,18 @@ export async function POST(req: Request) {
     // Tanggal mulai juga datang mentah dari browser. `new Date("halo")`
     // menghasilkan Invalid Date, yang lolos sampai ke Prisma dan menggagalkan
     // pemesanan dengan pesan yang tidak menjelaskan apa pun.
+    //
+    // TIPENYA diperiksa sebelum `new Date`, bukan hanya hasilnya. Selama body
+    // masih bertipe `any`, `new Date(startDateString)` menerima apa pun — dan
+    // dua bentuk di antaranya LOLOS pemeriksaan `Number.isNaN` di bawah alih-alih
+    // ditolak: `new Date([])` menghasilkan 1 Januari 1970 (tanggal sah di masa
+    // lalu, jadi tertangkap gerbang berikutnya) dan `new Date(1)` menghasilkan
+    // 1 Januari 1970 juga. Yang berbahaya adalah ANGKA besar: `new Date(1e12)`
+    // adalah tanggal sah di tahun 2001, dan angka yang lebih besar lagi mengunci
+    // billboard di tanggal yang tidak pernah diketik siapa pun.
+    if (typeof startDateString !== 'string' || startDateString.trim() === '') {
+        return NextResponse.json({ message: "Tanggal mulai tayang tidak valid." }, { status: 400 });
+    }
     const startDate = startOfDay(new Date(startDateString));
     if (Number.isNaN(startDate.getTime())) {
         return NextResponse.json({ message: "Tanggal mulai tayang tidak valid." }, { status: 400 });

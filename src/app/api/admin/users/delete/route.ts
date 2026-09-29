@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { idDariBody } from "@/lib/id-dari-body";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -17,7 +18,9 @@ export async function POST(req: Request) {
   }
 
   try {
-      const { id: idMentah } = await req.json();
+      const hasilBody = await bacaBodyJson(req, 'admin/users/delete');
+      if (!hasilBody.ok) return hasilBody.jawaban;
+      const { id: idMentah } = hasilBody.body;
 
       // TIPENYA, BUKAN KEBERADAANNYA — dan di route inilah selisihnya paling
       // mahal. `id` dulu diteruskan apa adanya ke `deleteMany` di bawah, dan

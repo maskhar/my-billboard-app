@@ -19,6 +19,7 @@ import { prisma } from '@/lib/prisma';
 import bcrypt from 'bcryptjs';
 import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
 import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Password lama diuji di sini, dan ujiannya gratis bagi penyerang yang sudah
 // memegang sesi curian: tanpa pembatas ia bisa menebak password lama sebanyak
@@ -48,7 +49,9 @@ export async function POST(req: Request) {
             );
         }
 
-        const body = await req.json();
+        const hasilBody = await bacaBodyJson(req, 'user/change-password');
+        if (!hasilBody.ok) return hasilBody.jawaban;
+        const body = hasilBody.body;
 
         // TIPENYA, bukan keberadaannya. `if (!currentPassword)` meloloskan objek
         // (`{}` selalu truthy), dan nilai itu lalu sampai ke `bcrypt.compare`

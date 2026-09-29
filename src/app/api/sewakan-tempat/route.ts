@@ -34,6 +34,7 @@ import { prisma } from '@/lib/prisma';
 import { keE164, normalisasiNomorLokal } from '@/lib/telepon';
 import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
 import { asalPermintaan } from '@/lib/asal-permintaan';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Batasnya lebih ketat daripada pendaftaran akun (10/jam): satu orang menawarkan
 // satu atau dua titik, tidak lima. Kuncinya alamat asal dan bukan nomor WA —
@@ -91,7 +92,9 @@ export async function POST(req: Request) {
       }
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'sewakan-tempat');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // Allowlist eksplisit. `status` dan `catatanAdmin` tidak ada di daftar ini
     // dan karena itu tidak bisa dikirim dari luar.

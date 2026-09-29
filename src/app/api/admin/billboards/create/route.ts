@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { keDecimal, lebihBesar } from "@/lib/money";
+import { uangDariBody, lebihBesar } from "@/lib/money";
 import { pisahkanOpsi } from "@/lib/opsi-billboard";
 import { susunSpecs } from "@/lib/spesifikasi-billboard";
 import {
@@ -19,6 +19,7 @@ import {
   sahBillboardStatus,
   sahPublishStatus,
 } from "@/lib/enum-guard";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   try {
@@ -34,7 +35,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/billboards/create');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // 2. MENYUSUN SPESIFIKASI JADI SATU PAKET
     //
@@ -87,7 +90,7 @@ export async function POST(req: Request) {
     // Harga: `Number(body.price)` mengubah "" menjadi 0 dan "12jt" menjadi
     // NaN. NaN ditolak kolom Decimal dan muncul ke admin sebagai "Gagal
     // menyimpan data" tanpa keterangan, setelah seluruh form diisi.
-    const harga = keDecimal(body.price);
+    const harga = uangDariBody(body.price);
     if (!lebihBesar(harga, 0)) {
         return NextResponse.json(
             { message: "Harga sewa harus diisi dengan angka lebih dari 0" },

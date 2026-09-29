@@ -3,9 +3,12 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { safeJsonParse } from "@/lib/safe-json";
+import { safeJsonParse, arrayDariJson } from "@/lib/safe-json";
+import { specsAman } from "@/lib/spesifikasi-billboard";
+import { sahPublishStatus, daftarNilai, PublishStatus } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
 import { adalahDuplikatUnik } from "@/lib/db-error";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
@@ -20,7 +23,9 @@ export async function POST(req: Request) {
         // `req.json()` dulu dipanggil DI LUAR `try`. Body yang bukan JSON
         // karena itu melempar tanpa penangkap: Next menjawabnya sebagai galat
         // runtime, bukan 400, dan jejaknya masuk log sebagai kerusakan server.
-        const { historyId: historyIdMentah } = await req.json();
+        const hasilBody = await bacaBodyJson(req, 'admin/billboards/rollback');
+        if (!hasilBody.ok) return hasilBody.jawaban;
+        const { historyId: historyIdMentah } = hasilBody.body;
 
         // Satu-satunya route di `admin/billboards` yang dulu tidak memeriksa
         // pengenalnya sama sekali — bukan tipe, bukan pula keberadaannya.
@@ -134,6 +139,73 @@ export async function POST(req: Request) {
         // versi sekarang tertinggal setelah rollback.
         const sku = teks('sku');
 
+        // ENAM KOLOM YANG DULU TIDAK PERNAH IKUT DIPULIHKAN
+        // -------------------------------------------------
+        // Snapshot ditulis dengan `JSON.stringify({ ...sebelum })` — SELURUH
+        // baris billboard, termasuk `specs`, `includes`, `excludes`, `gallery`,
+        // `smartsucoUrl`, `videoUrl`, dan `publishStatus`. Tapi `updateMany` di
+        // bawah hanya menulis 11 kolom, jadi ketujuh sisanya tetap memakai nilai
+        // versi SEKARANG setelah rollback selesai.
+        //
+        // Akibatnya bukan kolom yang tertinggal kosong, tapi satu baris yang
+        // mencampur dua versi: harga dan alamat kembali ke versi lama sementara
+        // daftar spesifikasi, galeri foto, dan status terbitnya tetap versi baru
+        // — dan admin dibalas "Rollback Berhasil". Itu persis cacat yang
+        // pemeriksaan field di atas dibuat untuk menutup, hanya pada kolom yang
+        // waktu itu belum ikut didaftar.
+        //
+        // Kolom JSON dibaca lewat `arrayDariJson`, bukan langsung: snapshot lama
+        // menyimpan `gallery` sebagai TEKS JSON (ditulis sebelum kolomnya
+        // menjadi jsonb), yang baru menyimpannya sebagai array sungguhan.
+        // `arrayDariJson` menerima kedua bentuk itu, jadi riwayat lama tetap
+        // bisa dipulihkan alih-alih membuat baris jsonb yang ganda-encode.
+        const specs = specsAman(
+            arrayDariJson<unknown>(isi.specs, `BillboardHistory.snapshot.specs id=${historyId}`)
+        );
+        const daftarTeks = (kunci: string): string[] =>
+            arrayDariJson<unknown>(isi[kunci], `BillboardHistory.snapshot.${kunci} id=${historyId}`)
+                .filter((v): v is string => typeof v === 'string' && v.trim() !== '')
+                .map((v) => v.trim());
+
+        const includes = daftarTeks('includes');
+        const excludes = daftarTeks('excludes');
+        const gallery = daftarTeks('gallery');
+
+        // Keduanya `String?`, jadi `null` adalah pemulihan yang benar — bukan
+        // `undefined`, yang berarti "jangan ubah" bagi Prisma.
+        const smartsucoUrl = teks('smartsucoUrl');
+        const videoUrl = teks('videoUrl');
+
+        // `publishStatus` diperiksa terhadap enum-nya, bukan diteruskan. Snapshot
+        // ditulis kode versi mana pun sejak tabel ini ada: baris yang lahir
+        // sebelum kolom ini menjadi enum bisa memuat teks bebas, dan nilai asing
+        // ditolak di lapisan database sebagai 500 "Gagal Rollback" tanpa menyebut
+        // kolom mana yang salah.
+        //
+        // Ketidakhadirannya BUKAN kegagalan: snapshot yang lebih tua daripada
+        // kolom ini memang tidak memuatnya. Baris seperti itu dipulihkan ke
+        // `DRAFT` — pilihan yang aman, karena menerbitkan billboard yang status
+        // terbitnya tidak diketahui berarti memajangnya ke publik atas dasar
+        // dugaan.
+        const publishStatusMentah = isi.publishStatus;
+        if (publishStatusMentah !== undefined && !sahPublishStatus(publishStatusMentah)) {
+            console.error(
+                `[billboards/rollback] Snapshot id=${historyId} memuat publishStatus asing. ` +
+                `Rollback dibatalkan.`
+            );
+            return NextResponse.json(
+                {
+                    message:
+                        `Status terbit di snapshot ini tidak dikenali, jadi rollback ` +
+                        `dibatalkan. Nilai yang sah: ${daftarNilai(PublishStatus)}.`,
+                },
+                { status: 422 }
+            );
+        }
+        const publishStatus = sahPublishStatus(publishStatusMentah)
+            ? publishStatusMentah
+            : PublishStatus.DRAFT;
+
         // 2. Arsipkan keadaan SEKARANG, lalu pulihkan — dalam satu transaksi
         //
         // KENAPA HARUS ADA ARSIPNYA
@@ -204,6 +276,20 @@ export async function POST(req: Request) {
                     lat,
                     lng,
                     slug,
+
+                    // Ketujuh kolom di bawah dulu tidak ikut, sehingga setiap
+                    // rollback meninggalkan baris yang mencampur dua versi.
+                    // Keempat kolom JSON bertipe jsonb — array masuk apa adanya,
+                    // TANPA `JSON.stringify` (membungkusnya akan menyimpan teks
+                    // JSON di dalam jsonb, dan pembacanya harus mengurai dua kali).
+                    specs,
+                    includes,
+                    excludes,
+                    gallery,
+                    smartsucoUrl,
+                    videoUrl,
+                    publishStatus,
+
                     updatedById: session.user.id, // Ditandai rollback oleh admin yg klik
                 },
             });

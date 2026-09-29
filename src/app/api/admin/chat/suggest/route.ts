@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 import { dekripsi } from "@/lib/rahasia";
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Peran yang boleh memakai bantuan AI di inbox percakapan.
 const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
@@ -39,7 +40,9 @@ export async function POST(req: Request) {
             );
         }
 
-        const { sessionId, context } = await req.json();
+        const hasilBody = await bacaBodyJson(req, 'admin/chat/suggest');
+        if (!hasilBody.ok) return hasilBody.jawaban;
+        const { sessionId, context } = hasilBody.body;
 
         if (!sessionId || typeof sessionId !== 'string') {
             return NextResponse.json({ error: "sessionId wajib diisi" }, { status: 400 });

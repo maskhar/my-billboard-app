@@ -4,7 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { idDariBody } from "@/lib/id-dari-body";
-import { keDecimal, lebihBesar } from "@/lib/money";
+import { uangDariBody, lebihBesar } from "@/lib/money";
 import { pisahkanOpsi } from "@/lib/opsi-billboard";
 import { susunSpecs } from "@/lib/spesifikasi-billboard";
 import { koordinat, teksBillboard } from "@/lib/bidang-billboard";
@@ -15,6 +15,7 @@ import {
   sahBillboardStatus,
   sahPublishStatus,
 } from "@/lib/enum-guard";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -24,7 +25,9 @@ export async function POST(req: Request) {
   }
 
   try {
-      const body = await req.json();
+      const hasilBody = await bacaBodyJson(req, 'admin/billboards/update');
+      if (!hasilBody.ok) return hasilBody.jawaban;
+      const body = hasilBody.body;
 
       // KEDUA NILAI DI BAWAH MASUK KE `findFirst`, dan `where` milik `findFirst`
       // menerima FILTER pada setiap field — termasuk yang bersarang di bawah
@@ -98,7 +101,7 @@ export async function POST(req: Request) {
       //
       // `Number(body.price)` mengubah "" menjadi 0 (harga hilang diam-diam)
       // dan "12jt" menjadi NaN (ditolak kolom Decimal).
-      const harga = keDecimal(body.price);
+      const harga = uangDariBody(body.price);
       if (!lebihBesar(harga, 0)) {
           return NextResponse.json(
               { message: "Harga sewa harus diisi dengan angka lebih dari 0" },
@@ -189,11 +192,17 @@ export async function POST(req: Request) {
                   // akibatnya: sejak keempat kolom JSON menjadi jsonb, isi
                   // snapshot berbeda tergantung tanggalnya. Baris lama memuat
                   // `gallery` sebagai teks (`"[\"a.jpg\"]"`), baris baru sebagai
-                  // array sungguhan (`["a.jpg"]`). Rollback di
-                  // `api/admin/billboards/rollback` hanya menyalin `title`,
-                  // `price`, dan `status`, jadi perbedaan ini tidak
-                  // memengaruhinya — tapi kode apa pun yang nanti membaca
-                  // `gallery` dari snapshot harus menyiapkan kedua bentuk itu.
+                  // array sungguhan (`["a.jpg"]`).
+                  //
+                  // Perbedaan itu SEKARANG memengaruhi rollback. Catatan di sini
+                  // dulu berbunyi "rollback hanya menyalin `title`, `price`, dan
+                  // `status`, jadi perbedaan ini tidak memengaruhinya" — dan
+                  // kalimat itulah cacatnya: rollback memang hanya memulihkan 11
+                  // dari 17 kolom, sehingga setiap pemulihan meninggalkan satu
+                  // baris yang mencampur dua versi sambil melaporkan "Rollback
+                  // Berhasil". `api/admin/billboards/rollback` kini memulihkan
+                  // ketujuh kolom sisanya dan membaca `gallery` lewat
+                  // `arrayDariJson`, yang menerima KEDUA bentuk di atas.
                   snapshot: JSON.stringify({ ...oldData })
               }
           }),

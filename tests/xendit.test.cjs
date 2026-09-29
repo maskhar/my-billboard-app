@@ -8752,10 +8752,14 @@ describe('POST /api/register dibatasi lajunya', () => {
       .filter((baris) => !/^\s*\*/.test(baris))
       .join('\n');
 
+    // Yang dijaga adalah URUTANNYA, bukan nama pembacanya: badan permintaan
+    // tidak boleh dibaca sebelum jatah diperiksa, karena membacanya lebih dulu
+    // berarti setiap penyerang tetap membuat server menguraikan payload sebesar
+    // apa pun. Pembacanya sekarang `bacaBodyJson`, bukan `req.json()` telanjang.
     const posisiBatas = kode.indexOf('rateLimit({');
-    const posisiBody = kode.indexOf('req.json()');
+    const posisiBody = kode.indexOf('bacaBodyJson(req');
     assert.ok(posisiBatas > 0, 'rateLimit tidak dipanggil');
-    assert.ok(posisiBody > 0, 'req.json tidak ditemukan');
+    assert.ok(posisiBody > 0, 'pembacaan badan permintaan tidak ditemukan');
     assert.ok(posisiBatas < posisiBody, 'badan permintaan dibaca sebelum batas diperiksa');
     assert.match(kode, /rateLimitHeaders\(/, 'header sisa jatah tidak dikirim');
   });
@@ -11534,6 +11538,250 @@ describe('rollback billboard menolak snapshot yang tidak lengkap', () => {
     );
     assert.equal(res.status, 422);
     assert.equal(tertulis().length, 0);
+  });
+});
+
+describe('rollback billboard memulihkan kolom JSON, URL, dan status terbit', () => {
+  // KOLOM YANG DULU TIDAK PERNAH IKUT DIPULIHKAN
+  //
+  // Snapshot ditulis `JSON.stringify({ ...sebelum })` — SELURUH baris. Tapi
+  // `updateMany` hanya menulis 11 kolom, jadi `specs`, `includes`, `excludes`,
+  // `gallery`, `smartsucoUrl`, `videoUrl`, dan `publishStatus` tetap memakai
+  // nilai versi SEKARANG setelah rollback. Hasilnya satu baris yang mencampur
+  // dua versi — harga dan alamat versi lama, daftar spesifikasi dan galeri foto
+  // versi baru — dan admin dibalas "Rollback Berhasil".
+  const SEKARANG = {
+    id: 'bb-1',
+    title: 'Billboard Sekarang',
+    price: '12000000',
+    status: 'Available',
+    publishStatus: 'PUBLISHED',
+    slug: 'billboard-sekarang',
+    sku: 'BB-009',
+    address: 'Jl. Sekarang 9',
+    type: 'Videotron',
+    mainImage: 'https://contoh.test/sekarang.jpg',
+    lat: -6.9,
+    lng: 106.9,
+    specs: [{ label: 'Ukuran', value: '8 x 4 m' }],
+    includes: ['Pemasangan'],
+    excludes: ['Desain'],
+    gallery: ['https://contoh.test/sekarang-1.jpg'],
+    smartsucoUrl: 'https://smartsuco.test/sekarang',
+    videoUrl: 'https://contoh.test/sekarang.mp4',
+    updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+  };
+
+  const WAJIB = {
+    address: 'Jl. Merdeka 1',
+    sku: 'BB-001',
+    type: 'Billboard',
+    mainImage: 'https://contoh.test/a.jpg',
+    lat: -6.2,
+    lng: 106.8,
+    slug: 'billboard-lama',
+  };
+
+  function pasang(snapshot) {
+    const tertulis = [];
+    const tx = {
+      billboard: {
+        findUnique: async () => SEKARANG,
+        updateMany: async (args) => {
+          tertulis.push(args);
+          return { count: 1 };
+        },
+      },
+      billboardHistory: { create: async () => ({}) },
+    };
+
+    const prisma = {
+      billboardHistory: {
+        findUnique: async () => ({
+          id: 'hist-1',
+          billboardId: 'bb-1',
+          title: 'Billboard Lama',
+          price: '10000000',
+          status: 'Available',
+          snapshot,
+        }),
+      },
+      $transaction: async (fn) => fn(tx),
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ROLLBACK, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      'next-auth': { getServerSession: async () => ({ user: { id: 'admin-1', role: 'ADMIN' } }) },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+    });
+
+    return { route, tertulis: () => tertulis };
+  }
+
+  const permintaan = (isi) => ({ json: async () => isi });
+
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    return fn().then(
+      (hasil) => {
+        console.error = asli;
+        return { hasil, log: tercatat.join('\n') };
+      },
+      (galat) => {
+        console.error = asli;
+        throw galat;
+      }
+    );
+  }
+
+  it('ketujuh kolom di luar daftar lama ikut dipulihkan', async () => {
+    const snapshot = JSON.stringify({
+      ...WAJIB,
+      publishStatus: 'ARCHIVED',
+      specs: [{ label: 'Ukuran', value: '6 x 3 m' }],
+      includes: ['Cetak', 'Pemasangan'],
+      excludes: ['Perizinan'],
+      gallery: ['https://contoh.test/lama-1.jpg', 'https://contoh.test/lama-2.jpg'],
+      smartsucoUrl: 'https://smartsuco.test/lama',
+      videoUrl: 'https://contoh.test/lama.mp4',
+    });
+
+    const { route, tertulis } = pasang(snapshot);
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+
+    const data = tertulis()[0].data;
+    assert.deepEqual(data.specs, [{ label: 'Ukuran', value: '6 x 3 m' }]);
+    assert.deepEqual(data.includes, ['Cetak', 'Pemasangan']);
+    assert.deepEqual(data.excludes, ['Perizinan']);
+    assert.deepEqual(data.gallery, [
+      'https://contoh.test/lama-1.jpg',
+      'https://contoh.test/lama-2.jpg',
+    ]);
+    assert.equal(data.smartsucoUrl, 'https://smartsuco.test/lama');
+    assert.equal(data.videoUrl, 'https://contoh.test/lama.mp4');
+    assert.equal(data.publishStatus, 'ARCHIVED');
+
+    // Tidak satu pun boleh `undefined`: bagi Prisma itu berarti "jangan ubah",
+    // dan justru itulah cacat yang test ini menjaga.
+    for (const kunci of [
+      'specs', 'includes', 'excludes', 'gallery',
+      'smartsucoUrl', 'videoUrl', 'publishStatus',
+    ]) {
+      assert.notStrictEqual(data[kunci], undefined, `${kunci} tidak ikut ditulis`);
+    }
+  });
+
+  it('kolom jsonb ditulis sebagai array, bukan teks JSON', async () => {
+    // Membungkusnya dengan `JSON.stringify` akan menyimpan teks JSON DI DALAM
+    // jsonb — ganda-encode, dan setiap pembaca harus mengurai dua kali.
+    const { route, tertulis } = pasang(
+      JSON.stringify({ ...WAJIB, gallery: ['https://contoh.test/x.jpg'] })
+    );
+    await route.POST(permintaan({ historyId: 'hist-1' }));
+    const data = tertulis()[0].data;
+    assert.equal(Array.isArray(data.gallery), true);
+    assert.equal(Array.isArray(data.specs), true);
+  });
+
+  it('snapshot lama yang menyimpan gallery sebagai TEKS tetap terbaca', async () => {
+    // Baris yang ditulis sebelum kolomnya menjadi jsonb menyimpan `gallery`
+    // sebagai teks JSON. Tanpa `arrayDariJson` bentuk itu lolos apa adanya dan
+    // baris hasil rollback menjadi ganda-encode.
+    const snapshot = JSON.stringify({
+      ...WAJIB,
+      gallery: '["https://contoh.test/warisan.jpg"]',
+      specs: '[{"label":"Ukuran","value":"4 x 2 m"}]',
+    });
+
+    const { route, tertulis } = pasang(snapshot);
+    const { hasil: res } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+    assert.equal(res.status, 200);
+
+    const data = tertulis()[0].data;
+    assert.deepEqual(data.gallery, ['https://contoh.test/warisan.jpg']);
+    assert.deepEqual(data.specs, [{ label: 'Ukuran', value: '4 x 2 m' }]);
+  });
+
+  it('snapshot tanpa publishStatus dipulihkan ke DRAFT, bukan dibiarkan PUBLISHED', async () => {
+    // Snapshot yang lebih tua daripada kolom ini memang tidak memuatnya. Kalau
+    // kolomnya dilewati, billboard yang sekarang `PUBLISHED` tetap terpajang di
+    // publik setelah dipulihkan ke versi yang belum pernah diterbitkan.
+    const { route, tertulis } = pasang(JSON.stringify(WAJIB));
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+    assert.equal(tertulis()[0].data.publishStatus, 'DRAFT');
+  });
+
+  it('publishStatus asing membatalkan rollback', async () => {
+    // Nilai asing ditolak di lapisan database sebagai 500 "Gagal Rollback" tanpa
+    // menyebut kolom mana yang salah.
+    const { route, tertulis } = pasang(
+      JSON.stringify({ ...WAJIB, publishStatus: 'TERBIT' })
+    );
+    const { hasil: res, log } = await tanpaGalat(() =>
+      route.POST(permintaan({ historyId: 'hist-1' }))
+    );
+    assert.equal(res.status, 422);
+    assert.equal(tertulis().length, 0);
+    assert.match(log, /publishStatus asing/);
+    const isi = await res.json();
+    assert.match(isi.message, /DRAFT/);
+  });
+
+  it('baris specs yang cacat dibuang, bukan dipulihkan apa adanya', async () => {
+    // `{label:1,value:{}}` adalah jsonb yang sah. Objek yang masuk ke `value`
+    // lalu di-render sebagai anak React mematikan seluruh halaman produk — cacat
+    // yang sama seperti yang sudah ditutup di jalur tulis.
+    const snapshot = JSON.stringify({
+      ...WAJIB,
+      specs: [
+        { label: 'Ukuran', value: '5 x 3 m' },
+        { label: 1, value: {} },
+        'bukan objek',
+        null,
+      ],
+    });
+
+    const { route, tertulis } = pasang(snapshot);
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+    assert.deepEqual(tertulis()[0].data.specs, [{ label: 'Ukuran', value: '5 x 3 m' }]);
+  });
+
+  it('nilai non-teks di gallery/includes/excludes dibuang', async () => {
+    const snapshot = JSON.stringify({
+      ...WAJIB,
+      gallery: ['https://contoh.test/a.jpg', 5, null, '   ', { u: 'x' }],
+      includes: ['  Pemasangan  ', 7],
+      excludes: [],
+    });
+
+    const { route, tertulis } = pasang(snapshot);
+    const res = await route.POST(permintaan({ historyId: 'hist-1' }));
+    assert.equal(res.status, 200);
+
+    const data = tertulis()[0].data;
+    assert.deepEqual(data.gallery, ['https://contoh.test/a.jpg']);
+    assert.deepEqual(data.includes, ['Pemasangan']);
+    assert.deepEqual(data.excludes, []);
+  });
+
+  it('smartsucoUrl/videoUrl yang tidak ada dipulihkan sebagai null', async () => {
+    // Keduanya `String?`. `undefined` akan membiarkan URL versi sekarang
+    // tertinggal setelah rollback ke versi yang tidak punya keduanya.
+    const { route, tertulis } = pasang(JSON.stringify(WAJIB));
+    await route.POST(permintaan({ historyId: 'hist-1' }));
+    const data = tertulis()[0].data;
+    assert.strictEqual(data.smartsucoUrl, null);
+    assert.strictEqual(data.videoUrl, null);
   });
 });
 
@@ -20195,8 +20443,10 @@ describe('POST /api/auth/request-reset — penerbit tautan', () => {
 
   it('batas diperiksa sebelum badan permintaan dibaca', () => {
     const kode = kodeSajaReset(JALUR_ROUTE_MINTA_RESET);
+    // Urutannya yang dijaga, bukan nama pembacanya — lihat catatan pada uji
+    // serupa di route `register`.
     const posisiBatas = kode.indexOf('rateLimit({');
-    const posisiBadan = kode.indexOf('req.json()');
+    const posisiBadan = kode.indexOf('bacaBodyJson(req');
     assert.ok(posisiBatas > 0 && posisiBadan > 0);
     assert.ok(posisiBatas < posisiBadan, 'badan dibaca sebelum batas diperiksa');
     assert.match(kode, /rateLimitHeaders\(/);
@@ -21662,6 +21912,241 @@ describe('route: req.json() tidak lagi dipanggil tanpa penjagaan', () => {
       assert.match(kode, /idDariBody\(hasil\.body\.sessionId\)/, `${jalur} harus memakai idDariBody`);
       assert.match(kode, /sessionId === null/, `${jalur} harus menolak sessionId yang tidak sah`);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SELURUH route API, bukan hanya yang pernah diperbaiki satu per satu
+// ---------------------------------------------------------------------------
+//
+// Gerbang di atas menyebut tujuh route dengan nama. Itu menjaga tujuh route dan
+// TIDAK menjaga yang kedelapan: route baru yang menulis `await req.json()` lolos
+// tanpa satu uji pun menyala, dan justru route barulah yang paling mungkin
+// mengulangi cacat ini. Gerbang di bawah membaca seluruh `src/app/api` dari
+// disk, jadi berkas yang belum ada hari ini tetap terjaga.
+//
+// Dua cacat yang dijaga sekaligus:
+//
+//   1. `await req.json()` MELEMPAR untuk body yang bukan JSON. Di route yang
+//      tidak punya `try` di atasnya, lemparan itu dijawab Next sebagai galat
+//      runtime 500 — permintaan cacat dari klien dilaporkan sebagai server
+//      rusak, dan jejaknya masuk log sebagai kerusakan. Di route yang punya
+//      `try` lebar, `catch`-nya menjawab 500 atau 409, bukan 400.
+//
+//   2. Body `[1,2]`, `5`, `"teks"`, `true`, dan `null` semuanya JSON YANG SAH.
+//      `req.json()` mengembalikannya apa adanya, lalu `const { id } = body`
+//      menghasilkan `undefined` tanpa satu keluhan pun — dan `undefined` di
+//      dalam `where` milik Prisma bukan "tidak ada", melainkan galat validasi
+//      yang muncul sebagai 500.
+//
+// `bacaBodyJson` menutup keduanya di satu tempat: 400 untuk JSON rusak, 400
+// untuk JSON yang bukan objek.
+describe('seluruh route API membaca body lewat penjaga bersama', () => {
+  const AKAR_API = path.join(__dirname, '..', 'src', 'app', 'api');
+
+  // Dikumpulkan dari disk, bukan didaftar dengan tangan.
+  function semuaRoute(dir = AKAR_API, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) semuaRoute(penuh, hasil);
+      else if (entri.name === 'route.ts') hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  // Komentar dibuang: hampir setiap route MENJELASKAN cacat lamanya dengan
+  // menuliskan `await req.json()` di dalam komentar, dan gerbang yang membaca
+  // komentar akan menyalakan alarm atas penjelasannya sendiri. Ini kesalahan
+  // yang pernah benar-benar terjadi di suite ini — lihat catatan `barisKode()`.
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  // SATU pengecualian, didaftar dengan alasannya — bukan dilewati diam-diam.
+  //
+  // `xendit/webhook` menjawab PROVIDER, bukan browser, dan jawabannya punya dua
+  // syarat yang tidak dipenuhi `bacaBodyJson`: setiap jawaban wajib membawa
+  // `Cache-Control: no-store`, dan penolakan wajib menyertakan kode galat mesin
+  // (`PAYLOAD_TIDAK_SAH`) yang dipakai untuk memutuskan apakah Xendit perlu
+  // mengulang kiriman. Karena itu ia memakai `GalatWebhookPembayaran` sendiri.
+  //
+  // Yang penting tetap dijaga — bahwa body rusak dijawab 400, BUKAN 500 yang
+  // membuat provider mengulang kiriman yang tidak akan pernah sah — diuji
+  // terpisah di uji tepat di bawah daftar ini.
+  const DIKECUALIKAN = new Set(['xendit/webhook']);
+
+  const ROUTE = semuaRoute();
+
+  it('webhook menjawab 400 untuk body rusak, bukan 500', () => {
+    const kode = kodeSaja(path.join(AKAR_API, 'xendit', 'webhook', 'route.ts'));
+
+    // Pembacaannya wajib dibungkus penangkap yang mengubahnya menjadi 400.
+    // Tanpa ini, SyntaxError jatuh ke penanganan umum dan dijawab 500 — dan
+    // provider mengulang kiriman cacat itu tanpa akhir.
+    assert.match(
+      kode,
+      /catch\s*\{[^}]*GalatWebhookPembayaran\(\s*400,\s*'PAYLOAD_TIDAK_SAH'/,
+      'webhook harus mengubah body rusak menjadi 400 PAYLOAD_TIDAK_SAH'
+    );
+    // Bentuk body-nya tetap dijaga: `uraikanWebhookSesiSelesai` menolak apa pun
+    // yang bukan objek lewat `objek(body, 'Webhook')`.
+    assert.match(kode, /uraikanWebhookSesiSelesai\(body\)/);
+  });
+
+  it('menemukan route untuk diperiksa', () => {
+    // Kalau pengumpulannya rusak (folder dipindah, nama berkas berubah),
+    // seluruh gerbang di bawah lulus dengan nol berkas dan tidak menjaga apa
+    // pun. Angkanya sengaja dibiarkan longgar — yang dijaga adalah bahwa
+    // pengumpulannya masih menemukan sesuatu.
+    assert.ok(ROUTE.length >= 25, `hanya ${ROUTE.length} route.ts ditemukan`);
+  });
+
+  for (const jalur of ROUTE) {
+    const nama = path
+      .relative(AKAR_API, jalur)
+      .replace(/\\/g, '/')
+      .replace(/\/route\.ts$/, '');
+
+    it(`${nama} tidak memanggil req.json() langsung`, () => {
+      if (DIKECUALIKAN.has(nama)) return;
+      const kode = kodeSaja(jalur);
+      assert.doesNotMatch(
+        kode,
+        /req\.json\(\)/,
+        `${nama} harus membaca body lewat bacaBodyJson (src/lib/body-json.ts)`
+      );
+    });
+
+    it(`${nama} menghentikan handler saat body ditolak`, () => {
+      const kode = kodeSaja(jalur);
+      if (!/bacaBodyJson\(req/.test(kode)) return; // route tanpa body (GET, dll.)
+
+      // Tanpa `return`, jawaban 400 disusun lalu dibuang dan handler lanjut
+      // berjalan atas body yang baru saja dinyatakan tidak sah — cacat yang
+      // LEBIH buruk daripada yang diperbaikinya, karena sekarang ada gerbang
+      // yang tampak menjaga tapi tidak menahan apa pun.
+      assert.match(
+        kode,
+        /if \(!hasil(Body)?\.ok\) return hasil(Body)?\.jawaban;/,
+        `${nama} harus mengembalikan jawaban penolakan`
+      );
+      assert.match(
+        kode,
+        /from ["']@\/lib\/body-json["']/,
+        `${nama} harus mengimpor penjaga bersama`
+      );
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Bukan cuma bentuk kodenya: route wakil benar-benar dijalankan
+// ---------------------------------------------------------------------------
+//
+// Gerbang di atas membaca teks berkasnya. Itu menangkap route yang LUPA memakai
+// penjaga, tapi tidak membuktikan bahwa jawabannya memang 400 — route bisa
+// memanggil `bacaBodyJson`, mengabaikan hasilnya, dan tetap lulus pembacaan teks
+// selama `return hasilBody.jawaban`-nya ada di suatu tempat.
+//
+// Empat route di bawah dipilih karena mewakili empat jawaban BERBEDA yang dulu
+// diberikan untuk body yang sama rusaknya:
+//
+//   admin/billboards/rollback → dulu 409 (lewat `adalahDuplikatUnik`? bukan:
+//                               lewat `catch` yang menjawab 500, dan 409 pada
+//                               cabang duplikat — dua-duanya salah untuk body)
+//   booking/cancel            → dulu 500 dari `catch` lebar
+//   admin/users/update-role   → dulu 500, dan route ini mengubah HAK AKSES
+//   register                  → dulu 409, route publik tanpa autentikasi
+describe('penjaga body benar-benar menjawab 400 saat dijalankan', () => {
+  const RESPONSE_PALSU = {
+    NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+  };
+
+  // Body RUSAK: `req.json()` melempar. Ini yang dulu menjadi 500.
+  function permintaanRusak() {
+    return { json: async () => { throw new SyntaxError('Unexpected end of JSON input'); } };
+  }
+
+  // Body SAH tapi bukan objek. `req.json()` tidak melempar sama sekali.
+  function permintaanBukanObjek(nilai) {
+    return { json: async () => nilai };
+  }
+
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    console.error = () => {};
+    return fn().finally(() => { console.error = asli; });
+  }
+
+  // Prisma yang MELEDAK bila disentuh: body cacat tidak boleh pernah mencapai
+  // database. Gerbang yang menjawab 400 setelah membuka transaksi tetap cacat.
+  const PRISMA_TERLARANG = new Proxy({}, {
+    get() {
+      throw new Error('database disentuh padahal body sudah cacat');
+    },
+  });
+
+  const WAKIL = [
+    ['admin/billboards/rollback', JALUR_ROUTE_ROLLBACK, 'ADMIN'],
+    ['booking/cancel', JALUR_ROUTE_CANCEL, 'USER'],
+  ];
+
+  for (const [nama, jalur, peran] of WAKIL) {
+    function buat() {
+      return muatDenganModulPalsu(jalur, {
+        'next/server': RESPONSE_PALSU,
+        'next-auth': { getServerSession: async () => ({ user: { id: 'u-1', role: peran } }) },
+        '@/lib/auth': { authOptions: {} },
+        '@/lib/prisma': { prisma: PRISMA_TERLARANG },
+        '@/lib/mail': { sendEmail: async () => true, judulSurat: (t) => t },
+      });
+    }
+
+    it(`${nama} menjawab 400 untuk body rusak, bukan 500`, async () => {
+      const route = buat();
+      const res = await tanpaGalat(() => route.POST(permintaanRusak()));
+
+      assert.equal(res.status, 400, `${nama} harus 400, bukan ${res.status}`);
+      assert.match((await res.json()).message, /bukan JSON/i);
+    });
+
+    for (const [judul, nilai] of [
+      ['null', null],
+      ['angka', 5],
+      ['teks', 'teks'],
+      ['array', [1, 2]],
+      ['boolean', true],
+    ]) {
+      it(`${nama} menjawab 400 untuk body berupa ${judul}`, async () => {
+        const route = buat();
+        const res = await tanpaGalat(() => route.POST(permintaanBukanObjek(nilai)));
+
+        assert.equal(res.status, 400, `${judul} tidak boleh lolos di ${nama}`);
+        assert.match((await res.json()).message, /objek/i);
+      });
+    }
+  }
+
+  // Gerbang autentikasi tetap lebih dulu daripada pembacaan body: menjawab 400
+  // kepada pemanggil yang belum login MEMBERI TAHU bahwa route-nya ada dan
+  // bentuk bodynya salah, padahal ia tidak berhak tahu apa pun.
+  it('penolakan akses tetap mendahului pembacaan body', async () => {
+    const route = muatDenganModulPalsu(JALUR_ROUTE_ROLLBACK, {
+      'next/server': RESPONSE_PALSU,
+      'next-auth': { getServerSession: async () => null },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: PRISMA_TERLARANG },
+    });
+
+    // Body-nya rusak SEKALIGUS tidak login. Yang harus menang adalah 401.
+    const res = await tanpaGalat(() => route.POST(permintaanRusak()));
+    assert.equal(res.status, 401);
   });
 });
 // ---------------------------------------------------------------------------

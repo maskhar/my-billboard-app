@@ -23,6 +23,7 @@ import { keE164, normalisasiNomorLokal } from '@/lib/telepon';
 import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
 import { asalPermintaan } from '@/lib/asal-permintaan';
 import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // PENDAFTARAN DULU TIDAK DIBATASI SAMA SEKALI, dan route ini terbuka tanpa
 // sesi. Tiga akibatnya berbeda-beda, dan hanya satu yang tentang spam:
@@ -68,7 +69,9 @@ export async function POST(req: Request) {
       }
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'register');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // Allowlist eksplisit. Field diambil satu per satu, tidak pernah
     // `...body` — supaya `role: 'SUPER_ADMIN'` atau `isVerified: true` yang

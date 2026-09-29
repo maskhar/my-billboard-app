@@ -29,20 +29,19 @@ import { prisma } from "@/lib/prisma";
 import { BookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { urlBuktiSah } from "@/lib/url-bukti";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
 
-    let body: unknown;
-    try {
-      body = await req.json();
-    } catch {
-      return NextResponse.json({ message: "Body bukan JSON yang sah." }, { status: 400 });
-    }
-
-    const { orderId, designUrl } = (body ?? {}) as Record<string, unknown>;
+    // Penjaga bersama, menggantikan `try` lokal + `(body ?? {}) as Record<...>`:
+    // cast itu meloloskan body `[1,2]`, `5`, dan `"teks"` apa adanya. Lihat
+    // `src/lib/body-json.ts`.
+    const hasilBody = await bacaBodyJson(req, 'booking/submit-design');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const { orderId, designUrl } = hasilBody.body;
 
     // `orderId` dulu diteruskan ke Prisma tanpa diperiksa tipenya. Nilai selain
     // teks membuat query gagal dengan galat yang jatuh ke "Gagal" — pesan yang

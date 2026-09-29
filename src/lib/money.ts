@@ -41,6 +41,33 @@ export function keDecimal(nilai: NilaiUang): Prisma.Decimal {
   }
 }
 
+/**
+ * Nominal yang datang dari body permintaan, bertipe `unknown`.
+ *
+ * Kenapa perlu pintu sendiri, bukan `keDecimal(body.price as NilaiUang)`:
+ * sebelum body dibaca lewat `bacaBodyJson`, `req.json()` bertipe `any`, jadi
+ * `keDecimal(body.price)` menerima OBJEK, ARRAY, dan BOOLEAN tanpa satu pun
+ * keluhan compiler. Ketiganya dibulatkan menjadi 0 di dalam `keDecimal`, lalu
+ * ditolak `lebihBesar(nominal, 0)` sebagai "Jumlah biaya tidak valid" — jadi
+ * hasilnya kebetulan aman, tapi keamanannya tidak pernah diperiksa siapa pun.
+ *
+ * `NilaiUang` SENGAJA tidak diperlebar menjadi `unknown`: bila diperlebar,
+ * `jumlah(booking)` dan `kurang(payment, order)` — mengirim seluruh BARIS,
+ * bukan kolomnya — ikut lolos compiler dan menghasilkan 0 tanpa jejak. Yang
+ * perlu dilonggarkan hanya satu titik: nilai yang memang datang dari luar.
+ */
+export function uangDariBody(nilai: unknown): Prisma.Decimal {
+  if (typeof nilai === 'number' || typeof nilai === 'string') {
+    return keDecimal(nilai);
+  }
+  if (nilai instanceof Prisma.Decimal) {
+    return nilai;
+  }
+  // Objek, array, boolean, `null`, `undefined` → 0, dan pemanggil menolaknya
+  // lewat `lebihBesar(..., 0)` seperti nominal kosong.
+  return new Prisma.Decimal(0);
+}
+
 /** Jumlahkan sejumlah nominal. Aman untuk campuran Decimal, number, string. */
 export function jumlah(...nilai: NilaiUang[]): Prisma.Decimal {
   return nilai.reduce<Prisma.Decimal>(

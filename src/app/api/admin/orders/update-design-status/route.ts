@@ -8,6 +8,7 @@ import { prisma } from "@/lib/prisma";
 import type { Prisma } from "@prisma/client";
 import { DesignStatus, daftarNilai, sahDesignStatus } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -17,7 +18,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/orders/update-design-status');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { orderId: orderIdMentah, status, reason: alasanMentah } = body;
 
     // Tipenya, bukan keberadaannya: objek selalu truthy sehingga `!orderId`

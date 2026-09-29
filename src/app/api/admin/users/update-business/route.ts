@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Hanya data profil bisnis. `role`, `password`, `email`, `isVerified`, dan
 // kolom OTP sengaja tidak ada di daftar ini.
@@ -42,7 +43,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/users/update-business');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
     const { userId } = body;
 
     if (!userId || typeof userId !== 'string') {

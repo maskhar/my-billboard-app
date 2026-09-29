@@ -33,6 +33,7 @@ import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
 import { rateLimit, rateLimitHeaders } from '@/lib/rate-limit';
 import { asalPermintaan } from '@/lib/asal-permintaan';
 import { bentukTokenSah, hashTokenReset, tokenMasihBisaDipakai } from '@/lib/reset-sandi';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Kuncinya alamat asal, BUKAN token: token yang salah tidak punya pemilik yang
 // bisa dilindungi, dan membatasi per token justru memberi penyerang satu
@@ -71,7 +72,9 @@ export async function POST(req: Request) {
       }
     }
 
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'auth/reset-password');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // Bentuknya dulu. `bentukTokenSah` juga mempersempit tipenya, jadi
     // `hashTokenReset` di bawah tidak menerima `unknown`.

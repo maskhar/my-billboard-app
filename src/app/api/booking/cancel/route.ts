@@ -8,13 +8,16 @@ import { judulSurat, sendEmail } from "@/lib/mail";
 import { keAngka } from "@/lib/money";
 import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { BookingStatus } from "@prisma/client";
+import { bacaBodyJson } from "@/lib/body-json";
 
 export async function POST(req: Request) {
   try {
     const session = await getServerSession(authOptions);
     if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
 
-    const { orderId } = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'booking/cancel');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const { orderId } = hasilBody.body;
     const adminEmail = process.env.ADMIN_EMAIL;
 
     // TIPENYA DIPERIKSA, BUKAN HANYA KEBERADAANNYA — dan ini bukan sekadar

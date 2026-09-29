@@ -32,6 +32,7 @@ import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { daftarNilai, nilaiEnumSah } from '@/lib/enum-guard';
 import { StatusPengajuanTitik } from '@prisma/client';
+import { bacaBodyJson } from "@/lib/body-json";
 
 // Batas panjangnya sama dengan `catatan` di formulir publik. Kolomnya `TEXT`,
 // jadi tanpa batas di sini satu permintaan bisa menyimpan megabyte teks yang
@@ -52,7 +53,9 @@ export async function POST(req: Request) {
   }
 
   try {
-    const body = await req.json();
+    const hasilBody = await bacaBodyJson(req, 'admin/pengajuan-titik');
+    if (!hasilBody.ok) return hasilBody.jawaban;
+    const body = hasilBody.body;
 
     // Allowlist eksplisit, bukan `...body`. Tanpa ini `nomorWa` atau
     // `createdAt` yang diselipkan penyerang ikut sampai ke Prisma.
