@@ -8580,20 +8580,28 @@ describe('penjagaan pengenal terpasang di sumbernya, bukan hanya lolos test', ()
     });
   }
 
-  it('admin/chat/send memeriksa tipe sessionId seperti tiga route chat lainnya', () => {
-    const kode = kodeSaja(
-      path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'chat', 'send', 'route.ts')
-    );
-    assert.match(kode, /typeof sessionId !== ['"]string['"]/);
-  });
-
   it('semua route chat memeriksa tipe pengenal sesinya', () => {
     // `send` dulu menjadi satu-satunya yang terlewat di antara empat route yang
     // seharusnya seragam.
+    //
+    // Bentuk yang dituntut di sini berubah, cacat yang dijaga tidak: keempatnya
+    // dulu menulis `typeof sessionId !== 'string'` di tempat masing-masing —
+    // empat salinan satu aturan, dan `send` adalah salinan yang tidak pernah
+    // ditulis. Sekarang semuanya lewat `idDariBody`, yang juga menegakkan batas
+    // panjang dan menolak filter Prisma seperti `{"not":""}` — hal yang tidak
+    // satu pun dari keempat salinan itu lakukan.
     for (const nama of ['send', 'close', 'join', 'reply']) {
       const jalur = path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'chat', nama, 'route.ts');
       if (!fs.existsSync(jalur)) continue;
-      assert.match(kodeSaja(jalur), /typeof sessionId/, `chat/${nama} tidak memeriksa tipe sessionId`);
+      const kode = kodeSaja(jalur);
+
+      assert.match(kode, /idDariBody\(hasil\.body\.sessionId\)/, `chat/${nama} tidak menjaga sessionId`);
+      assert.match(kode, /sessionId === null/, `chat/${nama} tidak menolak sessionId tidak sah`);
+      assert.doesNotMatch(
+        kode,
+        /if\s*\(\s*!sessionId\s*\)/,
+        `chat/${nama} masih memeriksa keberadaan saja`
+      );
     }
   });
 
@@ -21378,4 +21386,390 @@ describe('pembaca specs memakai specsAman', () => {
       assert.doesNotMatch(isi, /arrayDariJson<BarisSpesifikasi>/);
     });
   }
+});
+// ---------------------------------------------------------------------------
+// Bentuk BODY permintaan: `req.json()` yang melempar di luar `try`
+// ---------------------------------------------------------------------------
+//
+// Enam route memanggil `await req.json()` tanpa penangkap di atasnya. Body yang
+// bukan JSON melempar, Next menjawabnya sebagai galat runtime, dan log server
+// mencatatnya sebagai kerusakan server — permintaan cacat dari client tidak bisa
+// dibedakan dari database yang tumbang. Penjaganya satu: `bacaBodyJson`.
+describe('bacaBodyJson() menjaga bentuk body permintaan', () => {
+  const JALUR_BODY_JSON = '../src/lib/body-json.ts';
+
+  function muat() {
+    return muatDenganModulPalsu(JALUR_BODY_JSON, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+    });
+  }
+
+  // Permintaan palsu yang mengembalikan badan apa adanya, atau melempar seperti
+  // `Request.json()` yang sungguhan saat badannya bukan JSON.
+  function permintaan(mentah) {
+    return {
+      async json() {
+        if (typeof mentah === 'string') return JSON.parse(mentah);
+        return mentah;
+      },
+    };
+  }
+
+  // Console ditelan: route yang ditolak MEMANG mencatat penolakannya, dan
+  // keluaran itu mengotori laporan test tanpa memberi keterangan apa pun.
+  async function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    try {
+      return { hasil: await fn(), log: tercatat };
+    } finally {
+      console.error = asli;
+    }
+  }
+
+  it('body yang bukan JSON dijawab 400, bukan dilempar', async () => {
+    const { bacaBodyJson } = muat();
+    const { hasil } = await tanpaGalat(() => bacaBodyJson(permintaan('bukan json sama sekali')));
+
+    assert.equal(hasil.ok, false);
+    assert.equal(hasil.jawaban.status, 400);
+    assert.match((await hasil.jawaban.json()).message, /bukan JSON/i);
+  });
+
+  // Keempat nilai di bawah ini JSON YANG SAH. `req.json()` tidak melempar untuk
+  // satu pun dari mereka; yang rusak terjadi satu baris kemudian.
+  const BUKAN_OBJEK = [
+    ['null', 'null'],
+    ['angka', '5'],
+    ['teks', '"teks"'],
+    ['array', '[1,2]'],
+    ['boolean', 'true'],
+  ];
+
+  for (const [nama, mentah] of BUKAN_OBJEK) {
+    it(`body berupa ${nama} dijawab 400`, async () => {
+      const { bacaBodyJson } = muat();
+      const { hasil } = await tanpaGalat(() => bacaBodyJson(permintaan(mentah)));
+
+      assert.equal(hasil.ok, false, `${nama} tidak boleh lolos`);
+      assert.equal(hasil.jawaban.status, 400);
+      assert.match((await hasil.jawaban.json()).message, /objek/i);
+    });
+  }
+
+  // Ini kenapa array harus ditolak terpisah dari `null`: `const {a} = null`
+  // MELEMPAR, jadi cacatnya kelihatan. Destructuring array tidak melempar —
+  // setiap bidang diam-diam menjadi `undefined` dan route berjalan terus
+  // seolah tidak ada apa-apa yang dikirim.
+  it('array tidak melempar saat di-destructure, karena itu harus ditolak lebih awal', () => {
+    const { orderId } = /** @type {any} */ ([1, 2]);
+    assert.equal(orderId, undefined);
+    assert.throws(() => {
+      const { x } = /** @type {any} */ (null);
+      return x;
+    }, TypeError);
+  });
+
+  it('objek diteruskan apa adanya', async () => {
+    const { bacaBodyJson } = muat();
+    const hasil = await bacaBodyJson(permintaan('{"orderId":"ord_1","step":"reason"}'));
+
+    assert.equal(hasil.ok, true);
+    assert.deepEqual(hasil.body, { orderId: 'ord_1', step: 'reason' });
+  });
+
+  it('objek kosong tetap diterima: bidangnya yang dinilai pemanggil, bukan bodynya', async () => {
+    const { bacaBodyJson } = muat();
+    const hasil = await bacaBodyJson(permintaan('{}'));
+
+    assert.equal(hasil.ok, true);
+    assert.deepEqual(hasil.body, {});
+  });
+
+  it('isi body TIDAK pernah ikut dicatat ke log', async () => {
+    const { bacaBodyJson } = muat();
+    const rahasia = 'kata-sandi-rahasia-yang-tidak-boleh-muncul';
+    const { log } = await tanpaGalat(() =>
+      bacaBodyJson(permintaan(`"${rahasia}"`), 'admin/settings')
+    );
+
+    assert.ok(log.length > 0, 'penolakan harus tercatat');
+    for (const baris of log) {
+      assert.ok(!baris.includes(rahasia), `log membocorkan isi body: ${baris}`);
+    }
+  });
+
+  it('context ikut dicatat supaya route mana yang menolak bisa ditelusuri', async () => {
+    const { bacaBodyJson } = muat();
+    const { log } = await tanpaGalat(() => bacaBodyJson(permintaan('7'), 'admin/chat/send'));
+
+    assert.ok(
+      log.some((b) => b.includes('admin/chat/send')),
+      `context tidak tercatat: ${log.join(' | ')}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Isi pesan percakapan
+// ---------------------------------------------------------------------------
+describe('teksPesanChat() membatasi isi satu pesan', () => {
+  const { PANJANG_PESAN_CHAT_MAKS, teksPesanChat } = require('../src/lib/pesan-chat.ts');
+
+  it('teks biasa diterima dan dipangkas spasi tepinya', () => {
+    assert.equal(teksPesanChat('  halo  '), 'halo');
+  });
+
+  // Yang membuat `!message` tidak cukup: objek selalu truthy, termasuk filter
+  // Prisma seperti `{"not":""}`.
+  const DITOLAK = [
+    ['objek', { a: 1 }],
+    ['filter Prisma', { not: '' }],
+    ['array', ['halo']],
+    ['angka', 5],
+    ['nol', 0],
+    ['boolean', true],
+    ['null', null],
+    ['undefined', undefined],
+    ['teks kosong', ''],
+    ['hanya spasi', '   \n\t  '],
+  ];
+
+  for (const [nama, nilai] of DITOLAK) {
+    it(`menolak ${nama}`, () => {
+      assert.equal(teksPesanChat(nilai), null, `${nama} tidak boleh lolos`);
+    });
+  }
+
+  it('menerima tepat di batas panjang', () => {
+    const tepat = 'a'.repeat(PANJANG_PESAN_CHAT_MAKS);
+    assert.equal(teksPesanChat(tepat), tepat);
+  });
+
+  it('menolak satu karakter di atas batas', () => {
+    assert.equal(teksPesanChat('a'.repeat(PANJANG_PESAN_CHAT_MAKS + 1)), null);
+  });
+
+  // Panjang dihitung SETELAH dipangkas: pesan yang isinya masih di dalam batas
+  // tidak boleh ditolak hanya karena pengirimnya menempel spasi di belakang.
+  it('panjang diukur setelah spasi tepinya dibuang', () => {
+    const isi = 'b'.repeat(PANJANG_PESAN_CHAT_MAKS);
+    assert.equal(teksPesanChat(`  ${isi}  `), isi);
+  });
+
+  // Kembaran yang harus disamakan manual. Batas berbeda pada satu kolom yang
+  // sama berarti pesan yang ditolak di jalur HTTP diterima di jalur socket untuk
+  // percakapan yang sama.
+  it('angkanya sama dengan BATAS_PANJANG_PESAN di chat-server', () => {
+    const isi = fs.readFileSync(path.join(__dirname, '..', 'chat-server', 'index.js'), 'utf8');
+    const cocok = isi.match(/const BATAS_PANJANG_PESAN\s*=\s*(\d+)/);
+
+    assert.ok(cocok, 'BATAS_PANJANG_PESAN tidak ditemukan di chat-server/index.js');
+    assert.equal(
+      Number(cocok[1]),
+      PANJANG_PESAN_CHAT_MAKS,
+      'batas panjang pesan di chat-server dan di Next harus sama'
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Keenam route memakai penjaga bersama, bukan `req.json()` telanjang
+// ---------------------------------------------------------------------------
+describe('route: req.json() tidak lagi dipanggil tanpa penjagaan', () => {
+  const ROUTE = [
+    ['admin/chat/close', 'src/app/api/admin/chat/close/route.ts'],
+    ['admin/chat/join', 'src/app/api/admin/chat/join/route.ts'],
+    ['admin/chat/reply', 'src/app/api/admin/chat/reply/route.ts'],
+    ['admin/chat/send', 'src/app/api/admin/chat/send/route.ts'],
+    ['admin/settings', 'src/app/api/admin/settings/route.ts'],
+    ['admin/update-order', 'src/app/api/admin/update-order/route.ts'],
+    ['booking/request-refund', 'src/app/api/booking/request-refund/route.ts'],
+  ];
+
+  // Komentar dibuang dulu: keenam route MENJELASKAN cacat lamanya dengan
+  // menuliskan `await req.json()` di dalam komentar, dan gerbang yang membaca
+  // komentar akan menyalakan alarm atas penjelasannya sendiri.
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(path.join(__dirname, '..', jalur), 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/(^|[^:])\/\/.*$/gm, '$1');
+  }
+
+  for (const [nama, jalur] of ROUTE) {
+    it(`${nama} membaca body lewat bacaBodyJson`, () => {
+      const kode = kodeSaja(jalur);
+
+      assert.match(kode, /bacaBodyJson\(req/, `${nama} harus memakai bacaBodyJson`);
+      assert.match(kode, /from ["']@\/lib\/body-json["']/);
+      assert.doesNotMatch(
+        kode,
+        /await req\.json\(\)/,
+        `${nama} tidak boleh memanggil req.json() langsung`
+      );
+    });
+
+    it(`${nama} menghentikan handler saat body ditolak`, () => {
+      const kode = kodeSaja(jalur);
+
+      // Tanpa `return`, jawaban 400 disusun lalu dibuang dan handler lanjut
+      // berjalan atas body yang baru saja dinyatakan tidak sah.
+      assert.match(
+        kode,
+        /if \(!hasil(Body)?\.ok\) return hasil(Body)?\.jawaban;/,
+        `${nama} harus mengembalikan jawaban penolakan`
+      );
+    });
+
+    it(`${nama} menyebut dirinya di context supaya penolakan bisa ditelusuri`, () => {
+      const kode = kodeSaja(jalur);
+      assert.match(
+        kode,
+        new RegExp(`bacaBodyJson\\(req, ['"]${nama}['"]\\)`),
+        `${nama} harus mengirim context-nya sendiri`
+      );
+    });
+  }
+
+  it('chat/send dan chat/reply menjaga isi pesan lewat teksPesanChat', () => {
+    for (const jalur of [
+      'src/app/api/admin/chat/send/route.ts',
+      'src/app/api/admin/chat/reply/route.ts',
+    ]) {
+      const kode = kodeSaja(jalur);
+
+      assert.match(kode, /teksPesanChat\(hasil\.body\.message\)/, `${jalur} harus memakai teksPesanChat`);
+      assert.match(kode, /message === null/, `${jalur} harus menolak message yang tidak sah`);
+      // `!message` adalah cacat aslinya: objek selalu truthy, jadi
+      // `{"message":{"a":1}}` lolos sampai ke kolom String dan jatuh 500.
+      assert.doesNotMatch(kode, /\|\|\s*!message/, `${jalur} tidak boleh kembali ke pemeriksaan truthy`);
+    }
+  });
+
+  it('keempat route chat menjaga sessionId lewat idDariBody', () => {
+    for (const jalur of [
+      'src/app/api/admin/chat/close/route.ts',
+      'src/app/api/admin/chat/join/route.ts',
+      'src/app/api/admin/chat/reply/route.ts',
+      'src/app/api/admin/chat/send/route.ts',
+    ]) {
+      const kode = kodeSaja(jalur);
+
+      assert.match(kode, /idDariBody\(hasil\.body\.sessionId\)/, `${jalur} harus memakai idDariBody`);
+      assert.match(kode, /sessionId === null/, `${jalur} harus menolak sessionId yang tidak sah`);
+    }
+  });
+});
+// ---------------------------------------------------------------------------
+// chat-server: penulisan pesan ikut dibatasi, bukan hanya panggilan AI
+// ---------------------------------------------------------------------------
+describe('chat-server membatasi penulisan pesan, bukan hanya panggilan AI', () => {
+  const JALUR_CHAT_SERVER = path.join(__dirname, '..', 'chat-server', 'index.js');
+
+  function kodeSaja() {
+    return fs
+      .readFileSync(JALUR_CHAT_SERVER, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  }
+
+  it('ada batas penulisan pesan yang terdefinisi', () => {
+    const kode = kodeSaja();
+    assert.match(kode, /const BATAS_TULIS_PESAN_PER_SESI\s*=\s*\d+/);
+    assert.match(kode, /const JENDELA_TULIS_PESAN_MS\s*=/);
+  });
+
+  it('batasnya dipanggil di jalur sendMessage sebelum chatMessage.create', () => {
+    const kode = kodeSaja();
+    const mulai = kode.indexOf('socket.on("sendMessage"');
+    assert.ok(mulai > 0, 'handler sendMessage tidak ditemukan');
+
+    const potongan = kode.slice(mulai);
+    const posJatah = potongan.indexOf('BATAS_TULIS_PESAN_PER_SESI');
+    const posTulis = potongan.indexOf('chatMessage.create');
+
+    assert.ok(posJatah > 0, 'sendMessage tidak memanggil batas penulisan');
+    assert.ok(
+      posJatah < posTulis,
+      'batas penulisan harus diperiksa SEBELUM baris ditulis ke database'
+    );
+  });
+
+  it('kuncinya per sesi, bukan per socket', () => {
+    // Satu skrip bisa membuka socket baru untuk setiap pesan; batas per socket
+    // tidak akan pernah menyentuhnya.
+    const kode = kodeSaja();
+    assert.match(kode, /key:\s*`chat-tulis:sesi:\$\{sessionId\}`/);
+  });
+
+  it('penolakan memakai pesanGagal, BUKAN authError', () => {
+    // `ChatWidget.tsx` memperlakukan setiap `authError` sebagai sesi yang
+    // dicabut: ia menghapus `utero_chat_id` dan `utero_chat_token` lalu
+    // mengembalikan pengunjung ke formulir kosong. Memakainya untuk penolakan
+    // jatah berarti pengunjung yang mengetik cepat kehilangan percakapannya.
+    const kode = kodeSaja();
+    // Dicari dari dalam handler `sendMessage`, bukan dari kemunculan PERTAMA
+    // nama konstantanya: kemunculan pertama adalah definisinya di kepala berkas,
+    // dan potongan yang dimulai dari sana menyerap seluruh handler di antaranya
+    // — termasuk `authError` milik `mintaRiwayat` yang memang benar berada di
+    // sana. Gerbangnya akan menyalakan alarm atas kode yang tidak diubahnya.
+    const handler = kode.indexOf('socket.on("sendMessage"');
+    assert.ok(handler > 0, 'handler sendMessage tidak ditemukan');
+
+    const mulai = kode.indexOf('BATAS_TULIS_PESAN_PER_SESI', handler);
+    assert.ok(mulai > 0, 'sendMessage tidak memanggil batas penulisan');
+    const potongan = kode.slice(mulai, kode.indexOf('safeMessage', mulai));
+
+    assert.match(potongan, /socket\.emit\("pesanGagal"/);
+    assert.doesNotMatch(potongan, /authError/);
+  });
+
+  it('penolakan menghentikan handler, tidak hanya memberi tahu', () => {
+    const kode = kodeSaja();
+    const mulai = kode.indexOf('if (!jatahTulis.success)');
+    assert.ok(mulai > 0, 'cabang penolakan tidak ditemukan');
+
+    const blok = kode.slice(mulai, kode.indexOf('}', kode.indexOf('return', mulai)));
+    assert.match(blok, /return;/, 'penolakan tanpa return akan tetap menulis pesannya');
+  });
+
+  it('petugas dikecualikan dari batas penulisan', () => {
+    // Satu petugas yang membalas sepuluh percakapan sekaligus dari panel kotak
+    // masuk adalah pemakaian wajar, dan identitasnya sudah lewat handshake.
+    const kode = kodeSaja();
+    assert.match(kode, /identity\.type !== "staff"/);
+  });
+
+  it('batas tulis lebih longgar daripada batas AI', () => {
+    // Sesi yang jatah AI-nya habis masih berbicara dengan petugas manusia;
+    // percakapan itu tidak boleh ikut terhenti.
+    const kode = kodeSaja();
+    const tulis = Number(kode.match(/const BATAS_TULIS_PESAN_PER_SESI\s*=\s*(\d+)/)[1]);
+    const ai = Number(kode.match(/const BATAS_AI_PER_SESI\s*=\s*(\d+)/)[1]);
+
+    assert.ok(tulis > ai, `batas tulis (${tulis}) harus di atas batas AI (${ai})`);
+  });
+
+  it('pesan pengunjung tetap dibatasi walaupun jatah AI sudah habis', () => {
+    // Ini cacat aslinya: `tolakanBalasanAI` menahan panggilan berbayarnya, tapi
+    // `chatMessage.create` di atasnya tetap berjalan pada SETIAP pesan. Jadi
+    // loop tidak lagi menguras kuota Gemini, tapi tetap menumpuk baris.
+    const kode = kodeSaja();
+    const mulai = kode.indexOf('socket.on("sendMessage"');
+    const potongan = kode.slice(mulai);
+
+    const posJatahTulis = potongan.indexOf('BATAS_TULIS_PESAN_PER_SESI');
+    const posJatahAI = potongan.indexOf('tolakanBalasanAI');
+
+    assert.ok(
+      posJatahTulis < posJatahAI,
+      'batas penulisan harus di depan, bukan menumpang pada gerbang AI'
+    );
+  });
 });

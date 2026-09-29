@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
 import { amankanHtml } from "@/lib/html";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
@@ -34,7 +35,16 @@ export async function POST(req: Request) {
   // berubah, tapi foto bukti pemasangan tidak tersimpan — dan
   // `dashboard/order/[id]/page.tsx` (isLive = ACTIVE && !!installationProof)
   // tidak pernah menampilkan order sebagai tayang.
-  const { orderId, newStatus, reason, refundProof, isLocked, installationProof } = await req.json();
+  //
+  // `await req.json()` dulu dipanggil apa adanya di sini, DI LUAR `try` yang
+  // baru dibuka beberapa baris di bawah. Body yang bukan JSON melempar tanpa
+  // penangkap: Next menjawabnya sebagai galat runtime 500, bukan 400, dan
+  // mencatatnya sebagai kerusakan server — sehingga permintaan cacat dari
+  // client tidak bisa dibedakan dari database yang tumbang di log.
+  // Lihat `src/lib/body-json.ts`.
+  const hasilBody = await bacaBodyJson(req, 'admin/update-order');
+  if (!hasilBody.ok) return hasilBody.jawaban;
+  const { orderId, newStatus, reason, refundProof, isLocked, installationProof } = hasilBody.body;
 
   // Kolom `status` bertipe enum, jadi nilai asing ditolak database di lapisan
   // paling dalam — muncul ke admin sebagai "Gagal Update" tanpa keterangan,

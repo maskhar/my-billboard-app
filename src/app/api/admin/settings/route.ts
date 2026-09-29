@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
 import { dekripsi, enkripsi, enkripsiSiap } from "@/lib/rahasia";
 import { ambilIdentitasSitus, namaUntukPrompt } from "@/lib/identitas-situs";
 import { keE164 } from "@/lib/telepon";
@@ -69,7 +70,13 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  const body = await req.json();
+  // `await req.json()` dulu dipanggil langsung di sini. Body yang bukan JSON
+  // melempar tanpa penangkap: Next menjawabnya sebagai galat runtime, bukan
+  // 400, dan jejaknya masuk log sebagai kerusakan server. Lihat
+  // `src/lib/body-json.ts`.
+  const hasilBody = await bacaBodyJson(req, 'admin/settings');
+  if (!hasilBody.ok) return hasilBody.jawaban;
+  const body = hasilBody.body;
 
   if (body.action === 'TEST_AI') {
       // Bila client tidak mengirim key (karena GET sudah tidak membocorkannya),

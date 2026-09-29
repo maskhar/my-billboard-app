@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
+import { idDariBody } from "@/lib/id-dari-body";
 
 // Peran yang boleh mengelola percakapan pelanggan.
 const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
@@ -15,9 +17,14 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { sessionId } = await req.json();
+    // Body dibaca lewat penjaga bersama: `await req.json()` di luar `try`
+    // melempar untuk body yang bukan JSON, dan lemparan itu dijawab sebagai
+    // kerusakan server alih-alih 400. Lihat `src/lib/body-json.ts`.
+    const hasil = await bacaBodyJson(req, 'admin/chat/join');
+    if (!hasil.ok) return hasil.jawaban;
 
-    if (!sessionId || typeof sessionId !== 'string') {
+    const sessionId = idDariBody(hasil.body.sessionId);
+    if (sessionId === null) {
         return NextResponse.json({ error: "sessionId wajib diisi" }, { status: 400 });
     }
 

@@ -3,6 +3,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
+import { idDariBody } from "@/lib/id-dari-body";
+import { teksPesanChat } from "@/lib/pesan-chat";
 
 // Peran yang boleh mengelola percakapan pelanggan.
 const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
@@ -15,9 +18,19 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { sessionId, message } = await req.json();
+    // Body dibaca lewat penjaga bersama. `await req.json()` di luar `try`
+    // melempar untuk body yang bukan JSON, dan lemparan itu dijawab sebagai
+    // kerusakan server alih-alih 400. Lihat `src/lib/body-json.ts`.
+    const hasil = await bacaBodyJson(req, 'admin/chat/reply');
+    if (!hasil.ok) return hasil.jawaban;
 
-    if (!sessionId || typeof sessionId !== 'string' || !message || typeof message !== 'string') {
+    const sessionId = idDariBody(hasil.body.sessionId);
+    // Panjangnya ikut dibatasi: route ini dulu memeriksa tipe `message` tapi
+    // tidak panjangnya, sementara `chat-server` memotong pada 4000 karakter.
+    // Dua jalur yang menulis ke satu kolom yang sama dengan batas berbeda.
+    const message = teksPesanChat(hasil.body.message);
+
+    if (sessionId === null || message === null) {
         return NextResponse.json({ error: "Data tidak lengkap" }, { status: 400 });
     }
 

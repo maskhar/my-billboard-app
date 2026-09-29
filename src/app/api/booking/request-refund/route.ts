@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
 import { amankanHtml } from "@/lib/html";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { keAngka, nol, persen, rupiah } from "@/lib/money";
@@ -69,7 +70,15 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
 
-  const body = await req.json();
+  // `await req.json()` dulu dipanggil apa adanya di sini, tanpa `try` mana pun
+  // di atasnya. Body yang bukan JSON melempar dan dijawab sebagai galat runtime
+  // 500 alih-alih 400 — route yang memindahkan uang melaporkan permintaan cacat
+  // sebagai kerusakan server. `teksDariBody` di atas tetap dipakai untuk isi
+  // tiap bidang; yang ditambahkan di sini hanya penjagaan bentuk BODY-nya.
+  // Lihat `src/lib/body-json.ts`.
+  const hasilBody = await bacaBodyJson(req, 'booking/request-refund');
+  if (!hasilBody.ok) return hasilBody.jawaban;
+  const body = hasilBody.body;
   const adminEmail = process.env.ADMIN_EMAIL; // Email Bos
 
   // `orderId` dulu diteruskan ke Prisma apa adanya. Bila klien mengirim objek

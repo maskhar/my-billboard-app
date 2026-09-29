@@ -270,6 +270,29 @@ function tolakanBalasanAI(sessionId) {
 const BATAS_RIWAYAT_PER_SOCKET = 20;
 const JENDELA_RIWAYAT_MS = 60 * 1000;
 
+// Penulisan pesan per sesi per menit.
+//
+// Sebelumnya jalur ini adalah satu-satunya di berkas ini yang MENULIS ke
+// database atas permintaan tamu tanpa batas apa pun. Yang dibatasi hanya
+// panggilan Gemini-nya (`tolakanBalasanAI`, 12 per menit per sesi), dan itu
+// memang menahan biaya berbayarnya — tapi `chatMessage.create` di atasnya tetap
+// berjalan pada setiap pesan, termasuk seluruh pesan yang jatah AI-nya sudah
+// habis. Satu skrip yang mengirim dalam loop karena itu tidak lagi menghabiskan
+// kuota Gemini, tapi tetap bisa menumpuk baris `ChatMessage` tanpa henti,
+// menguras koneksi pool Prisma, dan membuat pesan tamu lain berhenti tersimpan.
+// Pembacaan riwayat sudah dijaga (20 per menit) sementara penulisannya tidak —
+// justru urutan yang terbalik dari yang masuk akal.
+//
+// Angkanya SENGAJA di atas `BATAS_AI_PER_SESI` (12): sesi yang jatah AI-nya
+// habis masih berbicara dengan petugas manusia, dan percakapan itu tidak boleh
+// ikut terhenti. 30 per menit adalah satu pesan tiap dua detik selama satu menit
+// penuh — di atas kecepatan orang mengetik, jauh di bawah kecepatan loop.
+//
+// Kuncinya per SESI, bukan per socket: satu skrip bisa membuka socket baru untuk
+// setiap pesan, dan batas per socket tidak akan pernah menyentuhnya.
+const BATAS_TULIS_PESAN_PER_SESI = 30;
+const JENDELA_TULIS_PESAN_MS = 60 * 1000;
+
 // ---------------------------------------------------------------------------
 // Kehadiran tamu: diukur dari socket, bukan dikira-kira
 // ---------------------------------------------------------------------------
@@ -747,6 +770,36 @@ io.on("connection", (socket) => {
       }
 
       if (typeof message !== "string" || !message.trim()) return;
+
+      // Penulisannya dibatasi, bukan hanya panggilan AI-nya. Lihat catatan di
+      // `BATAS_TULIS_PESAN_PER_SESI`.
+      //
+      // Petugas DIKECUALIKAN: identitasnya sudah lewat verifikasi handshake,
+      // jumlahnya terbatas, dan satu orang yang membalas sepuluh percakapan
+      // sekaligus dari panel kotak masuk adalah pemakaian yang wajar — bukan
+      // penyalahgunaan. Yang dibatasi adalah jalur yang terbuka tanpa login.
+      if (identity.type !== "staff") {
+        const jatahTulis = rateLimit({
+          key: `chat-tulis:sesi:${sessionId}`,
+          limit: BATAS_TULIS_PESAN_PER_SESI,
+          windowMs: JENDELA_TULIS_PESAN_MS,
+        });
+        if (!jatahTulis.success) {
+          // `pesanGagal`, BUKAN `authError`. Widget tamu memperlakukan setiap
+          // `authError` sebagai sesi yang dicabut: ia menghapus
+          // `utero_chat_id` dan `utero_chat_token` dari localStorage lalu
+          // mengembalikan pengunjung ke formulir kosong. Mengirimkannya di sini
+          // berarti pengunjung yang mengetik terlalu cepat KEHILANGAN seluruh
+          // percakapannya. Sesinya masih sah; yang ditolak cuma satu pesan.
+          socket.emit("pesanGagal", {
+            message: `Anda mengirim pesan terlalu cepat. Coba lagi dalam ${jatahTulis.retryAfterSeconds} detik ya. 🙏`,
+          });
+          // [PRIVACY] Hanya metadata, jangan isi pesan pelanggan.
+          console.warn(`Penulisan pesan ditolak jatah (socket ${socket.id})`);
+          return;
+        }
+      }
+
       // Namanya `safeMessage`, tapi yang terjadi di sini HANYA pemotongan
       // panjang. Pengamanan terhadap isinya berada di `getGeminiResponse`
       // (pembatas acak + `bersihkanTeksPengguna`) dan di sisi penampil.

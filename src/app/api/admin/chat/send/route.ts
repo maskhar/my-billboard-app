@@ -3,6 +3,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { bacaBodyJson } from "@/lib/body-json";
+import { idDariBody } from "@/lib/id-dari-body";
+import { teksPesanChat } from "@/lib/pesan-chat";
 
 // Peran yang boleh mengelola percakapan pelanggan.
 const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
@@ -17,14 +20,20 @@ export async function POST(req: Request) {
   }
 
   try {
-    const { sessionId, message } = await req.json();
+    const hasil = await bacaBodyJson(req, 'admin/chat/send');
+    if (!hasil.ok) return hasil.jawaban;
 
-    // Tipenya diperiksa, bukan hanya keberadaannya. Tiga route chat lain
-    // (`close`, `join`, `reply`) sudah memakai `typeof`; route inilah yang
-    // terlewat. Objek selalu truthy, jadi `!sessionId` meloloskannya utuh ke
-    // `where` — dan Prisma menolaknya sebagai galat validasi, yang muncul ke
-    // petugas sebagai 500 "Gagal kirim" yang bisa dipicu siapa pun.
-    if (typeof sessionId !== 'string' || sessionId.trim() === '' || !message) {
+    // Tipe KEDUA bidangnya diperiksa, bukan hanya `sessionId`. Komentar di sini
+    // dulu sudah menjelaskan kenapa pemeriksaan tipe dibutuhkan — objek selalu
+    // truthy, jadi pemeriksaan keberadaan meloloskannya utuh — tapi penjelasan
+    // itu hanya diterapkan pada `sessionId`. `message` tinggal `!message`,
+    // sehingga `{"sessionId":"<sesi nyata>","message":{"a":1}}` lolos sampai ke
+    // `chatMessage.create` pada kolom String dan jatuh sebagai 500 "Gagal
+    // kirim" yang bisa dipicu siapa pun yang punya satu id sesi.
+    const sessionId = idDariBody(hasil.body.sessionId);
+    const message = teksPesanChat(hasil.body.message);
+
+    if (sessionId === null || message === null) {
         return NextResponse.json({ error: "Data tidak lengkap" }, { status: 400 });
     }
 
