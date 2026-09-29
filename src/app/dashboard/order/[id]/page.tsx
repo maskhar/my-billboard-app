@@ -122,18 +122,33 @@ export default async function OrderDetailPage(props: Props) {
 
               {/* TIMELINE VISUAL (6 STEP) */}
               {!isFailed ? (
-                  <div className="relative mb-16 px-4 mt-8"> 
+                  /* Enam langkah `w-24` (96px) membutuhkan 576px, dan tidak ada
+                     satu pun pembungkus penggulung di sini. Di 320/375px
+                     keenam label bertumpuk satu di atas yang lain sampai tidak
+                     terbaca, sementara `overflow-hidden` pada kartu induknya
+                     (baris 108) memotong dua langkah terakhir — yaitu
+                     "Terpasang" dan "Aktif", dua status yang paling ingin
+                     dilihat pembeli.
+
+                     `overflow-x-auto` di sini, dan `min-w-[576px]` pada isinya
+                     supaya langkahnya tidak ikut menyusut menjadi tak terbaca.
+                     Kedua garis progres di dalam memakai `absolute` relatif ke
+                     pembungkus ber-`min-w`, bukan ke pembungkus penggulung,
+                     jadi panjangnya tetap mengukur 576px yang sama dan tidak
+                     berhenti di tepi layar. */
+                  <div className="relative mb-16 mt-8 overflow-x-auto pb-2">
+                    <div className="relative min-w-[576px] px-4">
                       {/* Garis Abu (Latar) */}
                       <div className="absolute top-4 left-0 w-full h-1.5 bg-gray-100 rounded-full"></div>
-                      
+
                       {/* Garis Hijau (Progress) */}
-                      <div className="absolute top-4 left-0 h-1.5 bg-green-500 transition-all duration-1000 rounded-full shadow-[0_0_10px_rgba(34,197,94,0.4)]" 
+                      <div className="absolute top-4 left-0 h-1.5 bg-green-500 transition-all duration-1000 rounded-full shadow-[0_0_10px_rgba(34,197,94,0.4)]"
                            style={{ width: `${progressPercent}%` }}>
                       </div>
 
                       <div className="flex justify-between relative z-10">
                           {steps.map((step, idx) => (
-                              <div key={idx} className="flex flex-col items-center w-24 -ml-4 md:ml-0">
+                              <div key={idx} className="flex flex-col items-center w-24 shrink-0 -ml-4 md:ml-0">
                                   <div className={`w-9 h-9 rounded-full flex items-center justify-center text-xs font-bold transition-all border-[3px] z-20 ${
                                       step.done ? 'bg-green-500 text-white border-white shadow-lg' : 'bg-white border-gray-200 text-gray-300'
                                   }`}>
@@ -148,6 +163,7 @@ export default async function OrderDetailPage(props: Props) {
                               </div>
                           ))}
                       </div>
+                    </div>
                   </div>
               ) : (
                   <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-center font-bold mb-8 text-sm">

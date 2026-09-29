@@ -57,8 +57,22 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                 </button>
             </div>
 
+            {/* `overflow-hidden` dulu ada di pembungkus ini, dan yang ia
+                potong adalah kolom "Aksi" — tombol edit dan hapus di ujung
+                kanan. Enam kolom dengan `px-6` tidak muat di bawah ~900px, dan
+                `overflow-hidden` MEMOTONG luberan itu tanpa memberi cara
+                menggulungnya: admin di laptop 13" melihat tabel yang terlihat
+                utuh dan tidak punya satu pun tombol.
+
+                Pemisahannya dua lapis karena keduanya berbeda tugas:
+                pembungkus luar membawa sudut membulat dan bingkai (dan tetap
+                `overflow-hidden`, supaya sudutnya memotong baris pertama
+                tabel), pembungkus dalam yang menggulung. Menaruh
+                `overflow-x-auto` pada elemen yang sama dengan `rounded-xl`
+                membuat sudut membulatnya hilang saat gulungan aktif. */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                <table className="w-full text-left">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left min-w-[860px]">
                     <thead className="bg-gray-50 text-xs uppercase font-bold text-gray-500 border-b border-gray-100">
                         <tr>
                             <th className="px-6 py-4">User Info</th>
@@ -186,6 +200,7 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                         })}
                     </tbody>
                 </table>
+              </div>
             </div>
         </div>
     );

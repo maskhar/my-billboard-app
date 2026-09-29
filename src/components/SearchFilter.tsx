@@ -134,7 +134,21 @@ const SearchFilter = () => {
 
 
         {/* === DESKTOP (LAPTOP) VIEW === */}
-        <div className="hidden md:flex w-[800px] mx-auto bg-white/95 backdrop-blur-md rounded-full shadow-2xl border border-gray-100 items-center divide-x divide-gray-100 p-2">
+        {/* `w-[800px]` LEBAR TETAP, dan tombol carinya tidak bisa diklik di
+            768–831px.
+
+            Induknya di `app/page.tsx:96` sudah benar (`w-full max-w-[800px]`),
+            tapi lebar tetap di sini mengabaikannya: `md:` mulai di 768px,
+            sementara induk pada 768px hanya selebar 736px setelah `px-4`. Bilah
+            ini meluber ~64px ke kanan, dan hero-nya (`app/page.tsx:89`)
+            memakai `overflow-hidden` — jadi yang terpotong bukan sekadar
+            dekorasi, melainkan tombol "Cari" di ujung kanan, satu-satunya cara
+            menjalankan pencarian di tampilan desktop. Tidak ada scrollbar yang
+            muncul untuk memberi tahu ada yang hilang.
+
+            `max-w-[800px]` memberi hasil yang sama pada layar lebar dan
+            menyusut mengikuti induknya di bawah 832px. */}
+        <div className="hidden md:flex w-full max-w-[800px] mx-auto bg-white/95 backdrop-blur-md rounded-full shadow-2xl border border-gray-100 items-center divide-x divide-gray-100 p-2">
             
             {/* Input Lokasi */}
             <div className="flex-1 px-6 py-3 hover:bg-gray-50/50 rounded-l-full cursor-pointer transition group">
@@ -179,9 +193,15 @@ const SearchFilter = () => {
             </div>
 
             {/* Tombol Search Desktop */}
-            <div className="pl-4 pr-1">
-                <button 
+            {/* `shrink-0`: tanpa ini flexbox boleh menyusutkan pembungkus tombol
+                saat ruang sempit, dan yang menyusut lebih dulu justru tombol
+                terakhir. `aria-label` karena isinya hanya ikon — tanpa itu
+                pembaca layar mengumumkan "button" tanpa menyebut apa pun, dan
+                inilah satu-satunya tombol yang menjalankan pencarian. */}
+            <div className="pl-4 pr-1 shrink-0">
+                <button
                     onClick={handleSearch}
+                    aria-label="Cari billboard"
                     className="w-12 h-12 bg-gradient-to-br from-utero to-red-600 hover:scale-105 active:scale-95 rounded-full flex items-center justify-center text-white font-bold shadow-lg shadow-red-500/30 transition-all duration-300"
                 >
                     <Search size={20} className='stroke-[3px]' />

@@ -77,8 +77,18 @@ export default async function AdminBillboardsPage({
             </Link>
         </div>
 
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200">
-            <table className="w-full text-left">
+        {/* Tanpa pembungkus penggulung, luberan tabel ini bocor ke `<body>`:
+            yang menggulung adalah SELURUH halaman, jadi header dan sidebar
+            admin ikut bergeser mengikuti kolom yang dikejar. `overflow-x-auto`
+            menahan gulungan di dalam kartunya sendiri.
+
+            `overflow-hidden` di pembungkus luar khusus untuk sudut membulat —
+            tanpanya baris pertama tabel menutupi lengkungan `rounded-xl`; ia
+            tidak boleh dipasang pada elemen yang sama dengan `overflow-x-auto`,
+            karena sudut membulatnya hilang saat gulungan aktif. */}
+        <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left min-w-[820px]">
                 <thead className="bg-gray-50 text-xs uppercase font-bold text-gray-500 border-b border-gray-100">
                     <tr>
                         <th className="px-6 py-4">Foto</th>
@@ -158,7 +168,12 @@ export default async function AdminBillboardsPage({
                     ))}
                 </tbody>
             </table>
+          </div>
 
+            {/* Navigasi halaman DI LUAR pembungkus penggulung. Di dalamnya, ia
+                ikut bergeser bersama tabel — admin yang menggulung ke kanan
+                untuk melihat kolom Aksi kehilangan tombol "Berikutnya" di
+                sebelah kiri. */}
             {totalHalaman > 1 && (
               <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4 text-sm">
                 <span className="text-gray-500">

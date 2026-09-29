@@ -67,10 +67,10 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | 4.26, 4.28, 4.29, 4.31 (ringan) |
 | 3 | ✅ inti selesai | 3.20, 3.21 (RLS/PostgREST), 3.22 |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.5, 5.6, 5.7, 5.9, 5.12, 5.18–5.29, 5.30, 5.33 |
-| 6 | 🔶 sebagian | 6.12–6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
+| 5 | 🔶 sebagian | 5.7, 5.9, 5.12, 5.17, 5.18–5.29, 5.30, 5.33 |
+| 6 | 🔶 sebagian | 6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
 | 7 | 🔶 sebagian | 7.17, 7.18 |
-| 8 | 🔶 sebagian | 8.9 (8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.16 temuan baru, semuanya tuntas) |
+| 8 | 🔶 sebagian | 8.9 (8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
 
 ### Commit terbaru (branch `feat/fondasi-xendit-aman`)
 
@@ -506,8 +506,8 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | # | Task | File | Ref | Status |
 |---|---|---|---|---|
 | 5.4 | ⚠️ **Tambah drawer mobile + hamburger** — sidebar `hidden md:flex` tanpa pengganti; **di bawah 768px admin tidak bisa navigasi ke halaman manapun**. `@headlessui/react` sudah terpasang | **jalur sebenarnya:** `src/app/admin/_components/AdminShell.tsx:5` (bukan `layout.tsx:39`) | `[05]F-05` | [x] |
-| 5.5 | Ganti `overflow-hidden` → `overflow-x-auto` pada tabel Users — sekarang **memotong** kolom Aksi di <768px, tombol edit tidak bisa diklik | `UserClientPage.tsx:36-37` | `[05]F-15` | [ ] |
-| 5.6 | Bungkus tabel Inventory dengan `overflow-x-auto` — scroll horizontal bocor ke `<body>` | `billboards/page.tsx:52-53` | `[05]F-16` | [ ] |
+| 5.5 | Ganti `overflow-hidden` → `overflow-x-auto` pada tabel Users — sekarang **memotong** kolom Aksi di <768px, tombol edit tidak bisa diklik. **Dikerjakan dua lapis, bukan menggantikan:** `overflow-hidden` tetap di pembungkus luar (ia yang membuat sudut `rounded-xl` memotong baris pertama tabel), `overflow-x-auto` di pembungkus dalam + `min-w-[860px]` pada tabelnya. Satu elemen tidak boleh memikul keduanya — sudut membulatnya hilang saat gulungan aktif | `UserClientPage.tsx:73-75,203` | `[05]F-15` | [x] |
+| 5.6 | Bungkus tabel Inventory dengan `overflow-x-auto` — scroll horizontal bocor ke `<body>`, sehingga header dan sidebar admin ikut bergeser. Pola dua lapis yang sama + `min-w-[820px]`; **paginasi ditaruh di luar** pembungkus gulungan, kalau di dalam tombol "Berikutnya" hilang ke kiri saat admin menggulung ke kolom Aksi | `billboards/page.tsx:89-91,171` | `[05]F-16` | [x] |
 | 5.7 | Perbaiki `h-screen` bersarang di live chat — kotak input balasan **terdorong keluar layar di semua breakpoint**; di mobile jadi 3 layar bertumpuk tanpa navigasi balik. **Lingkup sebenarnya lebih luas dari yang tertulis:** `h-screen` muncul **42 kali** di seluruh repo, jadi perbaikan per-baris di satu file tidak menyelesaikan pola ini | `CS_InboxLayout.tsx:230,231,238` + 42 titik repo-wide | `[05]F-17` | [ ] |
 | 5.8 | `grid-cols-2` → `grid-cols-1 md:grid-cols-2` pada detail order — area upload tak terpakai di 375px | `orders/[id]/page.tsx:48` | `[05]F-18` | [x] |
 | 5.9 | Kartu KPI `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4` — sekarang lompat 1→4, nilai rupiah terpotong di 768–1023px | `page.tsx:80` | `[05]F-19` | [ ] |
@@ -593,10 +593,10 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 
 | # | Task | File | Ref | Status |
 |---|---|---|---|---|
-| 6.12 | Search bar `w-[800px]` terpotong `overflow-hidden` induk — tombol cari tak dapat diklik di 768–831px → `w-full max-w-[800px]` | `SearchFilter.tsx:103` + `page.tsx:48,54,55` | `[04]R-01` | [ ] |
-| 6.13 | Panel chat `w-[350px]` meluber 54px di 320px; `h-[500px]` menutupi 92% layar SE → `w-[calc(100vw-2rem)] sm:w-[350px]`, `h-[70dvh] sm:h-[500px]` | `ChatWidget.tsx:117` | `[04]R-02` | [ ] |
-| 6.14 | Timeline 6 langkah butuh 576px tanpa scroll wrapper — label tumpang tindih di 320/375px | `dashboard/order/[id]/page.tsx:101-127` | `[04]R-03` | [ ] |
-| 6.15 | Invoice `max-w-[21cm]` + `p-12` sisakan 224px isi di 320px; tabel tanpa scroll wrapper → `p-4 md:p-12` + `overflow-x-auto` | `invoice/[id]/page.tsx:36,72-95` | `[04]R-04` | [ ] |
+| 6.12 | Search bar `w-[800px]` terpotong `overflow-hidden` induk — tombol cari tak dapat diklik di 768–831px → `w-full max-w-[800px]`. Tombol cari juga dapat `aria-label="Cari billboard"`: isinya hanya ikon, jadi pembaca layar sebelumnya hanya mengumumkan "tombol". Terverifikasi di browser: pada 768px tombol berakhir di x=739 dan `elementFromPoint` mengenainya | `SearchFilter.tsx:151,202` | `[04]R-01` | [x] |
+| 6.13 | Panel chat `w-[350px]` meluber 54px di 320px; `h-[500px]` menutupi 92% layar SE → `w-[calc(100vw-3rem)] sm:w-[350px]`, `h-[70dvh] sm:h-[500px]`. **`dvh`, bukan `vh`** — `vh` mengukur layar termasuk area di belakang bilah alamat ponsel, sehingga kotak balasan tertutup. Terverifikasi 272×398 pada layar 320×568, tepi bawah 24px dari dasar | `ChatWidget.tsx:344` | `[04]R-02` | [x] |
+| 6.14 | Timeline 6 langkah butuh 576px tanpa scroll wrapper — label tumpang tindih di 320/375px, dan `overflow-hidden` kartu induk memotong dua langkah terakhir ("Terpasang", "Aktif"). `overflow-x-auto` + `min-w-[576px]` pada isinya; kedua garis progres `absolute` relatif ke pembungkus ber-`min-w` supaya panjangnya tetap mengukur 576px yang sama | `dashboard/order/[id]/page.tsx:139-151` | `[04]R-03` | [x] |
+| 6.15 | Invoice `max-w-[21cm]` + `p-12` sisakan 224px isi di 320px; tabel tanpa scroll wrapper → `p-6 md:p-12` + `overflow-x-auto`. Semua penambahan dibatalkan saat cetak (`print:p-12`, `print:overflow-visible`, `print:min-w-0`) supaya hasil kertas tidak berubah sama sekali | `invoice/[id]/page.tsx` | `[04]R-04` | [x] |
 | 6.16 | Audit sisa 59 temuan Medium responsif di `[04]` §3.3 | `[04]` | [ ] |
 
 ## 6D. State & error handling
@@ -697,6 +697,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | 8.15 | ⚠️ **Migrasi `20260929090000_token_reset_sandi` ter-commit tanpa pernah diterapkan**, sementara `request-reset/route.ts`, `reset-password/route.ts`, `sapu-token-reset.ts`, `forgot-password/page.tsx`, dan `FormResetSandi.tsx` semuanya sudah hidup di atas tabel `PasswordResetToken` yang belum ada. Sebabnya 8.13: menu yang menawarkan `db push` tidak pernah melaporkan ada migrasi yang menunggu. Diterapkan dengan `migrate deploy` (yang tidak pernah membandingkan schema); kedua penjaga diverifikasi utuh sebelum dan sesudah | `prisma/migrations/20260929090000_token_reset_sandi/` | temuan sendiri | [x] |
 | 8.16 | **`chat-server/.env` menunjuk port database yang salah** (`localhost:5432`, yaitu container proyek lain `central-postgres` yang tidak punya database maupun role proyek ini). Chat-server tidak pernah bisa terhubung ke database sejak awal. Diperbaiki ke `15436` | `chat-server/.env` (di luar Git) | temuan sendiri | [x] |
 | 8.12 | Mitigasi prompt injection Gemini — delimiter + sanitasi input user | `chat-server/index.js:65` | `[01]F-29` | [x] |
+| 8.17 | ⚠️ **Container Postgres yang sedang berjalan masih mengikat `0.0.0.0:15436`, walaupun 8.5 sudah memperbaiki berkas compose-nya.** `docker ps` pada `my-billboard-app-postgres-1` melaporkan `0.0.0.0:15436->5432/tcp`: container itu dibuat SEBELUM ikatan `127.0.0.1` di-commit, dan pemetaan port ditetapkan sekali saat container dibuat — mengedit `docker-compose.yml` tidak mengubah container yang sudah ada. Jadi database pengembangan hari ini tetap terjangkau dari jaringan lokal, yaitu persis risiko yang 8.5 dimaksudkan menutup, dan test `port Postgres diikat ke 127.0.0.1` lulus karena ia membaca berkasnya, bukan container-nya. Ditutup dengan `docker compose up -d --force-recreate postgres`; volume tidak disentuh dan isinya dibandingkan sebelum/sesudah (5 User, 3 Billboard, 11 migrasi — identik), kedua penjaga database diverifikasi masih ada. Ikatannya dibuktikan dari dua arah, bukan dari label `docker ps`: `127.0.0.1:15436` terbuka, `172.28.112.1:15436` menjawab "connection refused". **Pelajarannya untuk mesin lain:** setiap klon yang sudah pernah menjalankan compose versi lama membawa cacat yang sama sampai container-nya dibuat ulang. `central-postgres` milik proyek lain juga mengikat `0.0.0.0:5432` — di luar lingkup repo ini, tapi mesin yang sama | container runtime, bukan berkas | temuan sendiri | [x] |
 
 ---
 

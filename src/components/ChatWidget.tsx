@@ -325,7 +325,23 @@ export default function ChatWidget() {
       )}
 
       {isOpen && (
-        <div className="fixed bottom-6 right-6 z-[9999] w-[350px] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col h-[500px] animate-in slide-in-from-bottom-10 fade-in font-sans">
+        // `w-[350px]` + `h-[500px]` KEDUANYA TETAP, dan keduanya salah di telepon.
+        //
+        // Lebar: panel ini `fixed` dengan `right-6` (24px). Di layar 320px
+        // (iPhone SE, dan mode zoom di banyak telepon) 350 + 24 = 374px, jadi
+        // ia meluber 54px ke kiri — bukan ke kanan. Yang hilang di luar tepi
+        // kiri layar adalah awal setiap pesan, dan karena panelnya `fixed`
+        // tidak ada scrollbar yang muncul untuk memberi tahu.
+        //
+        // Tinggi: 500px + `bottom-6` menutupi 92% layar setinggi 568px. Widget
+        // bantuan yang menutupi hampir seluruh halaman berhenti menjadi widget.
+        //
+        // `w-[calc(100vw-3rem)]` menyisakan 24px di kedua sisi — sama dengan
+        // `right-6` di kanan, simetris di kiri. `h-[70dvh]`, bukan `70vh`:
+        // `dvh` mengikuti bilah alamat browser mobile yang muncul-hilang,
+        // sementara `vh` mengukur layar penuh dan menaruh kotak balasan di
+        // bawah bilah itu, tepat di tempat yang tidak bisa disentuh.
+        <div className="fixed bottom-6 right-6 z-[9999] w-[calc(100vw-3rem)] sm:w-[350px] bg-white rounded-2xl shadow-2xl border border-gray-200 overflow-hidden flex flex-col h-[70dvh] sm:h-[500px] animate-in slide-in-from-bottom-10 fade-in font-sans">
           <div className="bg-utero p-4 flex justify-between items-center text-white shadow-md shrink-0">
             <div className="flex items-center gap-2">
               <div className="bg-white/20 p-2 rounded-full"><User size={20}/></div>

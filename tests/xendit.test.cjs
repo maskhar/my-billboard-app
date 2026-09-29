@@ -23698,6 +23698,57 @@ describe('konfigurasi lingkungan dan penjaga database', () => {
       );
     });
 
+    it('container Postgres yang berjalan benar-benar memakai ikatan itu', () => {
+      // Test di atas membaca BERKAS-nya. Memperbaiki berkas tidak memperbaiki
+      // container yang sudah ada: pemetaan port ditetapkan sekali saat
+      // container dibuat, jadi setiap klon yang pernah menjalankan compose
+      // versi lama tetap mengikat `0.0.0.0` walaupun berkasnya sudah benar —
+      // dan test di atas tetap hijau. Itu persis yang terjadi di mesin ini
+      // (temuan 8.17): berkas bilang `127.0.0.1:15436`, `docker ps` bilang
+      // `0.0.0.0:15436`. Perbaikannya `docker compose up -d --force-recreate
+      // postgres`, yang tidak menyentuh volume.
+      let keluaran;
+      try {
+        keluaran = require('child_process').execFileSync(
+          'docker',
+          ['ps', '--filter', 'name=my-billboard-app-postgres', '--format', '{{.Ports}}'],
+          { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 15000 }
+        );
+      } catch {
+        // Docker tidak terpasang atau tidak berjalan (CI, mesin rekan yang
+        // memakai Postgres lain). Tidak ada yang bisa diperiksa, dan
+        // menggagalkan test di sini hanya akan mengajari orang melewatinya.
+        return;
+      }
+
+      const baris = keluaran.trim();
+      if (!baris) return; // container memang sedang tidak dijalankan
+
+      // Dipecah pada baris baru SEKALIGUS koma: bila lebih dari satu container
+      // cocok dengan filter nama, `docker ps` menuliskannya satu per baris.
+      // Memecah pada koma saja menggabungkan keduanya menjadi satu entri, dan
+      // entri gabungan yang kebetulan DIAWALI `127.0.0.1:` akan tersaring
+      // keluar — meloloskan container `0.0.0.0` yang tercetak di baris kedua.
+      const terbuka = baris
+        .split(/[\r\n,]+/)
+        .map((bagian) => bagian.trim())
+        .filter(Boolean)
+        .filter((bagian) => /->/.test(bagian))
+        // `[::]:15436->` adalah pasangan IPv6 dari ikatan IPv4 yang sama;
+        // Docker menuliskannya terpisah. Yang menentukan terjangkau atau
+        // tidak adalah bagian IPv4-nya.
+        .filter((bagian) => !bagian.startsWith('[::]'))
+        .filter((bagian) => !bagian.startsWith('127.0.0.1:'));
+
+      assert.deepEqual(
+        terbuka,
+        [],
+        `container Postgres yang berjalan masih terbuka ke jaringan: ${terbuka.join(', ')}. ` +
+          'Berkas compose sudah benar; container-nya yang basi. Jalankan: ' +
+          'docker compose up -d --force-recreate postgres (volume tetap, data tidak hilang)'
+      );
+    });
+
     it('kredensial dibaca dari `.env` dan compose menolak jalan bila kosong', () => {
       // Dulu berkas ini menulis `user`/`password` apa adanya, di berkas yang
       // ikut masuk Git. Dan `POSTGRES_PASSWORD` kosong BUKAN "tanpa sandi":
@@ -23833,6 +23884,230 @@ describe('konfigurasi lingkungan dan penjaga database', () => {
       pelanggar,
       [],
       `migrasi membuang penjaga tanpa memasangnya kembali: ${pelanggar.join('; ')}`
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TABEL DAN PANEL YANG LEBIH LEBAR DARI LAYAR
+//
+// Tiga kelas cacat yang semuanya TIDAK menghasilkan scrollbar, jadi tidak ada
+// satu pun petunjuk di layar bahwa ada isi yang hilang:
+//
+//   1. `<table>` tanpa leluhur `overflow-x-auto`. Bila kartunya memakai
+//      `overflow-hidden` (untuk sudut membulat), kolom terakhir DIPOTONG —
+//      dan kolom terakhir tabel admin selalu "Aksi". Bila kartunya tidak
+//      memotong, luberannya bocor ke `<body>` dan yang menggulung adalah
+//      SELURUH halaman beserta sidebar.
+//   2. `overflow-x-auto` dipasang pada elemen yang sama dengan `rounded-*`.
+//      Sudut membulatnya hilang begitu gulungan aktif; keduanya harus dua
+//      lapis.
+//   3. `w-[NNNpx]` mati pada bilah yang lebih lebar daripada induknya di
+//      breakpoint tertentu. `max-w-[NNNpx]` mengerjakan maksud yang sama
+//      tanpa meluber.
+// ---------------------------------------------------------------------------
+describe('tabel dan panel tidak melebihi layar tanpa cara menggulungnya', () => {
+  const AKAR_SRC_LUBER = path.join(__dirname, '..', 'src');
+
+  function berkasTsx(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) {
+        if (entri.name === 'node_modules' || entri.name === '.next') continue;
+        berkasTsx(penuh, hasil);
+        continue;
+      }
+      if (/\.tsx$/.test(entri.name)) hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  const relLuber = (jalur) => path.relative(AKAR_SRC_LUBER, jalur).replace(/\\/g, '/');
+
+  // Komentar `{/* ... */}` dan `// ...` dibuang: penjelasan di file-file ini
+  // MENYEBUT kelas-kelas yang sedang diperiksa, jadi tanpa pembuangan ini
+  // sebuah komentar yang menerangkan cacat justru menyembunyikan cacatnya.
+  function tanpaKomentar(teks) {
+    return teks
+      .replace(/\{?\/\*[\s\S]*?\*\/\}?/g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*\/\//.test(baris))
+      .join('\n');
+  }
+
+  const BERKAS = berkasTsx(AKAR_SRC_LUBER);
+
+  it('setiap <table> punya leluhur yang bisa digulung mendatar', () => {
+    // Satu pengecualian, dan alasannya harus tetap benar bila kelak berubah:
+    // tabel spesifikasi di halaman detail billboard hanya DUA kolom
+    // (label + nilai), keduanya teks yang boleh membungkus. Ia tidak punya
+    // lebar minimum, jadi tidak pernah meluber.
+    const DIKECUALIKAN = new Set(['app/billboard/[slug]/BillboardDetailClient.tsx']);
+
+    const pelanggar = [];
+    for (const jalur of BERKAS) {
+      const rel = relLuber(jalur);
+      if (DIKECUALIKAN.has(rel)) continue;
+      const isi = tanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      let posisi = isi.indexOf('<table');
+      while (posisi !== -1) {
+        // 600 karakter sebelum `<table` cukup memuat dua lapis pembungkus
+        // beserta seluruh daftar kelasnya.
+        const sebelum = isi.slice(Math.max(0, posisi - 600), posisi);
+        if (!/overflow-x-auto/.test(sebelum)) {
+          pelanggar.push(`${rel} (offset ${posisi})`);
+        }
+        posisi = isi.indexOf('<table', posisi + 1);
+      }
+    }
+    assert.deepStrictEqual(
+      pelanggar,
+      [],
+      `<table> tanpa pembungkus overflow-x-auto: ${pelanggar.join('; ')}`
+    );
+  });
+
+  it('overflow-x-auto tidak satu elemen dengan sudut membulat', () => {
+    const pelanggar = [];
+    for (const jalur of BERKAS) {
+      const isi = tanpaKomentar(fs.readFileSync(jalur, 'utf8'));
+      for (const cocok of isi.matchAll(/className="([^"]*overflow-x-auto[^"]*)"/g)) {
+        const kelas = cocok[1];
+        if (/\brounded-(?:xl|2xl|3xl|lg|full)\b/.test(kelas)) {
+          pelanggar.push(`${relLuber(jalur)}: ${kelas.slice(0, 80)}`);
+        }
+      }
+    }
+    assert.deepStrictEqual(
+      pelanggar,
+      [],
+      `overflow-x-auto digabung dengan rounded-*: ${pelanggar.join('; ')}`
+    );
+  });
+
+  it('bilah pencarian memakai max-w, bukan lebar mati', () => {
+    const isi = tanpaKomentar(
+      fs.readFileSync(path.join(AKAR_SRC_LUBER, 'components', 'SearchFilter.tsx'), 'utf8')
+    );
+
+    // Yang diperiksa adalah `className` BILAHNYA sendiri, bukan seluruh
+    // berkas: kolom "Tipe Media" dan "Mulai Tayang" di dalam bilah memang
+    // `w-[180px]`, dan itu benar — keduanya anak flex dengan lebar tetap di
+    // dalam induk yang sudah dibatasi, bukan yang menentukan lebar bilah.
+    const bilah = isi.match(/className="(hidden md:flex[^"]*)"/);
+    assert.ok(bilah, 'bilah pencarian desktop (hidden md:flex) tidak ditemukan');
+    const kelasBilah = bilah[1];
+
+    // `w-[800px]` mati membuat bilah ini 800px di dalam induk yang pada 768px
+    // hanya 736px — dan hero-nya memakai `overflow-hidden`, jadi yang
+    // terpotong adalah tombol "Cari" di ujung kanan.
+    assert.ok(
+      !/(?:^|\s)w-\[\d+px\]/.test(kelasBilah),
+      `lebar mati pada bilah pencarian: ${kelasBilah.slice(0, 90)}`
+    );
+    assert.match(kelasBilah, /max-w-\[800px\]/, 'lebar maksimum bilah desktop hilang');
+    assert.match(kelasBilah, /(?:^|\s)w-full(?:\s|$)/, 'bilah desktop tidak menyusut mengikuti induknya');
+
+    // Tombol ikon tanpa teks: tanpa `aria-label` pembaca layar hanya
+    // mengumumkan "tombol".
+    assert.match(
+      isi,
+      /aria-label="Cari billboard"/,
+      'tombol cari yang hanya berisi ikon tidak punya aria-label'
+    );
+  });
+
+  it('panel chat mengambang muat di layar 320px dan memakai dvh', () => {
+    const isi = tanpaKomentar(
+      fs.readFileSync(path.join(AKAR_SRC_LUBER, 'components', 'ChatWidget.tsx'), 'utf8')
+    );
+    // Ada DUA elemen yang diawali `fixed bottom-6 right-6`: tombol peluncur
+    // bulat, dan panelnya. Yang dicari panel — disaring lewat `flex-col`,
+    // karena hanya panel yang menyusun header/daftar/kotak balasan secara
+    // menurun. Mengambil kecocokan pertama saja akan mendapat tombolnya, yang
+    // memang tidak punya (dan tidak butuh) lebar responsif.
+    const kandidat = [...isi.matchAll(/className="(fixed bottom-6 right-6[^"]*)"/g)]
+      .map((m) => m[1])
+      .filter((k) => /flex-col/.test(k));
+    assert.equal(
+      kandidat.length,
+      1,
+      `panel chat mengambang tidak ditemukan tepat satu; dapat ${kandidat.length}`
+    );
+    const kelas = kandidat[0];
+
+    // Panel `fixed` yang meluber TIDAK memunculkan scrollbar: isinya hilang
+    // di luar tepi kiri tanpa satu pun petunjuk.
+    assert.ok(
+      !/(?:^|\s)w-\[\d+px\]/.test(kelas),
+      `lebar mati pada panel chat: ${kelas.slice(0, 90)}`
+    );
+    assert.match(kelas, /w-\[calc\(100vw-3rem\)\]/, 'lebar dasar panel chat bukan lebar layar');
+    assert.match(kelas, /sm:w-\[350px\]/, 'lebar panel chat di layar lebar hilang');
+
+    // `vh` mengukur seluruh layar termasuk area di bawah bilah alamat
+    // ponsel; `dvh` menyusut mengikutinya, sehingga kotak balasan tetap
+    // terlihat.
+    assert.ok(
+      !/(?:^|\s)h-\[\d+vh\]/.test(kelas),
+      `panel chat memakai vh, bukan dvh: ${kelas.slice(0, 90)}`
+    );
+    assert.match(kelas, /h-\[70dvh\]/, 'tinggi panel chat di ponsel bukan 70dvh');
+  });
+
+  it('invoice tetap utuh di kertas meski bisa digulung di layar', () => {
+    const isi = tanpaKomentar(
+      fs.readFileSync(path.join(AKAR_SRC_LUBER, 'app', 'invoice', '[id]', 'page.tsx'), 'utf8')
+    );
+
+    // Pembungkus penggulung di atas kertas berarti kolom terakhir terpotong
+    // diam-diam — kertas tidak bisa digulung.
+    assert.match(isi, /print:overflow-visible/, 'pembungkus gulungan invoice tidak dimatikan saat cetak');
+    assert.match(isi, /print:min-w-0/, 'lebar minimum tabel invoice tidak dilepas saat cetak');
+
+    // Lebar kertas tidak mengikuti lebar layar, jadi padding kecil untuk
+    // ponsel tidak boleh ikut terbawa ke hasil cetak.
+    assert.match(isi, /print:p-12/, 'padding cetak invoice ikut mengecil bersama layar');
+  });
+
+  it('linimasa pesanan bisa digulung dan langkahnya tidak menyusut', () => {
+    const isi = tanpaKomentar(
+      fs.readFileSync(
+        path.join(AKAR_SRC_LUBER, 'app', 'dashboard', 'order', '[id]', 'page.tsx'),
+        'utf8'
+      )
+    );
+
+    // Enam langkah `w-24` = 576px. Tanpa `min-w` pada isi pembungkus,
+    // flexbox menyusutkan keenamnya sampai labelnya bertumpuk.
+    assert.match(isi, /overflow-x-auto/, 'linimasa pesanan tidak punya pembungkus gulungan');
+    assert.match(isi, /min-w-\[576px\]/, 'isi linimasa tidak menahan lebar 576px');
+    assert.match(
+      isi,
+      /w-24 shrink-0/,
+      'langkah linimasa masih boleh menyusut (shrink-0 hilang)'
+    );
+  });
+
+  it('paginasi inventori berada di luar pembungkus gulungan', () => {
+    const isi = tanpaKomentar(
+      fs.readFileSync(
+        path.join(AKAR_SRC_LUBER, 'app', 'admin', '(dashboard)', 'billboards', 'page.tsx'),
+        'utf8'
+      )
+    );
+
+    const akhirTabel = isi.indexOf('</table>');
+    const awalPaginasi = isi.indexOf('totalHalaman > 1');
+    assert.ok(akhirTabel !== -1 && awalPaginasi !== -1, 'tabel atau blok paginasi tidak ditemukan');
+
+    // Di dalam pembungkus, "Berikutnya" ikut bergeser ke kiri layar saat
+    // admin menggulung ke kanan untuk mencapai kolom Aksi.
+    const antara = isi.slice(akhirTabel, awalPaginasi);
+    assert.match(
+      antara,
+      /<\/div>/,
+      'pembungkus gulungan tidak ditutup sebelum blok paginasi'
     );
   });
 });

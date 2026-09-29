@@ -145,7 +145,16 @@ export default async function InvoicePage(props: Props) {
         {/* `<main>` menandai lembar invoice sebagai wilayah utama halaman.
             Halaman ini tidak memakai `Navbar`, jadi tidak punya tautan lewati —
             landmark inilah satu-satunya pegangan pembaca layar di sini. */}
-        <main className="max-w-[21cm] mx-auto bg-white shadow-lg p-12 rounded-xl print:shadow-none print:w-full">
+        {/* `p-12` (48px) di setiap sisi menyisakan 224px isi di layar 320px —
+            sepertiga lebar layar habis untuk ruang kosong, dan yang harus muat
+            di 224px itu adalah nominal rupiah tujuh digit. `p-6 md:p-12`
+            mempertahankan tampilan cetak dan desktop apa adanya, dan
+            mengembalikan 48px isi di telepon.
+
+            `print:p-12` supaya hasil cetak tetap punya margin penuh walau
+            jendela browsernya sempit: lebar kertas tidak mengikuti lebar
+            layar. */}
+        <main className="max-w-[21cm] mx-auto bg-white shadow-lg p-6 md:p-12 print:p-12 rounded-xl print:shadow-none print:w-full">
             
             {/* Header */}
             <div className="flex justify-between items-center border-b pb-8 mb-8">
@@ -200,7 +209,14 @@ export default async function InvoicePage(props: Props) {
             </div>
 
             {/* Tabel Item */}
-            <table className="w-full mb-10 border-collapse">
+            {/* Tiga kolom dengan `px-4` tidak muat di 320px, dan tanpa
+                pembungkus penggulung yang meluber adalah `<body>`: seluruh
+                lembar invoice bergeser, termasuk nomor invoice di atasnya.
+                `print:overflow-visible` karena pembungkus penggulung pada
+                cetakan berarti kolom terakhir terpotong di kertas —
+                gulungan tidak bisa dilakukan pada kertas. */}
+            <div className="overflow-x-auto print:overflow-visible mb-10">
+            <table className="w-full border-collapse min-w-[420px] print:min-w-0">
                 <thead className="bg-gray-50 border-y-2 border-gray-100">
                     <tr>
                         <th className="py-3 px-4 text-left text-xs font-bold text-gray-500 uppercase tracking-wider">Deskripsi Item</th>
@@ -224,10 +240,16 @@ export default async function InvoicePage(props: Props) {
                     </tr>
                 </tbody>
             </table>
+            </div>
 
             {/* Total */}
             <div className="flex justify-end mb-16">
-                <div className="w-1/2">
+                {/* `w-1/2` menyisakan 112px di layar 320px, untuk baris berisi
+                    label "Harga Sewa (12 Bulan)" DAN nominal tujuh digit
+                    berdampingan. Keduanya membungkus menjadi dua baris
+                    berpotongan. Di telepon blok ini memakai lebar penuh; dari
+                    `sm:` ke atas ia kembali setengah, seperti di cetakan. */}
+                <div className="w-full sm:w-1/2">
                     {/*
                       Rincian pajak hanya ditampilkan bila pesanan ini memang
                       menyimpannya. Untuk pesanan lama yang kolomnya masih
