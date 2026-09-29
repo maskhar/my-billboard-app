@@ -130,8 +130,15 @@ export default async function AdminDashboard() {
     include: { user: true, billboard: true }
   });
 
-  // 4. Ambil data awal untuk grafik (default 6 bulan)
-  const initialChartData = await getRevenueData('6m');
+  // 4. Ambil data awal untuk grafik.
+  //
+  // Tanpa argumen: preset bakunya dipegang `PRESET_BAKU` di
+  // `src/lib/rentang-tanggal.ts`, bukan ditulis ulang di sini. Nilai `'6m'`
+  // yang dulu tertera di baris ini adalah salinan kedua dari baku yang sama
+  // dengan yang ada di `RevenueSection` (`useState<Period>('6m')`), dan
+  // keduanya tidak terhubung apa pun: mengubah salah satunya membuat grafik
+  // memuat enam bulan sementara tombol yang tersorot mengatakan tiga.
+  const initialChartData = await getRevenueData();
 
   // --- END: DATA FETCHING & PROCESSING ---
 

@@ -67,7 +67,7 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | — (4.26, 4.28, 4.29, 4.31 semua tuntas; 4.31 ternyata sudah divalidasi di kode — yang kurang adalah testnya, dan penulisannya menemukan `db-error.ts` tidak membaca `error.code`) |
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.22–5.29 (5.7, 5.9, 5.12, 5.18, 5.20, 5.21, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas; premis 5.20 juga basi — dua daftar sudah punya saringan status, dan yang ditemukan justru bahwa 5.19 ditandai selesai atas pencarian sisi-klien yang menjawab salah) |
+| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.23–5.29 (5.7, 5.9, 5.12, 5.18, 5.20, 5.21, 5.22, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas; premis 5.20 juga basi — dua daftar sudah punya saringan status, dan yang ditemukan justru bahwa 5.19 ditandai selesai atas pencarian sisi-klien yang menjawab salah) |
 | 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | ✅ selesai | — (8.9 tuntas: nol dependency mati DAN nol paket diimpor tanpa terdaftar, kedua arah kini dijaga test; 8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
@@ -533,7 +533,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | 5.19 | Hubungkan search box yang mati — tanpa `value`/`onChange`, user mengetik dan tidak terjadi apa-apa. **Ditandai selesai terlalu dini**: penghubungannya menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi di halaman 2. Dituntaskan di 5.20 dengan memindahkan pencarian ke `where` Prisma | `[05]F-25` | [x] |
 | 5.20 | ⚠️ Filter & sort pada tabel admin. **Premis laporan sudah basi** (lihat catatan di bawah): `orders` dan `pengajuan` sudah punya saringan status. Yang tidak ada sama sekali adalah **pencarian yang menyaring di database** dan **pengurutan** — dan 5.19 ditandai selesai atas kotak cari yang menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi ada di halaman 2 | `[05]` | [x] |
 | 5.21 | Export CSV/Excel. Satu route untuk keempat daftar, `where`/`orderBy` dipakai bersama halamannya lewat `@/lib/saringan-daftar` — dan gerbangnya diputuskan ULANG per daftar, lebih sempit daripada pintu panel | `[05]` | [x] |
-| 5.22 | Date-range filter di dashboard/revenue | `[05]` | [ ] |
+| 5.22 | Date-range filter di dashboard/revenue. Rentangnya dihitung di WIB lewat `src/lib/rentang-tanggal.ts` — tiga cacat yang membuat grafik menjawab salah tepat di batas ikut diperbaiki, dan dua di antaranya sudah ada di produksi | `[05]` | [x] |
 | 5.23 | Kalender ketersediaan / timeline booking untuk admin | `[05]` | [ ] |
 | 5.24 | Audit log viewer | `[05]` | [ ] |
 | 5.25 | Notification center + unread badge | `[05]` | [ ] |
@@ -869,6 +869,131 @@ UTC = 1 Oktober 23.59 WIB).
 Pelajarannya sama dengan empat mutasi lolos di 5.20, dari arah lain: di sana
 assertion diuji atas cakupan yang terlalu luas, di sini atas **nilai masukan yang
 terlalu jinak**. Keduanya menghasilkan suite hijau yang tidak mengikat apa pun.
+
+### Catatan 5.22 — filter yang diminta, dan tiga cacat yang membuat grafiknya menjawab salah tepat di batas
+
+Butir ini berbunyi "date-range filter di dashboard/revenue". Yang ditemukan saat
+memeriksa jalur yang akan dipasangi filter itu lebih mahal daripada filternya
+sendiri: **dua dari tiga cacat di bawah sudah ada di produksi hari ini**, dan
+ketiganya membuat filter apa pun — termasuk yang baru — menjawab SALAH tepat di
+batas yang dipilih admin. Filter yang dipasang di atasnya hanya akan memperbanyak
+batas yang salah dijawab.
+
+**1. Grafik dibukukan pada waktu lokal PROSES, bukan WIB.** Kunci embernya
+`d.getFullYear()` + `d.getMonth()`. Keduanya membaca zona waktu proses Node, yang
+di Vercel adalah UTC. Terukur: pembayaran 1 Oktober pukul 00.30 WIB tersimpan
+`2026-09-30T17:30:00Z`, dan rumus lama membukukannya ke batang **September**.
+Jadi tujuh jam pertama setiap hari masuk ke hari sebelumnya, dan pada tanggal 1
+ia masuk ke **bulan** sebelumnya — yaitu tepat pada batas yang dipakai orang
+untuk menutup buku. Bukti tercepatnya satu perintah: `TZ=UTC` pada test yang
+sama membuat batangnya berpindah bulan.
+
+**2. Aritmetika bulan preset meluber.** `new Date(y, m - n, tanggal)` pada 31
+Maret menghasilkan **3 Maret**, bukan 28 Februari: 31 Februari tidak ada, jadi
+JavaScript menggulungnya ke bulan berikutnya. Terukur pada rumus lama:
+
+| diminta | rumus lama | yang dimaksud |
+|---|---|---|
+| 31 Mar − 1 bulan | 3 Mar | 28 Feb |
+| 31 Mei − 3 bulan | 3 Mar | 28 Feb |
+| 31 Mar − 6 bulan | 1 Okt | 30 Sep |
+
+Preset "1 Bulan" karena itu kadang mencakup 28 hari dan mendarat di bulan yang
+salah, tanpa satu pun tanda di layar bahwa jangkauannya bukan yang tertulis di
+tombolnya. Diganti penjepitan ke akhir bulan tujuan.
+
+**3. `where` hanya punya `gte`, nol batas atas.** Itu memadai selama pilihan
+admin hanya "sejak kapan"; rentang punya DUA ujung. Ujung atas yang tidak pernah
+dipasang berarti filter "1–31 Januari" menampilkan seluruh data sejak 1 Januari
+**sampai hari ini**. Batasnya sekarang setengah terbuka `[mulai, sampaiEksklusif)`:
+`lt: awal 1 November`, bukan `lte: awal 31 Oktober` — yang terakhir membuang
+hampir seluruh pembayaran tanggal 31, karena hampir semuanya masuk setelah pukul
+00.00.
+
+**Aturannya disatukan di `src/lib/rentang-tanggal.ts`, bukan ditulis di
+`actions.ts`.** Cacat nomor 1 justru berbentuk itu: ia hidup di `actions.ts`
+karena kunci embernya ditulis di sana, terpisah dari `src/lib/tanggal.ts` yang
+docstring-nya sudah memperingatkan anti-pola yang sama. Offsetnya dipaku
+`+07:00` dan tidak dihitung: WIB tidak punya daylight saving dan tidak pernah
+punya, jadi `2026-10-01T00:00:00+07:00` adalah instan yang persis, tanpa satu
+pun pustaka zona waktu.
+
+Empat keputusan lain yang ikut diambil, masing-masing karena bentuk sebelumnya
+membuat angka yang salah terbaca sebagai angka yang benar:
+
+- **Granularitas DITURUNKAN dari panjang rentang, tidak dipilih terpisah.** Preset
+  `'daily'` dulu berarti "30 hari terakhir, digambar per hari" — dua keputusan
+  yang dijepit menjadi satu nama, sehingga tidak ada cara meminta 30 hari per
+  bulan maupun setahun per hari. Batasnya 62 hari (= dua bulan terpanjang yang
+  berdampingan), supaya "dua bulan penuh" tidak jatuh ke sisi yang salah karena
+  panjang bulannya.
+- **Urutan tanggal yang terbalik DITUKAR, dan penukarannya dikatakan.** Rentang
+  yang jatuh ke baku menampilkan enam bulan sementara kedua medan tanggal di
+  layar tetap menunjukkan Januari — angka yang dibaca lalu dikutip ke rapat
+  sebagai angka Januari. Sama untuk tanggal yang ditolak: ada banner, bukan
+  perbaikan diam-diam.
+- **Satu tanggal tanpa pasangannya ditolak, bukan dilengkapi.** "Sejak 1 Januari
+  sampai kapan pun" dan "seluruh Januari" adalah dua pertanyaan berbeda, dan
+  menebak yang mana yang dimaksud dari medan setengah terisi akan salah separuh
+  waktu. Medan yang KOSONG tidak dihitung sebagai penolakan: itu keadaan awal
+  kedua medan, dan menyalakan peringatan di sana membuat peringatan itu berhenti
+  dibaca sebelum ada yang salah.
+- **Periode tanpa transaksi diunggah sebagai nol.** Dua bulan kosong yang hilang
+  dari garis waktu membuat batang bulan ketiga berdiri langsung di sebelah bulan
+  pertama — dan bentuk itu terbaca sebagai penjualan yang berlanjut, yaitu
+  kebalikan dari keadaannya.
+
+**Satu cacat lagi ditemukan di validator yang baru ditulis sendiri:** `2026-02-30`
+lolos regex `YYYY-MM-DD` **dan** diterima `new Date` — JavaScript menggulungnya
+menjadi 2 Maret. Filter yang menerimanya menampilkan rentang yang tidak pernah
+diminta siapa pun, dengan medan tanggal di layar tetap menunjukkan tanggal yang
+diketik admin. Satu-satunya cara memastikan tanggalnya ada adalah memformat
+hasilnya kembali dan menuntut teksnya sama; itu yang dilakukan `kunciTanggalSah`.
+
+36 test baru di tiga suite (`rentang-tanggal`, `getRevenueData` ditulis ulang
+seluruhnya, `RevenueSection dan RevenueChart`), **11/11 mutasi tertangkap**,
+`2072 lulus / 0 gagal`, `tsc` bersih, `eslint` bersih.
+
+**Ketujuh test `getRevenueData` yang lama tidak diregresikan — ia dibuang.**
+Ketujuhnya memakai konstruktor bergaya `new Date(2026, 6, 10)`, yaitu tengah hari
+waktu lokal, dan itulah alasan persis kedua cacat zona waktu di atas bisa hidup
+di bawah suite hijau: tengah hari menjawab sama pada rumus UTC maupun WIB.
+Penggantinya berpasangan di **ambang** — `2026-09-30T17:00:00Z` (= 1 Oktober
+00.00 WIB) bersama `2026-09-30T16:59:59.999Z` — jadi tidak ada satu pun yang bisa
+lulus atas kedua rumus sekaligus.
+
+Di samping pengikat perilaku ada **pengikat sumber**: `getFullYear()`,
+`getMonth()`, `getDate()`, `getHours()`, `setDate(`, `setMonth(`, dan
+`setFullYear(` dilarang muncul di `rentang-tanggal.ts` maupun `actions.ts`
+(`getUTC*` sengaja dibolehkan). Alasannya: assertion perilaku tentang zona waktu
+hanya gagal ketika testnya dijalankan dari zona tertentu, sedangkan pengikat
+sumber gagal dari **zona mana pun** — dan yang harus dihalangi adalah pembaca
+berikutnya yang merasa `getMonth()` terlihat lebih sederhana.
+
+**Mutasi kesebelas lolos di putaran pertama, dan ia lolos dari 2071 test
+sekaligus:** memindahkan `await pastikanBolehLihatOmzet()` ke BELAKANG
+`bacaRentang(permintaan)`. `bacaRentang` murni — nol kueri, nol lemparan, nol
+pembacaan di luar argumennya — jadi menukar kedua baris itu tidak mengubah satu
+pun nilai yang bisa diamati mock mana pun, sementara masukan dari pemanggil
+anonim sudah diuraikan sebelum haknya diperiksa. Setiap `export` di berkas
+`'use server'` adalah endpoint HTTP publik, jadi urutan itu bagian dari
+gerbangnya. Karena bentuknya hanya terbaca di sumbernya, di sumbernya ia dijaga:
+satu test menuntut gerbang peran berdiri sebagai pernyataan **pertama** badan
+fungsi. `susunLaporan` sengaja tidak diekspor dengan alasan yang sama.
+
+Pelajarannya melanjutkan 5.20 dan 5.21 dari arah ketiga. Di 5.20 assertion diuji
+atas cakupan yang terlalu luas, di 5.21 atas nilai masukan yang terlalu jinak,
+dan di sini atas properti yang **tidak punya jejak perilaku sama sekali**.
+Ketiganya menghasilkan suite hijau yang tidak mengikat apa pun.
+
+**Rentang ini sengaja TIDAK dibawa di URL**, berbeda dari keempat daftar admin.
+Halaman dashboard menjalankan enam agregat, satu `groupBy` tugas, dan `findMany`
+lima pesanan terakhir. Rentang di `searchParams` berarti seluruhnya dihitung
+ulang setiap kali seseorang menekan "3 Bulan", padahal tidak satu pun dari angka
+itu ikut berubah — hanya satu grafik yang berubah. Yang dibayar bila rentangnya
+tidak di URL hanyalah kemampuan mem-bookmark satu grafik; yang dibayar bila ia
+di URL adalah delapan kueri tambahan pada setiap klik, di halaman yang paling
+sering dibuka admin.
 
 ---
 

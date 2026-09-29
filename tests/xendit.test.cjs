@@ -207,6 +207,23 @@ const JALUR_LAPORAN = path.join(
   '(dashboard)',
   'actions.ts'
 );
+const JALUR_RENTANG = path.join(__dirname, '..', 'src', 'lib', 'rentang-tanggal.ts');
+const JALUR_REVENUE_SECTION = path.join(
+  __dirname,
+  '..',
+  'src',
+  'components',
+  'admin',
+  'RevenueSection.tsx'
+);
+const JALUR_REVENUE_CHART = path.join(
+  __dirname,
+  '..',
+  'src',
+  'components',
+  'admin',
+  'RevenueChart.tsx'
+);
 const JALUR_INVOICE = path.join(__dirname, '..', 'src', 'app', 'invoice', '[id]', 'page.tsx');
 const JALUR_DASHBOARD_WRAPPER = path.join(
   __dirname,
@@ -6187,6 +6204,265 @@ describe('POST /api/admin/orders/add-charge penerbit tagihan TAMBAHAN', () => {
 });
 
 // ===========================================================================
+// RENTANG TANGGAL: BATAS YANG DIHITUNG DI WIB
+// ===========================================================================
+describe('rentang-tanggal: batas yang dihitung di WIB, bukan di zona proses', () => {
+  const R = require(JALUR_RENTANG);
+
+  // -------------------------------------------------------------------------
+  // Cacat 1: ember dibukukan pada zona PROSES.
+  //
+  // Produksi berjalan pada UTC. Instan di bawah adalah 1 Oktober pukul 00.00
+  // WIB, dan getMonth() di atasnya menjawab September di sana. Karena test ini
+  // bisa dijalankan dari zona mana pun, batasnya diperiksa dari DUA arah:
+  // instan yang masih September di UTC tapi sudah Oktober di WIB, dan satu
+  // milidetik sebelumnya. Bentuk itu yang membuat assert-nya tidak bisa lolos
+  // karena kebetulan zona mesin yang menjalankannya.
+  // -------------------------------------------------------------------------
+  it('kunciBulan memakai kalender WIB pada instan yang berbeda bulan di UTC', () => {
+    // 2026-09-30T17:00:00Z === 2026-10-01T00:00:00+07:00
+    assert.equal(R.kunciBulan(new Date('2026-09-30T17:00:00Z')), '2026-10');
+    // Satu milidetik sebelumnya masih 30 September di WIB.
+    assert.equal(R.kunciBulan(new Date('2026-09-30T16:59:59.999Z')), '2026-09');
+  });
+
+  it('kunciHari memakai kalender WIB pada instan yang berbeda hari di UTC', () => {
+    assert.equal(R.kunciHari(new Date('2026-09-30T17:00:00Z')), '2026-10-01');
+    assert.equal(R.kunciHari(new Date('2026-09-30T16:59:59.999Z')), '2026-09-30');
+    // Pukul 06.00 WIB -- instan yang toISOString().slice(0,10) jawab sebagai
+    // hari sebelumnya, cacat yang sama yang sudah diperingatkan di tanggal.ts.
+    assert.equal(R.kunciHari(new Date('2026-09-30T23:00:00Z')), '2026-10-01');
+  });
+
+  it('tidak ada satu pun getter waktu lokal proses di modul rentang maupun laporan', () => {
+    // Pengawal sumber, bukan pengawal perilaku. Assert di atas hanya gagal bila
+    // test dijalankan dari zona yang tepat; yang ini gagal dari zona mana pun,
+    // dan itulah yang menahan cacatnya kembali lewat satu getMonth() yang
+    // ditambahkan pembaca berikutnya karena tampak lebih sederhana.
+    //
+    // getUTCDate/getUTCMonth sengaja TIDAK dilarang: keduanya tidak bergantung
+    // pada zona proses.
+    const TERLARANG = [
+      'getFullYear()',
+      'getMonth()',
+      'getDate()',
+      'getHours()',
+      'setDate(',
+      'setMonth(',
+      'setFullYear(',
+    ];
+    for (const jalur of [JALUR_RENTANG, JALUR_LAPORAN]) {
+      const kode = kodeSajaAny(jalur);
+      for (const pola of TERLARANG) {
+        assert.ok(
+          !kode.includes(pola),
+          path.basename(jalur) + ' masih memakai ' + pola + ', yang membaca zona waktu proses'
+        );
+      }
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // Cacat 2: aritmetika bulan preset meluber.
+  // -------------------------------------------------------------------------
+  it('preset bulanan tidak meluber pada tanggal akhir bulan', () => {
+    // Terukur pada rumus lama new Date(y, m - n, tanggal):
+    //   31 Mar - 1 bln  -> 3 Mar   (tiga hari DI DALAM bulan ini)
+    //   31 Mei - 3 bln  -> 3 Mar
+    //   31 Mar - 6 bln  -> 1 Okt
+    const kasus = [
+      ['2026-03-31', '1b', '2026-02-28'],
+      ['2026-03-31', '3b', '2025-12-31'],
+      ['2026-03-31', '6b', '2025-09-30'],
+      ['2026-05-31', '1b', '2026-04-30'],
+      ['2026-05-31', '3b', '2026-02-28'],
+      ['2026-07-31', '1b', '2026-06-30'],
+      ['2026-01-31', '1b', '2025-12-31'],
+      // Tahun kabisat: 29 Februari ada di 2028, dan penjepitannya harus tahu.
+      ['2028-03-31', '1b', '2028-02-29'],
+      ['2026-12-31', '12b', '2025-12-31'],
+    ];
+
+    for (const [hariIni, preset, mulaiDiharapkan] of kasus) {
+      const r = R.rentangPreset(preset, new Date(hariIni + 'T05:00:00+07:00'));
+      assert.equal(
+        r.kunciMulai,
+        mulaiDiharapkan,
+        preset + ' dari ' + hariIni + ' seharusnya mulai ' + mulaiDiharapkan + ', bukan ' + r.kunciMulai
+      );
+      // Ujung atasnya selalu hari ini, dan selalu inklusif.
+      assert.equal(r.kunciSampai, hariIni);
+    }
+  });
+
+  it('preset dihitung dari kalender WIB, bukan dari tanggal UTC instannya', () => {
+    // 2026-03-31T17:00:00Z masih 31 Maret di UTC tapi sudah 1 April di WIB.
+    // Preset yang dihitung dari tanggal UTC akan mundur ke Februari.
+    const r = R.rentangPreset('1b', new Date('2026-03-31T17:00:00Z'));
+    assert.equal(r.kunciSampai, '2026-04-01');
+    assert.equal(r.kunciMulai, '2026-03-01');
+  });
+
+  it('preset harian inklusif: 30 Hari berarti 30 ember, bukan 31', () => {
+    const r = R.rentangPreset('30h', new Date('2026-09-29T05:00:00+07:00'));
+    assert.equal(r.kunciMulai, '2026-08-31');
+    assert.equal(r.kunciSampai, '2026-09-29');
+    assert.equal(R.panjangHari(r), 30);
+    assert.equal(R.deretKunci(r).length, 30);
+  });
+
+  it('semua waktu adalah rentang null, bukan rentang sejak epoch', () => {
+    // Bedanya bukan gaya: null berarti tidak ada klausa tanggal sama sekali,
+    // sedangkan gte: new Date(0) adalah klausa yang harus dievaluasi atas
+    // setiap baris.
+    assert.equal(R.rentangPreset('semua', new Date('2026-09-29T05:00:00+07:00')), null);
+    assert.equal(R.granularitas(null), 'bulan');
+    assert.deepEqual(R.deretKunci(null), []);
+  });
+
+  // -------------------------------------------------------------------------
+  // Validasi masukan.
+  // -------------------------------------------------------------------------
+  it('menolak tanggal yang lolos regex tapi tidak ada di kalender', () => {
+    // new Date('2026-02-30T00:00:00+07:00') SAH dan menjadi 2 Maret. Jadi
+    // Number.isNaN saja tidak cukup -- hasilnya harus diformat ulang dan
+    // dituntut sama. Tanpa ini, filter menampilkan rentang yang tidak pernah
+    // diminta siapa pun sementara medan di layar tetap menunjukkan 30 Februari.
+    assert.equal(Number.isNaN(new Date('2026-02-30T00:00:00+07:00').getTime()), false);
+    assert.equal(R.kunciTanggalSah('2026-02-30'), false);
+
+    const buruk = [
+      '2026-13-01',
+      '2026-00-10',
+      '2026-10-32',
+      '2026-10-00',
+      '2025-02-29',
+      '2026-1-1',
+      '26-10-01',
+      '2026-10-01x',
+      ' 2026-10-01',
+      '2026-10-01 ',
+      '',
+      'abc',
+      null,
+      undefined,
+      20261001,
+      { toString: () => '2026-10-01' },
+    ];
+    for (const nilai of buruk) {
+      assert.equal(R.kunciTanggalSah(nilai), false, String(nilai) + ' seharusnya ditolak');
+    }
+
+    for (const baik of ['2026-10-01', '2026-02-28', '2028-02-29', '2026-12-31', '1970-01-01']) {
+      assert.equal(R.kunciTanggalSah(baik), true, baik + ' seharusnya diterima');
+    }
+  });
+
+  it('ujung atas rentang eksklusif, sehingga hari terakhir ikut penuh', () => {
+    const { rentang } = R.bacaRentang({ dari: '2026-10-01', sampai: '2026-10-31' });
+
+    // lte: awal 31 Oktober akan membuang seluruh pembayaran hari itu setelah
+    // pukul 00.00 -- yaitu hampir semuanya.
+    assert.equal(rentang.mulai.toISOString(), '2026-09-30T17:00:00.000Z');
+    assert.equal(rentang.sampaiEksklusif.toISOString(), '2026-10-31T17:00:00.000Z');
+    assert.equal(rentang.kunciSampai, '2026-10-31');
+    assert.equal(R.panjangHari(rentang), 31);
+  });
+
+  it('satu hari adalah rentang 24 jam, bukan rentang nol', () => {
+    const { rentang } = R.bacaRentang({ dari: '2026-10-01', sampai: '2026-10-01' });
+    assert.equal(R.panjangHari(rentang), 1);
+    assert.equal(rentang.sampaiEksklusif - rentang.mulai, 86400000);
+    assert.deepEqual(R.deretKunci(rentang), ['2026-10-01']);
+  });
+
+  it('urutan yang terbalik ditukar dan dilaporkan, tidak dijatuhkan ke baku', () => {
+    const p = R.bacaRentang({ dari: '2026-10-31', sampai: '2026-10-01' });
+    assert.equal(p.ditukar, true);
+    assert.equal(p.ditolak, false);
+    assert.equal(p.preset, null);
+    assert.equal(p.rentang.kunciMulai, '2026-10-01');
+    assert.equal(p.rentang.kunciSampai, '2026-10-31');
+  });
+
+  it('satu tanggal tanpa pasangannya ditolak, bukan dilengkapi', () => {
+    // "Sejak 1 Januari sampai kapan pun" dan "seluruh Januari" adalah dua
+    // pertanyaan berbeda; menebak yang mana yang dimaksud akan salah separuh
+    // waktu.
+    for (const mentah of [{ dari: '2026-10-01' }, { sampai: '2026-10-31' }]) {
+      const p = R.bacaRentang(mentah, new Date('2026-09-29T05:00:00+07:00'));
+      assert.equal(p.ditolak, true);
+      assert.equal(p.preset, R.PRESET_BAKU);
+    }
+  });
+
+  it('medan tanggal yang masih kosong bukan masukan yang ditolak', () => {
+    // Itu keadaan awal formulirnya. Peringatan yang menyala di sana membuat
+    // peringatan itu berhenti dibaca sebelum ada yang benar-benar salah.
+    const p = R.bacaRentang({ dari: '', sampai: '' }, new Date('2026-09-29T05:00:00+07:00'));
+    assert.equal(p.ditolak, false);
+    assert.equal(p.ditukar, false);
+    assert.equal(p.preset, R.PRESET_BAKU);
+  });
+
+  it('preset asing jatuh ke baku alih-alih melempar', () => {
+    for (const asing of ['DROP TABLE', '__proto__', 'constructor', 'daily', '1m', 7, null]) {
+      const p = R.bacaRentang({ preset: asing }, new Date('2026-09-29T05:00:00+07:00'));
+      assert.equal(p.preset, R.PRESET_BAKU, String(asing) + ' seharusnya jatuh ke baku');
+      assert.ok(p.rentang !== null);
+    }
+  });
+
+  it('granularitas diturunkan dari panjang rentang, bukan dipilih pemanggil', () => {
+    const harian = R.bacaRentang({ dari: '2026-07-01', sampai: '2026-08-31' }).rentang;
+    assert.equal(R.panjangHari(harian), 62);
+    assert.equal(R.granularitas(harian), 'hari');
+
+    // Satu hari lebih panjang, dan embernya berpindah ke bulan. Batas ini yang
+    // menjaga grafik setahun tidak dirender sebagai 365 batang.
+    const bulanan = R.bacaRentang({ dari: '2026-07-01', sampai: '2026-09-01' }).rentang;
+    assert.equal(R.panjangHari(bulanan), 63);
+    assert.equal(R.granularitas(bulanan), 'bulan');
+  });
+
+  it('deret ember bulanan melewati bulan tanpa transaksi, termasuk lintas tahun', () => {
+    const r = R.bacaRentang({ dari: '2025-11-15', sampai: '2026-02-03' }).rentang;
+    assert.deepEqual(R.deretKunci(r), ['2025-11', '2025-12', '2026-01', '2026-02']);
+  });
+
+  it('deret ember harian menyeberangi batas bulan dan tahun kabisat', () => {
+    const r = R.bacaRentang({ dari: '2028-02-27', sampai: '2028-03-02' }).rentang;
+    assert.deepEqual(R.deretKunci(r), [
+      '2028-02-27',
+      '2028-02-28',
+      '2028-02-29',
+      '2028-03-01',
+      '2028-03-02',
+    ]);
+  });
+
+  it('label sumbu dibedakan menurut granularitas kuncinya', () => {
+    assert.equal(R.labelKunci('2026-10-01'), '01/10');
+    assert.equal(R.labelKunci('2026-10'), "Okt '26");
+    assert.equal(R.labelKunci('2026-01'), "Jan '26");
+    assert.equal(R.labelKunci('2026-12'), "Des '26");
+  });
+
+  it('setiap preset punya label, dan sebaliknya', () => {
+    // RevenueSection menurunkan tombolnya dari peta ini. Preset tanpa label
+    // merender tombol kosong; label tanpa preset merender tombol yang ditolak
+    // server dan jatuh ke baku.
+    for (const kunci of R.KUNCI_PRESET) {
+      const def = R.PRESET_RENTANG[kunci];
+      assert.equal(typeof def.label, 'string');
+      assert.ok(def.label.length > 0, kunci + ' tanpa label');
+    }
+    assert.equal(R.KUNCI_PRESET.length, Object.keys(R.PRESET_RENTANG).length);
+    assert.ok(R.KUNCI_PRESET.includes(R.PRESET_BAKU));
+  });
+});
+
+// ===========================================================================
 // LAPORAN: DIBUKUKAN PADA WAKTU UANG, BUKAN PADA STATUS PESANAN
 // ===========================================================================
 describe('getRevenueData', () => {
@@ -6209,114 +6485,407 @@ describe('getRevenueData', () => {
       },
     };
     const modul = muatDenganModulPalsu(JALUR_LAPORAN, {
-      'next-auth': { getServerSession: async () => (role === null ? null : { user: { id: 'u', role } }) },
+      'next-auth': {
+        getServerSession: async () => (role === null ? null : { user: { id: 'u', role } }),
+      },
       '@/lib/auth': { authOptions: {} },
       '@/lib/prisma': { prisma: prismaPalsu },
     });
     return { getRevenueData: modul.getRevenueData, argumen };
   }
 
+  /** Rentang tak terbatas -- bentuk yang paling sering dipakai test di bawah. */
+  const SEMUA = { preset: 'semua' };
+
   it('menolak pemanggil yang bukan admin', async () => {
     for (const role of [null, 'USER', 'CS']) {
       const { getRevenueData } = buatLaporan({ role });
-      await assert.rejects(getRevenueData('all'), /Unauthorized/);
+      await assert.rejects(getRevenueData(SEMUA), /Unauthorized/);
     }
+  });
+
+  it('menolak sebelum membaca masukannya, supaya bentuk galat tidak membocorkan apa pun', async () => {
+    // Masukan yang jelas buruk pada sesi yang tidak berhak tetap dijawab
+    // Unauthorized, bukan galat parse. Galat yang berbeda memberi tahu
+    // pemanggil anonim bahwa endpoint ini ada dan menerima bentuk apa.
+    const { getRevenueData, argumen } = buatLaporan({ role: 'USER' });
+    await assert.rejects(getRevenueData({ dari: 'bukan-tanggal' }), /Unauthorized/);
+    assert.equal(argumen.payment, null, 'database tidak boleh tersentuh');
+  });
+
+  it('gerbang peran berdiri di baris pertama badan fungsi, sebelum masukan dibaca', () => {
+    // Ini satu-satunya test yang bisa melihat URUTANNYA, dan itu memang
+    // alasannya ada. `bacaRentang` murni: nol kueri, nol lemparan, nol
+    // pembacaan di luar argumennya. Jadi memindahkannya ke DEPAN
+    // `pastikanBolehLihatOmzet()` tidak mengubah satu pun nilai yang bisa
+    // diamati mock mana pun -- suite tetap hijau sementara masukan dari
+    // pemanggil anonim sudah diuraikan sebelum haknya diperiksa. Terukur:
+    // mutasi yang menukar kedua baris ini lolos dari 2071 test lainnya.
+    //
+    // Yang dijaga bukan galatnya, melainkan bahwa nol pekerjaan atas masukan
+    // luar pernah terjadi sebelum peran diputuskan. Bentuk itu hanya terbaca
+    // di sumbernya, jadi di sumbernya ia dijaga.
+    const kode = kodeSajaAny(JALUR_LAPORAN);
+    const badan = kode.slice(kode.indexOf('export async function getRevenueData'));
+
+    const gerbang = badan.indexOf('await pastikanBolehLihatOmzet()');
+    const baca = badan.indexOf('bacaRentang(permintaan)');
+
+    assert.ok(gerbang !== -1, 'gerbang peran hilang seluruhnya');
+    assert.ok(baca !== -1, 'pembacaan rentang hilang seluruhnya');
+    assert.ok(
+      gerbang < baca,
+      'pastikanBolehLihatOmzet() harus mendahului bacaRentang(); urutan terbalik menguraikan masukan pemanggil anonim sebelum haknya diperiksa'
+    );
+
+    // Dan ia benar-benar pernyataan PERTAMA, bukan hanya lebih dulu daripada
+    // `bacaRentang`. Satu baris kerja apa pun yang diselipkan di atasnya akan
+    // lolos dari pemeriksaan urutan di atas.
+    const kepala = badan.slice(0, gerbang).split('{').pop();
+    assert.match(
+      kepala,
+      /^\s*$/,
+      'tidak boleh ada pekerjaan apa pun antara pembuka badan fungsi dan gerbang peran'
+    );
+  });
+
+  it('tidak melempar saat dipanggil tanpa argumen', async () => {
+    // Halaman dashboard memanggilnya begini untuk data awal.
+    const { getRevenueData } = buatLaporan({});
+    const hasil = await getRevenueData();
+    assert.equal(hasil.preset, '6b');
+    assert.equal(hasil.satuan, 'bulan');
   });
 
   it('menyaring Payment PAID pada paidAt dan refund selesai pada refundedAt', async () => {
     const { getRevenueData, argumen } = buatLaporan({});
-    await getRevenueData('all');
+    await getRevenueData({ dari: '2026-10-01', sampai: '2026-10-31' });
 
     assert.equal(argumen.payment.where.status, PaymentStatus.PAID);
-    assert.ok(argumen.payment.where.paidAt.gte instanceof Date);
     assert.deepEqual(Object.keys(argumen.payment.select).sort(), ['jumlah', 'paidAt']);
 
     assert.equal(argumen.booking.where.status, BookingStatus.REFUNDED);
-    assert.ok(argumen.booking.where.refundedAt.gte instanceof Date);
     assert.deepEqual(Object.keys(argumen.booking.select).sort(), ['refundAmount', 'refundedAt']);
+  });
+
+  it('memasang batas ATAS, bukan hanya gte', async () => {
+    // Cacat 3. Query lama hanya menulis gte: startDate, jadi filter "1-31
+    // Oktober" menampilkan seluruh data sejak 1 Oktober sampai hari ini --
+    // dengan kedua medan tanggal di layar tetap menunjukkan Oktober.
+    const { getRevenueData, argumen } = buatLaporan({});
+    await getRevenueData({ dari: '2026-10-01', sampai: '2026-10-31' });
+
+    for (const klausa of [argumen.payment.where.paidAt, argumen.booking.where.refundedAt]) {
+      assert.equal(klausa.gte.toISOString(), '2026-09-30T17:00:00.000Z');
+      // lt, bukan lte: batasnya sudah awal hari SETELAH hari terakhir.
+      assert.equal(klausa.lt.toISOString(), '2026-10-31T17:00:00.000Z');
+      assert.equal(klausa.lte, undefined, 'lte akan memasukkan satu hari tambahan');
+    }
+  });
+
+  it('rentang tak terbatas menyaring waktu kosong di database, bukan di memori', async () => {
+    const { getRevenueData, argumen } = buatLaporan({});
+    await getRevenueData(SEMUA);
+
+    // { not: null }, bukan {} dan bukan gte: new Date(0). Baris yang waktunya
+    // kosong tidak bisa dibukukan ke ember mana pun, jadi ia tidak perlu ikut
+    // terkirim.
+    assert.deepEqual(argumen.payment.where.paidAt, { not: null });
+    assert.deepEqual(argumen.booking.where.refundedAt, { not: null });
+    assert.equal(argumen.payment.where.paidAt.gte, undefined);
   });
 
   it('membukukan tiap penerimaan pada bulan paidAt-nya sendiri', async () => {
     // Dua pembayaran atas SATU pesanan, berbulan-bulan terpisah. Rumus lama
-    // membukukan keduanya pada `Booking.paidAt` — satu kolom yang tidak berubah
-    // saat sisanya dibayar — sehingga pelunasan September hilang dari grafik.
+    // membukukan keduanya pada Booking.paidAt -- satu kolom yang tidak berubah
+    // saat sisanya dibayar -- sehingga pelunasan September hilang dari grafik.
     const { getRevenueData } = buatLaporan({
       penerimaan: [
-        { jumlah: new Prisma.Decimal('400000'), paidAt: new Date(2026, 6, 10) },
-        { jumlah: new Prisma.Decimal('600000'), paidAt: new Date(2026, 8, 5) },
+        { jumlah: new Prisma.Decimal('400000'), paidAt: new Date('2026-07-10T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('600000'), paidAt: new Date('2026-09-05T05:00:00+07:00') },
       ],
     });
 
-    const hasil = await getRevenueData('all');
+    const hasil = await getRevenueData(SEMUA);
 
-    assert.deepEqual(hasil, [
+    assert.deepEqual(hasil.data, [
       { name: "Jul '26", total: 400000 },
       { name: "Sep '26", total: 600000 },
+    ]);
+    assert.equal(hasil.totalBersih, 1000000);
+  });
+
+  it('membukukan pembayaran tengah malam WIB pada bulan WIB-nya', async () => {
+    // Cacat 1, diuji lewat jalur yang sebenarnya. Uang masuk 1 Oktober pukul
+    // 00.30 WIB tersimpan 2026-09-30T17:30:00Z; rumus lama membukukannya ke
+    // batang September di produksi, yaitu tepat pada batas yang dipakai orang
+    // untuk menutup buku.
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('7000000'), paidAt: new Date('2026-09-30T17:30:00Z') },
+        // Setengah jam sebelumnya -- masih 30 September WIB.
+        { jumlah: new Prisma.Decimal('3000000'), paidAt: new Date('2026-09-30T16:30:00Z') },
+      ],
+    });
+
+    const hasil = await getRevenueData(SEMUA);
+
+    assert.deepEqual(hasil.data, [
+      { name: "Sep '26", total: 3000000 },
+      { name: "Okt '26", total: 7000000 },
     ]);
   });
 
   it('refund selesai menjadi pengurang pada bulan refundedAt, bukan penambah', async () => {
     const { getRevenueData } = buatLaporan({
       penerimaan: [
-        { jumlah: new Prisma.Decimal('1000000'), paidAt: new Date(2026, 7, 10) },
-        { jumlah: new Prisma.Decimal('500000'), paidAt: new Date(2026, 8, 5) },
+        { jumlah: new Prisma.Decimal('1000000'), paidAt: new Date('2026-08-10T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('500000'), paidAt: new Date('2026-09-05T05:00:00+07:00') },
       ],
-      refund: [{ refundAmount: new Prisma.Decimal('900000'), refundedAt: new Date(2026, 8, 20) }],
+      refund: [
+        {
+          refundAmount: new Prisma.Decimal('900000'),
+          refundedAt: new Date('2026-09-20T05:00:00+07:00'),
+        },
+      ],
     });
 
-    const hasil = await getRevenueData('all');
+    const hasil = await getRevenueData(SEMUA);
 
-    // Neto September = 500.000 − 900.000. Rumus lama justru MENAIKKAN bulan
-    // refund, karena `REFUNDED` masuk daftar status pendapatan.
-    assert.deepEqual(hasil, [
+    // Neto September = 500.000 - 900.000. Rumus lama justru MENAIKKAN bulan
+    // refund, karena REFUNDED masuk daftar status pendapatan.
+    assert.deepEqual(hasil.data, [
       { name: "Ags '26", total: 1000000 },
       { name: "Sep '26", total: -400000 },
     ]);
+    assert.equal(hasil.totalBersih, 600000);
   });
 
   it('bulan yang hanya berisi refund tetap berada pada tempatnya di garis waktu', async () => {
-    // Kunci Map yang bisa diurutkan (`YYYY-MM`) dipisah dari label manusia
-    // justru untuk kasus ini. Kalau labelnya sendiri yang jadi kunci, urutannya
-    // mengikuti urutan baris dari database dan Juni muncul di ujung grafik.
+    // Kunci Map yang bisa diurutkan dipisah dari label manusia justru untuk
+    // kasus ini. Kalau labelnya sendiri yang jadi kunci, urutannya mengikuti
+    // urutan baris dari database dan Juni muncul di ujung grafik.
     const { getRevenueData } = buatLaporan({
-      penerimaan: [{ jumlah: new Prisma.Decimal('1000000'), paidAt: new Date(2026, 8, 5) }],
-      refund: [{ refundAmount: new Prisma.Decimal('200000'), refundedAt: new Date(2026, 5, 15) }],
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('1000000'), paidAt: new Date('2026-09-05T05:00:00+07:00') },
+      ],
+      refund: [
+        {
+          refundAmount: new Prisma.Decimal('200000'),
+          refundedAt: new Date('2026-06-15T05:00:00+07:00'),
+        },
+      ],
     });
 
-    const hasil = await getRevenueData('all');
+    const hasil = await getRevenueData(SEMUA);
 
-    assert.deepEqual(hasil.map((t) => t.name), ["Jun '26", "Sep '26"]);
-    assert.equal(hasil[0].total, -200000);
+    assert.deepEqual(
+      hasil.data.map((t) => t.name),
+      ["Jun '26", "Sep '26"]
+    );
+    assert.equal(hasil.data[0].total, -200000);
   });
 
   it('menjumlahkan Decimal sebagai Decimal, bukan menyambungnya sebagai teks', async () => {
     const { getRevenueData } = buatLaporan({
       penerimaan: [
-        { jumlah: new Prisma.Decimal('100000'), paidAt: new Date(2026, 8, 1) },
-        { jumlah: new Prisma.Decimal('50000'), paidAt: new Date(2026, 8, 2) },
+        { jumlah: new Prisma.Decimal('100000'), paidAt: new Date('2026-09-01T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('50000'), paidAt: new Date('2026-09-02T05:00:00+07:00') },
       ],
     });
 
-    const hasil = await getRevenueData('all');
+    const hasil = await getRevenueData(SEMUA);
 
-    // `0 + Decimal(100000) + Decimal(50000)` akan menghasilkan "010000050000".
-    assert.equal(hasil.length, 1);
-    assert.equal(hasil[0].total, 150000);
-    assert.equal(typeof hasil[0].total, 'number');
+    // 0 + Decimal(100000) + Decimal(50000) akan menghasilkan "010000050000".
+    assert.equal(hasil.data.length, 1);
+    assert.equal(hasil.data[0].total, 150000);
+    assert.equal(typeof hasil.data[0].total, 'number');
+    assert.equal(typeof hasil.totalBersih, 'number');
   });
 
   it('melewati baris yang waktunya kosong alih-alih membukukannya di epoch', async () => {
     const { getRevenueData } = buatLaporan({
       penerimaan: [
         { jumlah: new Prisma.Decimal('100000'), paidAt: null },
-        { jumlah: new Prisma.Decimal('250000'), paidAt: new Date(2026, 8, 1) },
+        { jumlah: new Prisma.Decimal('250000'), paidAt: new Date('2026-09-01T05:00:00+07:00') },
       ],
       refund: [{ refundAmount: new Prisma.Decimal('50000'), refundedAt: null }],
     });
 
-    const hasil = await getRevenueData('all');
+    const hasil = await getRevenueData(SEMUA);
 
-    assert.deepEqual(hasil, [{ name: "Sep '26", total: 250000 }]);
+    assert.deepEqual(hasil.data, [{ name: "Sep '26", total: 250000 }]);
+  });
+
+  it('rentang harian memunculkan hari kosong sebagai nol, bukan menghilangkannya', async () => {
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('500000'), paidAt: new Date('2026-10-01T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('700000'), paidAt: new Date('2026-10-04T05:00:00+07:00') },
+      ],
+    });
+
+    const hasil = await getRevenueData({ dari: '2026-10-01', sampai: '2026-10-05' });
+
+    // Hari tanpa transaksi yang HILANG membuat batang 4 Oktober berdiri langsung
+    // di sebelah 1 Oktober, dan bentuk itu terbaca sebagai penjualan harian yang
+    // berlanjut.
+    assert.equal(hasil.satuan, 'hari');
+    assert.deepEqual(hasil.data, [
+      { name: '01/10', total: 500000 },
+      { name: '02/10', total: 0 },
+      { name: '03/10', total: 0 },
+      { name: '04/10', total: 700000 },
+      { name: '05/10', total: 0 },
+    ]);
+    assert.equal(hasil.totalBersih, 1200000);
+  });
+
+  it('rentang bulanan mengisi bulan kosong di antara dua bulan berisi', async () => {
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('900000'), paidAt: new Date('2026-01-10T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('300000'), paidAt: new Date('2026-05-10T05:00:00+07:00') },
+      ],
+    });
+
+    const hasil = await getRevenueData({ dari: '2026-01-01', sampai: '2026-05-31' });
+
+    assert.equal(hasil.satuan, 'bulan');
+    assert.deepEqual(
+      hasil.data.map((t) => [t.name, t.total]),
+      [
+        ["Jan '26", 900000],
+        ["Feb '26", 0],
+        ["Mar '26", 0],
+        ["Apr '26", 0],
+        ["Mei '26", 300000],
+      ]
+    );
+  });
+
+  it('melaporkan rentang yang benar-benar dipakai, bukan yang diminta', async () => {
+    const { getRevenueData } = buatLaporan({});
+
+    const ditukar = await getRevenueData({ dari: '2026-10-31', sampai: '2026-10-01' });
+    assert.equal(ditukar.ditukar, true);
+    assert.equal(ditukar.dari, '2026-10-01');
+    assert.equal(ditukar.sampai, '2026-10-31');
+    assert.equal(ditukar.preset, null);
+
+    const ditolak = await getRevenueData({ dari: '2026-02-30', sampai: '2026-03-31' });
+    assert.equal(ditolak.ditolak, true);
+    assert.equal(ditolak.preset, '6b');
+
+    const semua = await getRevenueData(SEMUA);
+    assert.equal(semua.dari, null);
+    assert.equal(semua.sampai, null);
+    assert.equal(semua.ditolak, false);
+  });
+
+  it('hasilnya bisa diserialisasi ke Client Component', async () => {
+    // Prisma.Decimal yang menyeberang batas server/client menjadi objek tanpa
+    // metode di sisi sana, dan Date menjadi teks -- keduanya baru terlihat saat
+    // dirender, bukan saat dikompilasi.
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('250000'), paidAt: new Date('2026-09-01T05:00:00+07:00') },
+      ],
+    });
+
+    const hasil = await getRevenueData(SEMUA);
+
+    assert.deepEqual(JSON.parse(JSON.stringify(hasil)), hasil);
+    for (const nilai of Object.values(hasil)) {
+      assert.ok(!(nilai instanceof Date), 'Date tidak boleh menyeberang');
+      assert.ok(!Prisma.Decimal.isDecimal(nilai), 'Decimal tidak boleh menyeberang');
+    }
+  });
+
+  it('total dijumlahkan sebagai Decimal atas isi ember, bukan atas angka yang sudah dibulatkan', async () => {
+    // Nominal dengan pecahan: menjumlahkan data[].total yang sudah menjadi
+    // number menghasilkan total yang tidak sama dengan penjumlahan nominal
+    // aslinya, dan angka inilah yang dibandingkan admin dengan mutasi rekening.
+    const { getRevenueData } = buatLaporan({
+      penerimaan: [
+        { jumlah: new Prisma.Decimal('0.1'), paidAt: new Date('2026-09-01T05:00:00+07:00') },
+        { jumlah: new Prisma.Decimal('0.2'), paidAt: new Date('2026-10-01T05:00:00+07:00') },
+      ],
+    });
+
+    const hasil = await getRevenueData(SEMUA);
+    assert.equal(hasil.totalBersih, 0.3);
+  });
+
+  it('hanya getRevenueData yang diekspor dari berkas use server', async () => {
+    // Setiap yang diekspor dari berkas 'use server' adalah endpoint HTTP dengan
+    // id yang bisa ditemukan dari bundle. Fungsi pembukuan murni yang menjadi
+    // endpoint adalah permukaan serang tanpa satu pun manfaat.
+    const modul = muatDenganModulPalsu(JALUR_LAPORAN, {
+      'next-auth': { getServerSession: async () => null },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: {} },
+    });
+    assert.deepEqual(Object.keys(modul).sort(), ['getRevenueData']);
+    assert.equal(typeof modul.getRevenueData, 'function');
+  });
+});
+
+// ===========================================================================
+// UI LAPORAN: SATU JUDUL, SATU KARTU, SATU DAFTAR PRESET
+// ===========================================================================
+describe('RevenueSection dan RevenueChart', () => {
+  it('grafik tidak lagi membawa kartu dan judulnya sendiri', () => {
+    // Keduanya dulu membungkus diri dengan bg-white rounded-2xl border DAN
+    // menulis h3: kartu di dalam kartu, dua judul bertumpuk, dan kedua judul
+    // itu menyebut hal yang berbeda ("Tren Pendapatan" dan "Tren Uang Masuk").
+    const chart = kodeSajaAny(JALUR_REVENUE_CHART);
+    assert.ok(!chart.includes('<h3'), 'judul milik pemanggilnya, yang tahu rentangnya');
+    assert.ok(!chart.includes('Tren Pendapatan'), 'judul yang bertentangan sudah dibuang');
+    assert.ok(!chart.includes('rounded-2xl'), 'kartu kedua sudah dibuang');
+
+    const section = kodeSajaAny(JALUR_REVENUE_SECTION);
+    assert.ok(section.includes('Tren Uang Masuk'));
+    assert.equal(section.split('<h3').length - 1, 1, 'tepat satu judul');
+  });
+
+  it('label tooltip menyebut hal yang sama dengan judulnya', () => {
+    // Dulu 'Omzet' -- kata ketiga untuk hal yang sama, setelah dua judul yang
+    // sudah saling bertentangan. Batang bisa bernilai negatif, dan "omzet
+    // negatif" bukan sesuatu yang punya arti.
+    const chart = kodeSajaAny(JALUR_REVENUE_CHART);
+    assert.match(chart, /formatter=\{[^}]*'Uang masuk bersih'\]\}/);
+    // Yang dilarang adalah PEMAKAIANNYA sebagai label seri, bukan kemunculan
+    // katanya: komentar di berkas itu menyebut label lama justru untuk
+    // menjelaskan kenapa ia dibuang, dan `kodeSajaAny` tidak membuang blok
+    // komentar JSX.
+    assert.doesNotMatch(chart, /,\s*'Omzet'\]/);
+  });
+
+  it('daftar tombol diturunkan dari PRESET_RENTANG, tidak ditulis ulang', () => {
+    // Dua daftar untuk satu himpunan pilihan berarti preset yang ditambahkan di
+    // server tidak muncul sebagai tombol, dan label yang diubah di UI tidak
+    // mengubah rentang yang dihitung.
+    const section = kodeSajaAny(JALUR_REVENUE_SECTION);
+    assert.ok(section.includes('PRESET_RENTANG'));
+    assert.ok(!section.includes('filterOptions'), 'daftar kedua sudah dibuang');
+    assert.doesNotMatch(section, /'daily'|'12m'|'6m'/, 'union periode lama sudah tidak ada');
+  });
+
+  it('tidak memanggil prisma maupun membaca sesi dari Client Component', () => {
+    const section = kodeSajaAny(JALUR_REVENUE_SECTION);
+    assert.ok(section.includes("'use client'"));
+    assert.ok(!section.includes('@/lib/prisma'));
+    assert.ok(!section.includes('getServerSession'));
+  });
+
+  it('halaman dashboard tidak lagi menyalin preset baku', () => {
+    // '6m' dulu tertera di dua tempat yang tidak terhubung apa pun: di sini dan
+    // di useState milik RevenueSection. Mengubah salah satunya membuat grafik
+    // memuat enam bulan sementara tombol yang tersorot mengatakan tiga.
+    const halaman = kodeSajaAny(JALUR_DASHBOARD_ADMIN);
+    assert.ok(halaman.includes('getRevenueData()'));
+    assert.ok(!halaman.includes("getRevenueData('6m')"));
   });
 });
 
@@ -15220,10 +15789,18 @@ describe('tipe menggantikan `any` di batas server-client', () => {
       const aksi = kodeSaja(JALUR_AKSI_ADMIN);
       assert.match(aksi, /export type ChartData/);
 
+      // `RevenueSection` mengimpor SELURUH hasil laporan, bukan hanya deret
+      // batangnya: rentang yang benar-benar dipakai server ikut di dalamnya,
+      // dan judul yang disusun dari medan formulir sendiri akan menulis
+      // "1 Jan – 31 Jan" di atas grafik enam bulan saat tanggalnya ditolak.
       const seksi = kodeSaja(JALUR_SEKSI_OMZET);
-      assert.match(seksi, /type ChartData \} from '@\/app\/admin\/\(dashboard\)\/actions'/);
+      assert.match(
+        seksi,
+        /type LaporanOmzet \} from '@\/app\/admin\/\(dashboard\)\/actions'/,
+      );
+      assert.match(aksi, /export type LaporanOmzet/);
       assert.ok(
-        !/^type ChartData/m.test(seksi),
+        !/^type (ChartData|LaporanOmzet)/m.test(seksi),
         'salinan kedua bentuk yang sama akan menyimpang dari sumbernya',
       );
     });
