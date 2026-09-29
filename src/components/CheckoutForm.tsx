@@ -66,6 +66,45 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   const [npwp, setNpwp] = useState(penyewa.npwp);
   const [galatIdentitas, setGalatIdentitas] = useState<string | null>(null);
 
+  // ==========================================================================
+  // TANGGAL MULAI TAYANG — state, bukan `document.getElementById`.
+  //
+  // Nilainya dulu dibaca dengan `document.getElementById('startDateInput')`
+  // tepat saat tombol bayar ditekan, sementara kolomnya `defaultValue`. Itu
+  // bukan sekadar gaya kode yang tidak lazim di React; ia membuat satu-satunya
+  // nilai yang MENGUNCI TANGGAL BILLBOARD menjadi nilai yang tidak pernah
+  // dilihat komponen ini sampai detik terakhir, sehingga tidak ada satu pun
+  // pemeriksaan di layar yang bisa bergantung padanya. Akibatnya terukur:
+  // memilih tanggal di masa lalu lolos seluruh pemeriksaan browser
+  // (`checkValidity()` true, `validationMessage` kosong), permintaannya
+  // terkirim, lalu server menolaknya di `api/booking/create/route.ts:156` —
+  // pembeli menunggu perjalanan bolak-balik hanya untuk diberi tahu hal yang
+  // sudah bisa diketahui sebelum ia menekan tombol.
+  //
+  // Dengan state, `min` di bawah bisa diturunkan dari hari ini dan penolakannya
+  // terjadi di kolomnya. Batas itu SENGAJA dibuat sama dengan gerbang server
+  // (`isBefore(startDate, startOfDay(new Date()))`), bukan lebih longgar dan
+  // bukan lebih ketat — klien di sini hanya mendahului jawaban server, tidak
+  // menggantikannya.
+  // ==========================================================================
+  const [tanggalMulai, setTanggalMulai] = useState(startDate);
+
+  /**
+   * Hari ini dalam bentuk `YYYY-MM-DD` waktu setempat.
+   *
+   * `toISOString()` TIDAK dipakai: ia mengubah ke UTC lebih dulu, jadi di
+   * Jakarta (UTC+7) sepanjang pukul 00:00–06:59 ia mengembalikan tanggal
+   * KEMARIN — dan `min` yang mundur satu hari menerima tanggal yang ditolak
+   * server, yaitu cacat yang sedang diperbaiki, hidup kembali hanya pada tujuh
+   * jam pertama setiap hari.
+   */
+  const batasTanggalMulai = (() => {
+    const kini = new Date();
+    const bulan = String(kini.getMonth() + 1).padStart(2, '0');
+    const hari = String(kini.getDate()).padStart(2, '0');
+    return `${kini.getFullYear()}-${bulan}-${hari}`;
+  })();
+
   // Data User
   const { data: session } = useSession();
 
@@ -116,9 +155,18 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
           return;
       }
 
-      const dateInput = document.getElementById('startDateInput') as HTMLInputElement;
-      if(!dateInput || !dateInput.value) {
+      if (tanggalMulai.trim() === '') {
           toast.galat("Pilih 'Rencana Mulai Tayang' terlebih dahulu.");
+          return;
+      }
+
+      // Tanggal lampau ditolak di sini, bukan setelah perjalanan ke server.
+      // Perbandingan teks, bukan `new Date(...) < new Date()`: keduanya
+      // berbentuk `YYYY-MM-DD` yang urutan leksikografisnya sama dengan urutan
+      // kronologisnya, dan membandingkan objek `Date` di sini justru memasukkan
+      // kembali soal zona waktu yang `batasTanggalMulai` baru saja hindari.
+      if (tanggalMulai < batasTanggalMulai) {
+          toast.galat('Tanggal mulai tayang tidak boleh di masa lalu.');
           return;
       }
 
@@ -154,7 +202,7 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
           duration: duration,
           paymentType: paymentType,
           designOption: designOption,
-          startDateString: dateInput.value,
+          startDateString: tanggalMulai,
           name: nama,
           whatsapp: whatsapp,
           companyName: perusahaan,
@@ -276,12 +324,20 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                 </div>
 
                 <div className="bg-gray-50 p-4 rounded-xl border border-dashed border-gray-300">
-                    <label className="text-xs font-bold text-gray-500 mb-1 block uppercase">Rencana Mulai Tayang</label>
-                                        <input 
-                        type="date" 
+                    {/* `htmlFor` ditambahkan, dan itu bukan kelengkapan formalitas.
+                        Tanpa `htmlFor`, `input.labels` kosong — terukur di
+                        browser — sehingga pembaca layar mengumumkan kolom ini
+                        hanya sebagai "date" tanpa menyebut apa yang diminta,
+                        pada kolom yang menentukan tanggal sewa. */}
+                    <label htmlFor="startDateInput" className="text-xs font-bold text-gray-500 mb-1 block uppercase">Rencana Mulai Tayang</label>
+                    <input
+                        type="date"
                         id="startDateInput"
-                        defaultValue={startDate} // Gunakan defaultValue dari props
-                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1 text-gray-800 font-bold" 
+                        value={tanggalMulai}
+                        onChange={(e) => setTanggalMulai(e.target.value)}
+                        min={batasTanggalMulai}
+                        required
+                        className="w-full bg-white border border-gray-300 rounded-lg p-2.5 outline-none focus:border-utero focus:ring-1 text-gray-800 font-bold"
                     />
                 </div>
             </div>

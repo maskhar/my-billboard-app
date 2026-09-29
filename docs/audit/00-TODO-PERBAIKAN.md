@@ -68,7 +68,7 @@
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
 | 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.18–5.29, 5.30, 5.33 (5.7, 5.9, 5.12 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`) |
-| 6 | 🔶 sebagian | 6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
+| 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | 🔶 sebagian | 8.9 (8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
 
@@ -614,10 +614,10 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 
 | # | Task | File | Ref | Status |
 |---|---|---|---|---|
-| 6.23 | `type="number"` → `type="tel"` + `inputMode="numeric"` untuk telepon/NPWP/rekening — **nol di depan terhapus (bug data)** | `register/page.tsx:72`, `CheckoutForm.tsx:148,166`, `BookingCard.tsx:392` | `[04]F-07` | [ ] |
-| 6.24 | Ganti pembacaan DOM langsung dengan controlled state untuk tanggal mulai | `CheckoutForm.tsx:51,126-131` | `[04]F-08` | [ ] |
-| 6.25 | Perbaiki 4 link 404 di Navbar | `Navbar.tsx:55,56,155,156` | `[04]` §4 | [ ] |
-| 6.26 | Perbaiki 3 CTA mati | `[04]` §4 | `[04]` | [ ] |
+| 6.23 | `type="number"` → `type="tel"` + `inputMode="numeric"` untuk telepon/NPWP/rekening. **Temuannya lebih buruk dari yang tercatat:** bukan "nol di depan terhapus", tapi kolom `number` MEMOTONG ketikan lalu melaporkan dirinya sah. Terukur di browser pada `bankAccount`: `0271-234567890` membuat `FormData` mengirim `234567890`, `checkValidity()` `true`, `validationMessage` kosong, `required` lolos. Karena potongannya masih 9 digit, `nomorRekeningSah` di server MENERIMANYA — refund ditransfer ke rekening yang berbeda dari yang diketik pembeli, tanpa satu pihak pun diberi tahu. 4 dari 4 bentuk umum ikut terpotong. `register` / `CheckoutForm` / `AccountSettingsForm` / `FormSewakanTempat` sudah `tel` sebelumnya; hanya `bankAccount` yang tersisa dan kini diperbaiki + `pattern` yang menjaga batas 8–34 digit yang SAMA dengan gerbang server (dibaca dari `route.ts` saat test, bukan dijiplak) | `BookingCard.tsx:843`, gerbang `api/booking/request-refund/route.ts:54` | `[04]F-07` | [x] |
+| 6.24 | Ganti pembacaan DOM langsung dengan controlled state untuk tanggal mulai. Sekaligus: `min` ditambahkan supaya tanggal lampau ditolak sebelum perjalanan ke server, dan `htmlFor` dipasang — terukur `input.labels` kosong tanpanya, jadi pembaca layar mengumumkan kolom penentu tanggal sewa hanya sebagai "date". `min` dirakit dari `getFullYear/getMonth/getDate`, BUKAN `toISOString()`: terukur di TZ UTC+7, `toISOString()` mengembalikan tanggal kemarin pada jam lokal 0/3/6 — `min` yang mundur sehari menerima tanggal yang ditolak server, yaitu cacat ini hidup kembali tujuh jam setiap hari | `CheckoutForm.tsx` | `[04]F-08` | [x] |
+| 6.25 | Perbaiki 4 link 404 di Navbar — **diperiksa, tidak ada 404.** Semua 18 `href` di `Navbar.tsx` punya route yang cocok, dan sapuan `fetch` langsung atas 10 route mengembalikan nol 404 (hanya redirect sesi pada `/admin`, `/dashboard`, `/dashboard/settings`). Temuan audit sudah usang | `Navbar.tsx` | `[04]` §4 | [x] |
+| 6.26 | Perbaiki 3 CTA mati — **diperiksa, ketiganya hidup.** Pemindaian `<button>` tanpa `onClick`/`type=submit` menemukan 3 kandidat: `BillboardDetailClient.tsx:254` (`disabled` di dalam `<Link>`), `ChatWidget.tsx:372,413` (submit bawaan di dalam `<form onSubmit>`). Grep `href="#"`, `href=""`, `javascript:`, `onClick` kosong, TODO/FIXME/"coming soon" hanya kena komentar | `[04]` §4 | `[04]` | [x] |
 | 6.27 | Halaman browse/list billboard sebagai alternatif peta-saja | `[06]` | [ ] |
 | 6.28 | Halaman hasil pencarian | `[06]` | [ ] |
 | 6.29 | Halaman konfirmasi pesanan | `[06]` | [ ] |

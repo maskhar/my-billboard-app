@@ -804,9 +804,53 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                             </>
                         )}
                     </p>
+                    {/* `type="tel"`, BUKAN `type="number"`, dan ini bukan soal
+                        kenyamanan mengetik.
+
+                        Kolom number membuang apa pun yang bukan bilangan, tapi ia
+                        tidak membuangnya sebagai penolakan — ia membuangnya
+                        sebagai POTONGAN, lalu melaporkan dirinya sah. Terukur di
+                        browser pada kolom ini: mengetik `0271-234567890` membuat
+                        `FormData` mengirim `234567890`, `checkValidity()`
+                        mengembalikan `true`, `validationMessage` kosong, dan
+                        `required` lolos. Empat angka pertama hilang tanpa satu
+                        pun tanda di layar.
+
+                        Pada kolom lain itu merepotkan. Di sini kolomnya adalah
+                        REKENING TUJUAN TRANSFER DANA REFUND, dan potongannya
+                        masih berupa deret angka panjang — jadi `nomorRekeningSah`
+                        di `api/booking/request-refund/route.ts:54` menerimanya:
+                        `234567890` punya 9 digit, lolos batas 8–34. Yang tersimpan
+                        dan dibaca admin saat mentransfer adalah nomor rekening
+                        yang BERBEDA dari yang diketik pembeli, dan tidak ada satu
+                        pihak pun yang diberi tahu — pembeli melihat "Rekening
+                        disimpan", admin melihat nomor yang tampak wajar.
+
+                        `pattern` di bawah menjaga bentuk YANG SAMA dengan
+                        `nomorRekeningSah`, termasuk batas 8–34 digitnya, supaya
+                        yang akan ditolak server ditolak di sini lebih dulu —
+                        saat pembeli masih melihat kolomnya dan bisa
+                        memperbaikinya, bukan setelah permintaannya gagal.
+                        Kesepadanannya diuji di browser pada sepuluh bentuk:
+                        satu-satunya perbedaan adalah pemisah ganda (`0271--2345`),
+                        yang ditolak di sini tapi diterima server. Selisih ke arah
+                        itu aman — tidak ada rekening sungguhan berbentuk demikian,
+                        dan klien yang lebih ketat hanya meminta pembeli merapikan
+                        ketikannya. Yang berbahaya adalah arah sebaliknya. */}
                     <div className="grid grid-cols-2 gap-4">
-                        <input name="bankName" placeholder="Bank (cth: BCA)" className="w-full border rounded-lg p-3 text-sm font-bold" required />
-                        <input name="bankAccount" type="number" placeholder="No Rekening" className="w-full border rounded-lg p-3 text-sm font-bold" required />
+                        <input name="bankName" placeholder="Bank (cth: BCA)" autoComplete="off" maxLength={60} className="w-full border rounded-lg p-3 text-sm font-bold" required />
+                        <input
+                            name="bankAccount"
+                            type="tel"
+                            inputMode="numeric"
+                            autoComplete="off"
+                            pattern="[0-9](?:[\s\-]?[0-9]){7,33}"
+                            maxLength={40}
+                            title="Nomor rekening: 8–34 angka, boleh dipisah satu spasi atau tanda hubung."
+                            placeholder="No Rekening"
+                            className="w-full border rounded-lg p-3 text-sm font-bold"
+                            required
+                        />
                     </div>
                     <button disabled={loading} type="submit" className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 transition">{loading ? 'Menyimpan...' : 'Konfirmasi'}</button>
                 </form>

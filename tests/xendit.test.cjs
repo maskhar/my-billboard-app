@@ -25569,3 +25569,303 @@ describe('kebijakan privasi & syarat ketentuan', () => {
     );
   });
 });
+
+describe('kolom angka yang bukan kuantitas, dan tanggal mulai tayang', () => {
+  // Yang dijaga di sini BUKAN pilihan atribut HTML sebagai selera, melainkan
+  // dua kerusakan data yang keduanya terukur di browser sebelum diperbaiki:
+  //
+  // 1. `<input type="number">` pada NOMOR REKENING TUJUAN TRANSFER REFUND.
+  //    Kolom number tidak menolak ketikan yang bukan bilangan — ia MEMOTONGNYA
+  //    lalu melaporkan dirinya sah. Terukur: mengetik `0271-234567890` membuat
+  //    `FormData` mengirim `234567890`, `checkValidity()` true, `required`
+  //    lolos, `validationMessage` kosong. Potongan itu masih deret angka
+  //    panjang, jadi `nomorRekeningSah` di server MENERIMANYA (9 digit, lolos
+  //    batas 8-34) — dan admin mentransfer dana refund ke rekening yang berbeda
+  //    dari yang diketik pembeli, tanpa satu pun pihak diberi tahu.
+  //
+  // 2. `document.getElementById('startDateInput')` dibaca saat tombol bayar
+  //    ditekan, dengan kolomnya `defaultValue`. Tanggal di masa lalu lolos
+  //    seluruh pemeriksaan browser lalu ditolak server di `booking/create`.
+  //
+  // Yang TIDAK dijaga: teks label, kelas Tailwind, dan tata letaknya.
+  const berkas = (...bagian) => path.join(__dirname, '..', 'src', ...bagian);
+
+  const JALUR_BOOKING_CARD = berkas('components', 'BookingCard.tsx');
+  const JALUR_CHECKOUT = berkas('components', 'CheckoutForm.tsx');
+  const JALUR_ROUTE_REFUND_BANK = berkas(
+    'app', 'api', 'booking', 'request-refund', 'route.ts'
+  );
+  const JALUR_ROUTE_CREATE = berkas(
+    'app', 'api', 'booking', 'create', 'route.ts'
+  );
+
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  /**
+   * Ambil tag `<input ...>` yang memuat `name="..."` atau `id="..."` tertentu.
+   *
+   * Dicari per-tag, bukan per-baris: atribut kolom-kolom ini ditulis
+   * multi-baris, jadi pencarian baris akan melewatkan `type` yang berada
+   * beberapa baris di bawah `name`.
+   *
+   * TIDAK memakai `/<input[\s\S]*?\/?>/`. Pola itu sempat dipakai di sini dan
+   * SALAH dengan cara yang berbahaya: ia berhenti pada `>` pertama yang
+   * ditemuinya, dan `>` pertama di dalam `onChange={(e) => ...}` adalah bagian
+   * dari panah arrow function. Tag jadi terpotong di tengah, atribut di
+   * bawahnya tak pernah terbaca, dan test-nya gagal MESKI atributnya ada —
+   * atau, lebih buruk pada test yang berbentuk negatif, lulus meski atribut
+   * terlarangnya ada. Karena itu pemindaiannya menghitung kedalaman `{}` dan
+   * hanya mengakui `>` yang berada di kedalaman nol.
+   */
+  function tagInput(kode, penanda) {
+    const hasil = [];
+    let i = 0;
+    while ((i = kode.indexOf('<input', i)) !== -1) {
+      let dalam = 0;
+      let j = i + 6;
+      for (; j < kode.length; j += 1) {
+        const c = kode[j];
+        if (c === '{') dalam += 1;
+        else if (c === '}') dalam -= 1;
+        else if (c === '>' && dalam === 0) break;
+      }
+      const tag = kode.slice(i, j + 1);
+      if (tag.includes(penanda)) hasil.push(tag);
+      i = j + 1;
+    }
+    return hasil;
+  }
+
+  it('pemindai tag input tidak terpotong oleh panah arrow function', () => {
+    // Test untuk test-nya sendiri. Tanpa ini, pemindai yang salah membuat
+    // seluruh assert di bawah menguji teks yang terpotong, dan sebuah test
+    // berbentuk negatif ("tidak boleh ada X") akan LULUS tanpa pernah melihat
+    // bagian tag tempat X berada.
+    const contoh = '<input onChange={(e) => setX(e)} min={batas} type="tel" />';
+    const tag = tagInput(contoh, 'type="tel"');
+    assert.strictEqual(tag.length, 1, 'tag dengan arrow function harus terbaca utuh.');
+    assert.ok(/min=\{batas\}/.test(tag[0]), 'atribut setelah arrow function harus ikut terbaca.');
+  });
+
+  it('nomor rekening refund bukan type="number" — kolom number memotong ketikan tanpa menolaknya', () => {
+    const kode = kodeSaja(JALUR_BOOKING_CARD);
+    const tags = tagInput(kode, 'name="bankAccount"');
+
+    assert.strictEqual(
+      tags.length,
+      1,
+      'kolom bankAccount harus ada tepat satu di BookingCard.'
+    );
+
+    const tag = tags[0];
+    assert.ok(
+      !/type="number"/.test(tag),
+      'bankAccount tidak boleh type="number": ketikan berpemisah dipotong ' +
+        'menjadi digit terakhirnya saja, lolos required, dan potongannya masih ' +
+        'diterima server sebagai rekening yang sah.'
+    );
+    assert.ok(
+      /type="tel"/.test(tag),
+      'bankAccount harus type="tel" supaya nilainya sampai utuh.'
+    );
+    assert.ok(
+      /inputMode="numeric"/.test(tag),
+      'bankAccount harus inputMode="numeric" supaya papan tuts angka tetap muncul di ponsel.'
+    );
+  });
+
+  it('pattern nomor rekening menjaga batas yang sama dengan gerbang server', () => {
+    const kode = kodeSaja(JALUR_BOOKING_CARD);
+    const tag = tagInput(kode, 'name="bankAccount"')[0];
+
+    const cocok = tag.match(/pattern="([^"]+)"/);
+    assert.ok(cocok, 'bankAccount harus punya pattern.');
+
+    // Regex klien dijalankan terhadap bentuk-bentuk nyata, lalu dibandingkan
+    // dengan `nomorRekeningSah` server yang dibaca dari berkasnya sendiri —
+    // bukan disalin ke sini, supaya perubahan di server ikut terukur.
+    const kodeServer = kodeSaja(JALUR_ROUTE_REFUND_BANK);
+    const batasServer = kodeServer.match(
+      /digit\.length\s*<\s*(\d+)\s*\|\|\s*digit\.length\s*>\s*(\d+)/
+    );
+    assert.ok(
+      batasServer,
+      'batas digit di nomorRekeningSah tidak terbaca; test ini menjaga ' +
+        'kesepadanan dengan gerbang itu, jadi ia harus bisa membacanya.'
+    );
+
+    const minDigit = Number(batasServer[1]);
+    const maksDigit = Number(batasServer[2]);
+    const pola = new RegExp('^(?:' + cocok[1] + ')$');
+
+    const sahDiServer = (teks) => {
+      if (!/^[0-9][0-9\s-]*[0-9]$/.test(teks)) return false;
+      const d = teks.replace(/\D/g, '');
+      return d.length >= minDigit && d.length <= maksDigit;
+    };
+
+    // Bentuk yang harus DITOLAK klien karena server juga menolaknya. Tanpa
+    // batas panjang di pattern, kolom ini menerima "12" lalu gagal di server.
+    for (const pendek of ['1', '12', '1-2', '1234567']) {
+      assert.ok(
+        !pola.test(pendek),
+        `pattern menerima "${pendek}" yang ditolak server — penolakannya ` +
+          'akan terjadi setelah perjalanan bolak-balik, bukan di kolomnya.'
+      );
+      assert.ok(!sahDiServer(pendek), `prasyarat test salah: "${pendek}" ternyata sah di server.`);
+    }
+
+    // Bentuk rekening nyata yang harus DITERIMA. Klien yang lebih ketat dari
+    // server akan menolak rekening yang sesungguhnya bisa dipakai.
+    for (const sah of [
+      '12345678',
+      '0271234567',
+      '0271-2345-6789',
+      '013 7654321 9',
+      '8720 1234 5678',
+    ]) {
+      assert.ok(
+        sahDiServer(sah),
+        `prasyarat test salah: "${sah}" ternyata ditolak server.`
+      );
+      assert.ok(
+        pola.test(sah),
+        `pattern menolak "${sah}" yang diterima server — pembeli dengan ` +
+          'rekening berformat itu tidak bisa mengirim pengajuannya sama sekali.'
+      );
+    }
+  });
+
+  it('nomor rekening tidak dibatasi lebih pendek dari panjang yang diterima server', () => {
+    const kode = kodeSaja(JALUR_BOOKING_CARD);
+    const tag = tagInput(kode, 'name="bankAccount"')[0];
+    const maxLength = tag.match(/maxLength=\{(\d+)\}/);
+
+    assert.ok(maxLength, 'bankAccount harus punya maxLength.');
+
+    // Server memotong pada 40 karakter (`teksDariBody(nilai, 40)`). maxLength
+    // yang lebih kecil membuang digit yang server sebenarnya terima; yang lebih
+    // besar mengirimkan karakter yang pasti dipotong tanpa tanda di layar.
+    const kodeServer = kodeSaja(JALUR_ROUTE_REFUND_BANK);
+    const batas = kodeServer.match(/nomorRekeningSah[\s\S]{0,300}?teksDariBody\([^,]+,\s*(\d+)\)/);
+    assert.ok(batas, 'batas panjang teks di nomorRekeningSah tidak terbaca.');
+
+    assert.strictEqual(
+      Number(maxLength[1]),
+      Number(batas[1]),
+      'maxLength kolom rekening harus sama dengan batas potong server.'
+    );
+  });
+
+  it('tanggal mulai tayang dibaca dari state, bukan document.getElementById', () => {
+    const kode = kodeSaja(JALUR_CHECKOUT);
+
+    assert.ok(
+      !/document\.getElementById/.test(kode),
+      'CheckoutForm tidak boleh membaca kolom lewat document.getElementById: ' +
+        'nilai yang mengunci tanggal billboard menjadi nilai yang tidak pernah ' +
+        'dilihat komponen sampai tombol ditekan, sehingga tidak ada pemeriksaan ' +
+        'di layar yang bisa bergantung padanya.'
+    );
+    assert.ok(
+      /startDateString:\s*tanggalMulai/.test(kode),
+      'payload harus mengirim state tanggalMulai.'
+    );
+  });
+
+  it('kolom tanggal terkendali, punya label terhubung, dan punya min', () => {
+    const kode = kodeSaja(JALUR_CHECKOUT);
+    const tag = tagInput(kode, 'id="startDateInput"')[0];
+
+    assert.ok(tag, 'kolom startDateInput harus ada.');
+    assert.ok(
+      /value=\{tanggalMulai\}/.test(tag) && /onChange=/.test(tag),
+      'kolom tanggal harus terkendali (value + onChange), bukan defaultValue.'
+    );
+    assert.ok(
+      !/defaultValue/.test(tag),
+      'defaultValue pada kolom terkendali membuat nilainya kembali tak terbaca komponen.'
+    );
+    assert.ok(
+      /min=\{batasTanggalMulai\}/.test(tag),
+      'kolom tanggal harus punya min supaya tanggal lampau ditolak di kolomnya.'
+    );
+    assert.ok(
+      /htmlFor="startDateInput"/.test(kode),
+      'label harus terhubung dengan htmlFor: tanpa itu input.labels kosong ' +
+        'dan pembaca layar hanya mengumumkan "date" tanpa menyebut yang diminta.'
+    );
+  });
+
+  it('batas tanggal tidak dihitung lewat toISOString', () => {
+    const kode = kodeSaja(JALUR_CHECKOUT);
+    const blok = kode.match(/batasTanggalMulai[\s\S]{0,400}?\}\)\(\);/);
+
+    assert.ok(blok, 'batasTanggalMulai harus ada.');
+    assert.ok(
+      !/toISOString/.test(blok[0]),
+      'toISOString mengubah ke UTC lebih dulu, jadi di Jakarta pukul 00:00-06:59 ' +
+        'ia mengembalikan tanggal KEMARIN — min yang mundur sehari menerima ' +
+        'tanggal yang ditolak server, yaitu cacat yang sedang diperbaiki.'
+    );
+    assert.ok(
+      /getFullYear\(\)/.test(blok[0]) && /getMonth\(\)/.test(blok[0]) && /getDate\(\)/.test(blok[0]),
+      'batas tanggal harus dirakit dari komponen waktu setempat.'
+    );
+  });
+
+  it('tanggal lampau ditolak di klien, dan gerbang servernya tetap ada', () => {
+    const kodeKlien = kodeSaja(JALUR_CHECKOUT);
+    assert.ok(
+      /tanggalMulai\s*<\s*batasTanggalMulai/.test(kodeKlien),
+      'handlePayment harus menolak tanggal sebelum batas hari ini.'
+    );
+
+    // Pemeriksaan klien tidak boleh dianggap menggantikan gerbang server:
+    // `curl` melewatinya sepenuhnya.
+    const kodeServer = kodeSaja(JALUR_ROUTE_CREATE);
+    assert.ok(
+      /isBefore\(startDate,\s*startOfDay\(new Date\(\)\)\)/.test(kodeServer),
+      'gerbang tanggal lampau di booking/create harus tetap ada — ' +
+        'pemeriksaan browser bisa dilewati dengan curl.'
+    );
+  });
+
+  it('tidak ada type="number" pada kolom identitas lain di kode publik', () => {
+    // Kolom kuantitas (nominal biaya tambahan, nominal setoran) memang benar
+    // memakai number: di sana nilainya adalah bilangan, dan spinner-nya berarti.
+    // Yang dijaga: nomor identitas — telepon, NPWP, KTP, rekening — yang nol di
+    // depannya bermakna dan pemisahnya lazim ditulis.
+    const BERKAS_PUBLIK = [
+      berkas('components', 'BookingCard.tsx'),
+      berkas('components', 'CheckoutForm.tsx'),
+      berkas('app', 'register', 'page.tsx'),
+      berkas('app', 'dashboard', 'settings', 'AccountSettingsForm.tsx'),
+      berkas('app', 'sewakan-tempat', 'FormSewakanTempat.tsx'),
+    ];
+    const PENANDA_IDENTITAS = /whatsapp|phone|telepon|npwp|ktp|bankAccount|rekening/i;
+
+    for (const jalur of BERKAS_PUBLIK) {
+      if (!fs.existsSync(jalur)) continue;
+      const kode = kodeSaja(jalur);
+      for (const tag of tagInput(kode, '<input')) {
+        if (!PENANDA_IDENTITAS.test(tag)) continue;
+        assert.ok(
+          !/type="number"/.test(tag),
+          `kolom identitas di ${path.basename(jalur)} memakai type="number": ` +
+            'nol di depan dan pemisah dibuang tanpa penolakan. Tag: ' +
+            tag.replace(/\s+/g, ' ').slice(0, 120)
+        );
+      }
+    }
+  });
+});
