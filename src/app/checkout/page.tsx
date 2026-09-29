@@ -72,7 +72,14 @@ export default async function CheckoutPage({ searchParams }: Props) {
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
       <Navbar />
 
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-24">
+      {/* `<main>`, bukan `<div>`: pembaca layar punya pintasan langsung ke
+          landmark utama, dan tanpa satu pun `<main>` di halaman, pintasan itu
+          tidak menemukan apa-apa sehingga pengguna harus menelusuri seluruh
+          navbar dulu. Tautan lewati di `Navbar` menutup kasus papan tombol;
+          landmark ini menutup kasus pembaca layar yang menavigasi per-wilayah.
+          Hanya SATU `<main>` per halaman — itu sebabnya ia dipasang di
+          pembungkus isi, bukan di dalam kartu. */}
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-24">
         <h1 className="text-2xl font-bold text-gray-900 mb-8">Checkout & Pembayaran</h1>
         
         {/*
@@ -110,8 +117,8 @@ export default async function CheckoutPage({ searchParams }: Props) {
             npwp: penyewa?.npwp ?? '',
           }}
         />
-        
-      </div>
+
+      </main>
     </div>
   );
 }

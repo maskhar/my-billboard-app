@@ -68,7 +68,9 @@ export default function ForgotPasswordPage() {
     <div className="bg-gray-50 min-h-screen">
       <Navbar />
 
-      <div className="flex flex-col items-center justify-center px-6 py-24 mx-auto md:h-screen lg:py-0">
+      {/* `<main>`: landmark utama halaman, pintasan pembaca layar yang
+          terpisah dari Tab. */}
+      <main className="flex flex-col items-center justify-center px-6 py-24 mx-auto md:h-screen lg:py-0">
         <div className="w-full bg-white rounded-xl shadow-lg border border-gray-100 md:mt-0 sm:max-w-md xl:p-0 overflow-hidden">
           <div className="h-1 w-full bg-utero"></div>
 
@@ -165,7 +167,7 @@ export default function ForgotPasswordPage() {
             )}
           </div>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

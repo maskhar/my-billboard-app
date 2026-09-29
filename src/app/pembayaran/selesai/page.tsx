@@ -34,7 +34,9 @@ export default function PembayaranSelesaiPage() {
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
       <Navbar />
 
-      <div className="max-w-xl mx-auto px-4 pt-24">
+      {/* `<main>` menandai wilayah utama halaman untuk pembaca layar, yang
+          punya pintasan "lompat ke konten utama" terpisah dari Tab. */}
+      <main className="max-w-xl mx-auto px-4 pt-24">
         <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 text-center">
           <div className="w-14 h-14 rounded-2xl bg-amber-50 border border-amber-100 flex items-center justify-center mx-auto mb-5">
             <Clock3 className="text-amber-600" size={26} />
@@ -65,7 +67,7 @@ export default function PembayaranSelesaiPage() {
             <LayoutDashboard size={16} /> Lihat Status di Dashboard
           </Link>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

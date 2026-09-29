@@ -93,6 +93,12 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
     <div className="bg-gray-50 min-h-screen font-sans pb-20">
       <Navbar />
 
+      {/* `<main>` membungkus hero DAN kolom isi, bukan salah satunya: `<h1>`
+          halaman ini ada di dalam hero, dan judul utama yang berdiri di luar
+          landmark utama membuat pembaca layar yang melompat ke `main` mendarat
+          pada galeri tanpa pernah mendengar nama titiknya. */}
+      <main>
+
       {/* Hero Banner */}
       <div className="relative mt-16 w-full h-[50vh] lg:h-[60vh] bg-gray-900 group overflow-hidden">
         {/*
@@ -281,6 +287,7 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
           </div>
         </div>
       </div>
+      </main>
     </div>
   );
 }

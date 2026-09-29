@@ -19,6 +19,14 @@ export default async function AdminLoginPage() {
 
   return (
     <div className="min-h-screen bg-gray-900 flex flex-col items-center justify-center font-sans text-gray-200">
+      {/* `<main>` membungkus judul DAN kartu formulirnya: `<h1>` halaman ini
+          berada di blok logo, dan judul utama yang berdiri di luar landmark
+          utama membuat pembaca layar yang melompat ke `main` mendarat langsung
+          pada kolom sandi tanpa pernah mendengar halaman apa yang dibukanya.
+          Baris hak cipta di bawah sengaja ditinggal di luar — itu bukan isi
+          utama. Halaman ini tidak memakai `Navbar`, jadi tidak punya tautan
+          lewati; landmark inilah satu-satunya pegangan navigasi di sini. */}
+      <main className="flex flex-col items-center">
       {/* LOGO EKSKLUSIF */}
       <div className="mb-8 text-center animate-in fade-in zoom-in duration-500">
         <div className="bg-utero w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-utero/50">
@@ -31,6 +39,7 @@ export default async function AdminLoginPage() {
       <div className="w-full max-w-sm bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-8">
         <AdminLoginForm />
       </div>
+      </main>
 
       <p className="mt-8 text-xs text-gray-600">
         System Secured by {nama} V.1.0 &copy; {tahun}

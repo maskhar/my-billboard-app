@@ -96,7 +96,10 @@ export default async function OrderDetailPage(props: Props) {
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
       <Navbar />
 
-      <div className="max-w-5xl mx-auto px-4 pt-24">
+      {/* `<main>` menandai wilayah utama halaman untuk pembaca layar. Pembungkus
+          ini yang dijadikan landmark, bukan kartu di dalamnya: satu halaman
+          hanya boleh punya satu `<main>`. */}
+      <main className="max-w-5xl mx-auto px-4 pt-24">
           <Link href="/dashboard" className="inline-flex items-center gap-2 text-gray-500 hover:text-utero mb-6 font-bold text-sm transition">
              <ArrowLeft size={16}/> Kembali ke Dashboard
           </Link>
@@ -213,7 +216,7 @@ export default async function OrderDetailPage(props: Props) {
               </div>
 
           </div>
-      </div>
+      </main>
     </div>
   )
 }

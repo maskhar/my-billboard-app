@@ -141,7 +141,10 @@ export default async function InvoicePage(props: Props) {
 
   return (
     <div className="bg-gray-100 min-h-screen py-10 print:bg-white print:p-0 font-sans">
-        <div className="max-w-[21cm] mx-auto bg-white shadow-lg p-12 rounded-xl print:shadow-none print:w-full">
+        {/* `<main>` menandai lembar invoice sebagai wilayah utama halaman.
+            Halaman ini tidak memakai `Navbar`, jadi tidak punya tautan lewati —
+            landmark inilah satu-satunya pegangan pembaca layar di sini. */}
+        <main className="max-w-[21cm] mx-auto bg-white shadow-lg p-12 rounded-xl print:shadow-none print:w-full">
             
             {/* Header */}
             <div className="flex justify-between items-center border-b pb-8 mb-8">
@@ -369,7 +372,7 @@ export default async function InvoicePage(props: Props) {
                      <p className='text-xs text-blue-500'>*Tekan Ctrl + P untuk mencetak atau simpan sebagai PDF.</p>
                 </div>
             </div>
-        </div>
+        </main>
     </div>
   );
 }

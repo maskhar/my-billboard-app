@@ -22567,3 +22567,212 @@ describe('penanda fokus papan tombol tidak boleh hilang lagi', () => {
     );
   });
 });
+
+// ===========================================================================
+// LANDMARK `<main>` DI SETIAP HALAMAN
+// ===========================================================================
+//
+// KENAPA GERBANG INI ADA
+// ----------------------
+// Tautan lewati yang dipasang di suite di atas menutup kasus PAPAN TOMBOL:
+// pengguna menekan Tab sekali lalu melompati navigasi. Ia tidak menutup kasus
+// PEMBACA LAYAR, yang punya pintasan terpisah — "lompat ke landmark utama" —
+// dan pintasan itu mencari elemen `<main>`, bukan tautan.
+//
+// Angkanya sebelum perbaikan: dari 77 berkas `.tsx` di `src/`, hanya 9 memuat
+// `<main`. Sebelas segmen rute karena itu tidak punya landmark utama sama
+// sekali, termasuk `/checkout`, `/login`, dan halaman invoice. Pengguna pembaca
+// layar di halaman seperti itu harus menelusuri seluruh navigasi lagi setiap
+// kali berpindah halaman, karena tidak ada wilayah yang bisa dituju langsung.
+//
+// KENAPA DIHITUNG PER SEGMEN RUTE, BUKAN PER BERKAS
+// -------------------------------------------------
+// Satu halaman yang dirender TIDAK sama dengan satu berkas. `<main>` bisa
+// datang dari empat tempat berbeda di aplikasi ini:
+//
+//   1. berkas `page.tsx` itu sendiri (mis. `/about`),
+//   2. komponen client yang didelegasikan halaman itu
+//      (`/billboard/[slug]` → `BillboardDetailClient`,
+//       `/reset-password` → `FormResetSandi`),
+//   3. `layout.tsx` di atasnya, yang memasang shell
+//      (seluruh `admin/(dashboard)` → `AdminShell`),
+//   4. pembungkus bersama yang dipanggil langsung oleh halaman
+//      (`/dashboard` dan `/dashboard/settings` → `DashboardLayout`).
+//
+// Gerbang yang menuntut `<main` ada di dalam setiap `page.tsx` akan menuntut
+// dua belas landmark GANDA — dua `<main>` bersarang pada satu halaman, yang
+// justru membuat pintasan pembaca layar ambigu. Yang benar adalah mengikuti
+// rantai delegasinya, dan itulah yang dilakukan pemetaan di bawah: setiap
+// segmen menyebut BERKAS MANA yang bertanggung jawab atas landmarknya. Kalau
+// tanggung jawab itu berpindah, pemetaannya harus ikut diubah dengan sengaja —
+// bukan lulus diam-diam.
+describe('setiap halaman punya tepat satu landmark `<main>`', () => {
+  const AKAR_APP = path.join(__dirname, '..', 'src', 'app');
+
+  const berkas = (...bagian) => path.join(__dirname, '..', 'src', ...bagian);
+  const SHELL_ADMIN = berkas('app', 'admin', '_components', 'AdminShell.tsx');
+  const LAYOUT_DASBOR = berkas('app', 'dashboard', 'DashboardLayout.tsx');
+
+  // Kunci = segmen rute (berkas `page.tsx`-nya, relatif terhadap `src/app`).
+  // Nilai = berkas yang WAJIB memuat `<main>` untuk segmen itu.
+  const PEMILIK_LANDMARK = {
+    'page.tsx': berkas('app', 'page.tsx'),
+    'about/page.tsx': berkas('app', 'about', 'page.tsx'),
+    'sewakan-tempat/page.tsx': berkas('app', 'sewakan-tempat', 'page.tsx'),
+    'checkout/page.tsx': berkas('app', 'checkout', 'page.tsx'),
+    'pembayaran/selesai/page.tsx': berkas('app', 'pembayaran', 'selesai', 'page.tsx'),
+    'invoice/[id]/page.tsx': berkas('app', 'invoice', '[id]', 'page.tsx'),
+    'login/page.tsx': berkas('app', 'login', 'page.tsx'),
+    'register/page.tsx': berkas('app', 'register', 'page.tsx'),
+    'forgot-password/page.tsx': berkas('app', 'forgot-password', 'page.tsx'),
+    'admin/login/page.tsx': berkas('app', 'admin', 'login', 'page.tsx'),
+    'dashboard/order/[id]/page.tsx': berkas('app', 'dashboard', 'order', '[id]', 'page.tsx'),
+    'dashboard/order/[id]/payment/page.tsx': berkas(
+      'app', 'dashboard', 'order', '[id]', 'payment', 'page.tsx'
+    ),
+
+    // Delegasi ke komponen client.
+    'billboard/[slug]/page.tsx': berkas('app', 'billboard', '[slug]', 'BillboardDetailClient.tsx'),
+    'reset-password/page.tsx': berkas('app', 'reset-password', 'FormResetSandi.tsx'),
+
+    // Delegasi ke pembungkus bersama. `/dashboard` melewati `DashboardWrapper`
+    // lalu `DashboardClientPage` sebelum tiba di sini.
+    'dashboard/page.tsx': LAYOUT_DASBOR,
+    'dashboard/settings/page.tsx': LAYOUT_DASBOR,
+
+    // Delegasi ke shell lewat `layout.tsx`. Kesepuluh halaman admin ini tidak
+    // memuat `<main>` sendiri DENGAN SENGAJA: `AdminShell` sudah memasangnya.
+    'admin/(dashboard)/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/orders/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/orders/[id]/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/users/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/users/[userId]/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/billboards/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/billboards/form/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/pengajuan/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/settings/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/live-chat/page.tsx': SHELL_ADMIN,
+  };
+
+  function semuaHalaman(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) semuaHalaman(penuh, hasil);
+      else if (entri.name === 'page.tsx') hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  // Komentar JSX (`{/* ... */}`) dan komentar blok dibuang: berkas-berkas ini
+  // MENJELASKAN kenapa landmarknya dipasang dengan menyebut `<main>` di dalam
+  // prosa, jadi menghitung kemunculan di teks mentah akan lulus walaupun
+  // elemennya sendiri dihapus.
+  const kodeSajaMain = (jalur) =>
+    fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/^\s*\/\/.*$/gm, '');
+
+  it('pemetaan pemilik landmark mencakup SETIAP segmen rute', () => {
+    // Jaring pengaman terpenting di suite ini: halaman baru yang ditambahkan
+    // tanpa landmark tidak boleh lolos hanya karena belum tertulis di pemetaan.
+    const ditemukan = semuaHalaman(AKAR_APP)
+      .map((f) => path.relative(AKAR_APP, f).split(path.sep).join('/'))
+      .sort();
+
+    assert.ok(
+      ditemukan.length > 20,
+      `hanya ${ditemukan.length} halaman terkumpul — pengumpulnya rusak`
+    );
+
+    assert.deepEqual(
+      ditemukan,
+      Object.keys(PEMILIK_LANDMARK).sort(),
+      'setiap `page.tsx` wajib menyebut berkas pemilik landmarknya di PEMILIK_LANDMARK'
+    );
+  });
+
+  for (const [segmen, pemilik] of Object.entries(PEMILIK_LANDMARK)) {
+    it(`segmen ${segmen} punya landmark di ${path.basename(pemilik)}`, () => {
+      assert.match(
+        kodeSajaMain(pemilik),
+        /<main[\s>]/,
+        `${path.basename(pemilik)} wajib memuat elemen <main>`
+      );
+    });
+  }
+
+  it('tidak ada `<main>` bersarang: halaman yang mendelegasikan tidak memuatnya sendiri', () => {
+    // Dua `<main>` pada satu halaman membuat pintasan "lompat ke landmark
+    // utama" ambigu — pembaca layar menawarkan dua tujuan tanpa keterangan mana
+    // yang isinya. Ini regresi yang paling mungkin terjadi: seseorang menambah
+    // `<main>` ke satu halaman admin tanpa tahu `AdminShell` sudah punya.
+    const ganda = [];
+    for (const [segmen, pemilik] of Object.entries(PEMILIK_LANDMARK)) {
+      const jalurHalaman = path.join(AKAR_APP, ...segmen.split('/'));
+      if (path.resolve(jalurHalaman) === path.resolve(pemilik)) continue;
+      if (/<main[\s>]/.test(kodeSajaMain(jalurHalaman))) ganda.push(segmen);
+    }
+
+    assert.deepEqual(
+      ganda,
+      [],
+      `halaman ini mendelegasikan landmarknya tapi juga memuat <main> sendiri: ${ganda.join(', ')}`
+    );
+  });
+
+  it('tag `<main>` seimbang di setiap berkas pemilik', () => {
+    // Dihitung sebagai pasangan buka/tutup, bukan sebagai kemunculan tunggal:
+    // `payment/page.tsx` punya DUA cabang `return` (halaman tidak layak bayar
+    // dan halaman bayar), masing-masing dengan `<main>`-nya sendiri. Itu tetap
+    // satu landmark per halaman yang benar-benar dirender. Yang dijaga di sini
+    // adalah keseimbangannya: `<main>` yang tidak ditutup menelan sisa halaman
+    // ke dalam landmark.
+    const timpang = [];
+    for (const pemilik of new Set(Object.values(PEMILIK_LANDMARK))) {
+      const kode = kodeSajaMain(pemilik);
+      const buka = (kode.match(/<main[\s>]/g) || []).length;
+      const tutup = (kode.match(/<\/main>/g) || []).length;
+      if (buka !== tutup) {
+        timpang.push(`${path.basename(pemilik)} (${buka} buka, ${tutup} tutup)`);
+      }
+    }
+
+    assert.deepEqual(timpang, [], `tag <main> tidak seimbang di: ${timpang.join(', ')}`);
+  });
+
+  it('sasaran tautan lewati berada DI DALAM `<main>` di AdminShell', () => {
+    // Urutannya yang menentukan gunanya. Sasaran `#isi-admin` yang berdiri
+    // SEBELUM `<main>` berarti fokus mendarat di luar landmark, dan Tab
+    // berikutnya kembali ke sidebar — tautan yang melewati nol elemen.
+    const kode = kodeSajaMain(SHELL_ADMIN);
+    const posMain = kode.search(/<main[\s>]/);
+    const posSasaran = kode.indexOf('id="isi-admin"');
+
+    assert.ok(posMain >= 0 && posSasaran >= 0, 'landmark dan sasaran tautan lewati wajib ada');
+    assert.ok(
+      posMain < posSasaran,
+      'sasaran #isi-admin harus berada di dalam <main>, bukan mendahuluinya'
+    );
+  });
+
+  it('`CS_Layout` memakai `<main>` itu sendiri sebagai sasaran tautan lewati', () => {
+    // Bentuk yang sengaja berbeda dari AdminShell: satu elemen memikul dua
+    // peran, jadi tidak ada wadah kedua yang bisa menyimpang darinya.
+    assert.match(
+      kodeSajaMain(berkas('app', 'admin', '_components', 'cs', 'CS_Layout.tsx')),
+      /<main[^>]*id="isi-cs"[^>]*tabIndex=\{-1\}/
+    );
+  });
+
+  it('`error.tsx` dan `not-found.tsx` juga punya landmark', () => {
+    // Keduanya halaman utuh yang MENGGANTIKAN isi rute, bukan potongan di
+    // dalamnya, dan keduanya dicapai justru saat pengguna sedang kebingungan.
+    // Halaman galat tanpa landmark adalah halaman yang paling sulit ditelusuri
+    // pada saat paling dibutuhkan.
+    for (const nama of ['error.tsx', 'not-found.tsx']) {
+      assert.match(kodeSajaMain(berkas('app', nama)), /<main[\s>]/, `${nama} wajib memuat <main>`);
+    }
+  });
+});
