@@ -100,6 +100,10 @@ const JALUR_ROUTE_NOTIFY_LEGACY = path.join(
 const JALUR_LEDGER = path.join(__dirname, '..', 'src', 'lib', 'pembayaran.ts');
 const JALUR_TUTUP_TAGIHAN = path.join(__dirname, '..', 'src', 'lib', 'tutup-tagihan.ts');
 const JALUR_TRANSISI = path.join(__dirname, '..', 'src', 'lib', 'transisi-status.ts');
+const JALUR_TUGAS_ADMIN = path.join(__dirname, '..', 'src', 'lib', 'tugas-admin.ts');
+const JALUR_AKSI_PESANAN = path.join(
+  __dirname, '..', 'src', 'components', 'admin', 'OrderActions.tsx'
+);
 const JALUR_HTML = path.join(__dirname, '..', 'src', 'lib', 'html.ts');
 const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
 const JALUR_NOMOR_PESANAN = path.join(__dirname, '..', 'src', 'lib', 'nomor-pesanan.ts');
@@ -24244,5 +24248,354 @@ describe('tabel dan panel tidak melebihi layar tanpa cara menggulungnya', () => 
       `<main> CS_Layout kehilangan overflow-y-auto: ${utama[1]}. Halaman CS ` +
         'yang isinya panjang tidak lagi bisa digulung sama sekali.'
     );
+  });
+});
+
+describe('kartu KPI dashboard admin tidak menyusut di balik sidebar', () => {
+  const isi = () => fs.readFileSync(JALUR_DASHBOARD_ADMIN, 'utf8');
+
+  // Komentar dibuang: penjelasan di berkas itu MENYEBUT kelas-kelas lama yang
+  // sedang dilarang di sini, jadi tanpa pembuangan ini sebuah komentar yang
+  // menerangkan cacat justru menyembunyikan cacatnya.
+  function tanpaKomentarTsx(teks) {
+    return teks
+      .replace(/\{?\/\*[\s\S]*?\*\/\}?/g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*\/\//.test(baris))
+      .join('\n');
+  }
+
+  it('jumlah kolom kartu KPI diturunkan dari lebar wadah, bukan lebar layar', () => {
+    // Breakpoint Tailwind mengukur VIEWPORT, dan di halaman ini viewport bukan
+    // ukuran yang menentukan: sidebar admin `w-64` baru muncul dari `md`, jadi
+    // melewati 768px layar bertambah 256px sementara ruang isi justru BERKURANG
+    // 256px. Terukur: di viewport 768px kartu tersisa 212px, dan di 1024px —
+    // tempat `lg:grid-cols-3` mulai berlaku — 219px. Pada lebar itu nominalnya
+    // meluber keluar kartu (14px di 768, 7px di 1024) tanpa terpotong dan tanpa
+    // memicu gulungan, jadi angkanya menumpuk di atas tepi kartu tanpa satu pun
+    // tanda ada yang salah.
+    const teks = tanpaKomentarTsx(isi());
+
+    // Kisi KPI dikenali dari `stats.map` yang merendernya — bukan dari urutan
+    // `<div className="grid`, yang akan cocok dengan kisi grafik di bawahnya.
+    const posisiMap = teks.indexOf('stats.map');
+    assert.notEqual(posisiMap, -1, 'blok stats.map tidak ditemukan di dashboard admin');
+    const sebelumMap = teks.slice(Math.max(0, posisiMap - 400), posisiMap);
+    const semuaKisi = [...sebelumMap.matchAll(/className="([^"]*grid[^"]*)"/g)];
+    assert.ok(
+      semuaKisi.length > 0,
+      `className kisi KPI tidak ditemukan sebelum stats.map. Cuplikan: ${sebelumMap.slice(-200)}`
+    );
+    const kelasKisi = semuaKisi[semuaKisi.length - 1][1];
+
+    assert.match(
+      kelasKisi,
+      /grid-cols-\[repeat\(auto-fi[tl],\s*minmax\(\d+px,\s*1fr\)\)\]/,
+      `kisi KPI tidak digerakkan lebar wadah: ${kelasKisi}. Breakpoint viewport ` +
+        'adalah sinyal yang salah di sini — sidebar w-64 muncul di md dan justru ' +
+        'MENYEMPITKAN ruang isi, jadi kartu di viewport 768px lebih sempit ' +
+        'daripada di 767px.'
+    );
+
+    // Batas bawahnya harus benar-benar cukup, bukan sekadar ada. 250px adalah
+    // lebar terukur untuk nominal terpanjang yang masuk akal
+    // (Rp 2.345.678.901 pada text-xl) bersama ikon 48px, gap, dan padding.
+    const minPx = Number(kelasKisi.match(/minmax\((\d+)px/)[1]);
+    assert.ok(
+      minPx >= 240,
+      `batas bawah kolom KPI ${minPx}px terlalu kecil. Nominal terpanjang ` +
+        'membutuhkan ~250px bersama ikon 48px, gap, dan padding kartu.'
+    );
+
+    // Breakpoint lama tidak boleh kembali: jumlah kolomnya akan kembali
+    // ditentukan viewport, yang persis ukuran yang salah di halaman ini.
+    assert.ok(
+      !/grid-cols-1\s+sm:grid-cols-2/.test(kelasKisi),
+      `kisi KPI masih memakai breakpoint viewport: ${kelasKisi}`
+    );
+  });
+
+  it('kotak ikon KPI tidak menggepeng saat kartunya sempit', () => {
+    // `w-12 h-12` tidak menahan apa pun: item flex boleh menyusut secara
+    // bawaan, dan yang dituntut `w-12` hanya lebar DASAR. Terukur: pada kartu
+    // 219px kotaknya menyusut dari 48px menjadi 24px, jadi kotak "bulat"
+    // berwarnanya menjadi lonjong.
+    const teks = tanpaKomentarTsx(isi());
+    const posisiMap = teks.indexOf('stats.map');
+    assert.notEqual(posisiMap, -1, 'blok stats.map tidak ditemukan');
+    // 1200 karakter sesudah `stats.map` memuat seluruh isi kartunya.
+    const kartu = teks.slice(posisiMap, posisiMap + 1200);
+
+    const ikon = kartu.match(/className=\{`\$\{stat\.color\}([^`]*)`\}/);
+    assert.ok(ikon, `className kotak ikon KPI tidak ditemukan. Cuplikan: ${kartu.slice(0, 300)}`);
+    assert.match(
+      ikon[1],
+      /(?:^|\s)(?:flex-shrink-0|shrink-0)(?:\s|$)/,
+      `kotak ikon KPI tanpa flex-shrink-0: ${ikon[1]}. Tanpa itu w-12 h-12 ` +
+        'hanya lebar dasar dan kotaknya menggepeng menjadi 24px pada kartu sempit.'
+    );
+
+    // Blok teks di sebelahnya harus boleh lebih sempit dari isinya. Lebar
+    // minimum bawaan item flex adalah `auto`, jadi tanpa `min-w-0` teksnyalah
+    // yang mendorong keluar kartu alih-alih menyesuaikan diri.
+    assert.match(
+      kartu,
+      /<div className="min-w-0"/,
+      'blok teks kartu KPI tanpa min-w-0. Lebar minimum bawaan item flex ' +
+        'adalah selebar isinya, jadi teksnya mendorong keluar kartu.'
+    );
+  });
+});
+
+describe('panel tugas dashboard admin menghitung, bukan mengarang', () => {
+  const modulTugas = () =>
+    muatDenganModulPalsu(JALUR_TUGAS_ADMIN, {
+      '@prisma/client': {
+        BookingStatus: {
+          PENDING_PAYMENT: 'PENDING_PAYMENT',
+          PAID_CONFIRMED: 'PAID_CONFIRMED',
+          DESIGN_RECEIVED: 'DESIGN_RECEIVED',
+          IN_PRODUCTION: 'IN_PRODUCTION',
+          INSTALLATION: 'INSTALLATION',
+          ACTIVE: 'ACTIVE',
+          REVIEW_REFUND: 'REVIEW_REFUND',
+          WAITING_BANK: 'WAITING_BANK',
+          PROCESS_REFUND: 'PROCESS_REFUND',
+          REFUNDED: 'REFUNDED',
+          CANCELLED: 'CANCELLED',
+        },
+      },
+    });
+
+  it('kalimat tetap "butuh persetujuan manual" tidak boleh kembali', () => {
+    // Cacat aslinya: panel menampilkan kalimat itu tanpa satu pun query di
+    // belakangnya. Ia menyala pada sistem yang belum punya satu pun pesanan,
+    // dan tetap menyala setelah admin menyelesaikan semuanya. Pemberitahuan
+    // yang selalu menyala adalah pemberitahuan yang berhenti dibaca — dan
+    // begitu ia berhenti dibaca, pesanan yang MEMANG menunggu ikut tidak
+    // terlihat.
+    const isi = fs.readFileSync(JALUR_DASHBOARD_ADMIN, 'utf8');
+    const tanpaKomentar = isi
+      .replace(/\{?\/\*[\s\S]*?\*\/\}?/g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*\/\//.test(baris))
+      .join('\n');
+
+    assert.ok(
+      !/Ada orderan yang butuh persetujuan manual/.test(tanpaKomentar),
+      'kalimat tetap "Ada orderan yang butuh persetujuan manual." kembali ke ' +
+        'dashboard admin. Ia tidak punya query di belakangnya, jadi ia menyala ' +
+        'juga saat tidak ada satu pun pesanan yang menunggu.'
+    );
+
+    // Dan angkanya harus benar-benar dihitung dari database, bukan hanya
+    // kalimatnya yang diganti.
+    assert.match(
+      tanpaKomentar,
+      /prisma\.booking\.groupBy\(/,
+      'panel tugas admin tidak menghitung apa pun dari database.'
+    );
+    assert.match(
+      tanpaKomentar,
+      /ringkasTugasAdmin\(/,
+      'dashboard admin tidak memakai ringkasTugasAdmin().'
+    );
+    // Panel harus punya keadaan kosong. Tanpa cabang itu ia kembali menjadi
+    // panel yang isinya sama setiap hari, hanya dengan angka nol.
+    assert.match(
+      tanpaKomentar,
+      /tugas\.total\s*===\s*0|tugas\.total\s*>\s*0/,
+      'panel tugas admin tidak membedakan keadaan kosong dari keadaan ada tugas.'
+    );
+  });
+
+  it('TUGAS_ADMIN hanya memuat status yang benar-benar punya tombolnya', () => {
+    // Daftar ini diturunkan dari tombol yang nyata ada di OrderActions.tsx.
+    // Menampilkan status tanpa tombol berarti meminta admin mengerjakan
+    // sesuatu yang tidak punya cara dikerjakan.
+    const { TUGAS_ADMIN } = modulTugas();
+    // Komentar dibuang: komentar dokumentasi di berkas itu MENGUTIP
+    // `order.status === 'PAID_CONFIRMED'` untuk menerangkan cacat lama, dan
+    // kutipan itu cocok dengan pola pencarian di bawah — jadi tanpa pembuangan
+    // ini sebuah komentar bisa lulus mewakili cabang yang tidak ada.
+    const aksi = fs
+      .readFileSync(JALUR_AKSI_PESANAN, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+
+    assert.ok(TUGAS_ADMIN.length > 0, 'TUGAS_ADMIN kosong');
+    for (const jenis of TUGAS_ADMIN) {
+      const cocok = aksi.match(new RegExp(`order\\.status\\s*===\\s*'${jenis.status}'`));
+      assert.ok(
+        cocok,
+        `${jenis.status} terdaftar sebagai tugas admin, tapi OrderActions.tsx ` +
+          'tidak punya satu pun cabang untuk status itu — jadi tidak ada tombol ' +
+          'yang bisa menyelesaikannya.'
+      );
+
+      // Adanya cabang belum cukup, dan perbedaannya bukan soal gaya: cabang
+      // `REFUNDED` di berkas yang sama HANYA menampilkan label "Refunded"
+      // beserta tautan bukti transfer — nol `<button>`. Status seperti itu
+      // tidak menunggu admin, jadi menghitungnya berarti memberi angka yang
+      // tidak pernah bisa diturunkan admin, yaitu cacat aslinya dalam bentuk
+      // baru. Jadi yang dituntut di sini adalah TOMBOL di dalam cabangnya.
+      // Dipotong di gerbang status BERIKUTNYA, bukan pada sejumlah karakter
+      // tetap: cabang `REFUNDED` habis 200-an karakter sesudah gerbangnya, lalu
+      // `PROCESS_REFUND` di bawahnya langsung membuka dengan `<button>`. Jendela
+      // panjang tetap akan meminjam tombol milik cabang lain dan lulus.
+      const sesudah = aksi.slice(cocok.index + cocok[0].length);
+      const gerbangBerikut = sesudah.search(/if\s*\(\s*order\.status\s*===/);
+      const isiCabang = gerbangBerikut === -1 ? sesudah : sesudah.slice(0, gerbangBerikut);
+      assert.match(
+        isiCabang,
+        /<button/,
+        `cabang ${jenis.status} di OrderActions.tsx tidak punya satu pun <button>. ` +
+          'Status tanpa tombol bukan pekerjaan yang menunggu admin — angkanya ' +
+          'tidak akan pernah bisa diturunkan.'
+      );
+      // Ajakannya harus menyebut pekerjaannya, bukan mengulang nama status.
+      assert.ok(
+        jenis.ajakan.length > 8 && !/^[A-Z_]+$/.test(jenis.ajakan),
+        `ajakan untuk ${jenis.status} tidak menyebut pekerjaannya: ${jenis.ajakan}`
+      );
+      assert.ok(
+        ['PENDING', 'PROGRESS', 'REFUND'].includes(jenis.tab),
+        `tab untuk ${jenis.status} bukan tab yang ada di /admin/orders: ${jenis.tab}`
+      );
+    }
+  });
+
+  it('status yang menunggu pembeli tidak dihitung sebagai tugas admin', () => {
+    // PENDING_PAYMENT menunggu pembeli membayar (dan disapu sendiri oleh
+    // sapuPesananKedaluwarsa). WAITING_BANK menunggu pembeli mengisi rekening —
+    // OrderActions hanya menampilkan "Wait User..." di sana. ACTIVE sedang
+    // tayang. Ketiganya di panel tugas berarti angka yang tidak pernah bisa
+    // diturunkan admin, yaitu cacat aslinya dalam bentuk lain.
+    const { TUGAS_ADMIN, STATUS_MENUNGGU_ORANG_LAIN, ringkasTugasAdmin } = modulTugas();
+    const terdaftar = TUGAS_ADMIN.map((t) => t.status);
+
+    for (const s of STATUS_MENUNGGU_ORANG_LAIN) {
+      assert.ok(
+        !terdaftar.includes(s),
+        `${s} dihitung sebagai tugas admin, padahal yang ditunggu adalah pembeli.`
+      );
+    }
+    // Termasuk status tutup, yang tidak menunggu siapa pun.
+    for (const s of ['REFUNDED', 'CANCELLED']) {
+      assert.ok(!terdaftar.includes(s), `${s} sudah tutup tapi dihitung sebagai tugas admin`);
+    }
+
+    // Dan benar-benar diabaikan saat dihitung, bukan hanya tidak terdaftar.
+    const hasil = ringkasTugasAdmin([
+      { status: 'PENDING_PAYMENT', jumlah: 9 },
+      { status: 'WAITING_BANK', jumlah: 4 },
+      { status: 'CANCELLED', jumlah: 7 },
+    ]);
+    assert.equal(hasil.total, 0, `status yang menunggu orang lain ikut terhitung: ${hasil.total}`);
+    assert.deepStrictEqual(hasil.rincian, []);
+  });
+
+  it('ringkasTugasAdmin mengurutkan menurut prioritas, bukan urutan masukan', () => {
+    // PROCESS_REFUND paling atas: pembeli sudah mengisi rekening dan menunggu
+    // uangnya benar-benar ditransfer — satu-satunya baris yang membuat
+    // perusahaan berutang uang yang belum bergerak.
+    const { ringkasTugasAdmin, TUGAS_ADMIN } = modulTugas();
+    const hasil = ringkasTugasAdmin([
+      { status: 'INSTALLATION', jumlah: 1 },
+      { status: 'PROCESS_REFUND', jumlah: 2 },
+      { status: 'PAID_CONFIRMED', jumlah: 3 },
+    ]);
+
+    assert.equal(hasil.total, 6);
+    assert.deepStrictEqual(
+      hasil.rincian.map((b) => b.status),
+      ['PROCESS_REFUND', 'PAID_CONFIRMED', 'INSTALLATION'],
+      'urutan panel tugas tidak mengikuti prioritas TUGAS_ADMIN'
+    );
+    assert.equal(
+      TUGAS_ADMIN[0].status,
+      'PROCESS_REFUND',
+      'PROCESS_REFUND bukan prioritas teratas; uang yang sudah disetujui untuk ' +
+        'dikembalikan tapi belum ditransfer adalah tunggakan paling mahal.'
+    );
+  });
+
+  it('baris berjumlah nol dibuang, dan total nol berarti benar-benar kosong', () => {
+    // Deretan "0 pesanan" mengembalikan cacat aslinya: tampilan yang isinya
+    // sama setiap hari.
+    const { ringkasTugasAdmin } = modulTugas();
+
+    const kosong = ringkasTugasAdmin([]);
+    assert.equal(kosong.total, 0);
+    assert.deepStrictEqual(kosong.rincian, []);
+
+    const adaNol = ringkasTugasAdmin([
+      { status: 'PAID_CONFIRMED', jumlah: 0 },
+      { status: 'REVIEW_REFUND', jumlah: 2 },
+    ]);
+    assert.equal(adaNol.total, 2);
+    assert.deepStrictEqual(adaNol.rincian.map((b) => b.status), ['REVIEW_REFUND']);
+  });
+
+  it('dua baris untuk status yang sama dijumlahkan, bukan saling menimpa', () => {
+    // Menimpa berarti sebagian pesanan hilang dari hitungan tanpa jejak, dan
+    // angka yang lebih kecil dari kenyataan adalah bentuk halus dari cacat
+    // yang sedang ditutup di sini.
+    const { ringkasTugasAdmin } = modulTugas();
+    const hasil = ringkasTugasAdmin([
+      { status: 'PAID_CONFIRMED', jumlah: 3 },
+      { status: 'PAID_CONFIRMED', jumlah: 4 },
+    ]);
+    assert.equal(hasil.total, 7, `dua baris status sama tidak dijumlahkan: ${hasil.total}`);
+    assert.equal(hasil.rincian.length, 1);
+    assert.equal(hasil.rincian[0].jumlah, 7);
+  });
+
+  it('jumlah yang bukan angka dibuang tanpa melenyapkan baris sah di sebelahnya', () => {
+    // `_count._all` datang dari Prisma dan pada beberapa driver bisa tiba
+    // sebagai BigInt atau teks. Teks angka ('5') harus tetap terbaca, dan
+    // yang bukan angka harus dibuang.
+    const { ringkasTugasAdmin } = modulTugas();
+    const hasil = ringkasTugasAdmin([
+      { status: 'PAID_CONFIRMED', jumlah: 'bukan angka' },
+      { status: 'REVIEW_REFUND', jumlah: '5' },
+      { status: 'PROCESS_REFUND', jumlah: -2 },
+    ]);
+    assert.ok(Number.isFinite(hasil.total), `total bukan angka: ${hasil.total}`);
+    assert.equal(hasil.total, 5, `total salah: ${hasil.total}`);
+    assert.deepStrictEqual(hasil.rincian.map((b) => b.status), ['REVIEW_REFUND']);
+
+    // Akibat yang jauh lebih mahal daripada "NaN di layar", dan yang membuat
+    // saringannya benar-benar perlu: NaN MERACUNI penjumlahan. `NaN > 0` dan
+    // `NaN <= 0` keduanya false, jadi tanpa saringan NaN masuk ke peta, lalu
+    // 0 + NaN + 3 = NaN, lalu barisnya gagal lolos `jumlah > 0` — dan tiga
+    // pesanan yang SAH hilang dari panel tanpa satu pun tanda.
+    const teracuni = ringkasTugasAdmin([
+      { status: 'PAID_CONFIRMED', jumlah: 'bukan angka' },
+      { status: 'PAID_CONFIRMED', jumlah: 3 },
+    ]);
+    assert.equal(
+      teracuni.total,
+      3,
+      `satu baris tak bernilai melenyapkan pesanan sah di status yang sama: ${teracuni.total}`
+    );
+    assert.deepStrictEqual(teracuni.rincian.map((b) => b.jumlah), [3]);
+  });
+
+  it('jumlah tak terhingga tidak menjadi "Infinity Pesanan Menunggu Anda"', () => {
+    // `Infinity > 0` bernilai true, jadi ia lolos SELURUH saringan tanda dan
+    // hanya `Number.isFinite` yang menahannya. Satu nilai ini membuat judul
+    // panel berbunyi "Infinity Pesanan Menunggu Anda".
+    const { ringkasTugasAdmin } = modulTugas();
+    const hasil = ringkasTugasAdmin([
+      { status: 'PAID_CONFIRMED', jumlah: Infinity },
+      { status: 'REVIEW_REFUND', jumlah: 2 },
+    ]);
+    assert.ok(Number.isFinite(hasil.total), `total tak terhingga lolos: ${hasil.total}`);
+    assert.equal(hasil.total, 2, `total salah: ${hasil.total}`);
+    assert.deepStrictEqual(hasil.rincian.map((b) => b.status), ['REVIEW_REFUND']);
   });
 });

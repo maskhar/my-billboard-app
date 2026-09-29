@@ -14,6 +14,7 @@ import { angkaRupiah, kurang, rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { labelStatusPesanan, warnaStatusPesanan } from '@/lib/label-status';
 import { ambilIdentitasSitus } from '@/lib/identitas-situs';
+import { ringkasTugasAdmin, TUGAS_ADMIN } from '@/lib/tugas-admin';
 import { BookingStatus, PaymentStatus } from '@prisma/client';
 
 // Supaya data selalu fresh
@@ -66,21 +67,42 @@ export default async function AdminDashboard() {
     where: { status: BookingStatus.REFUNDED },
   });
 
+  // Pekerjaan yang benar-benar menunggu admin — satu `groupBy`, bukan enam
+  // `count`. Panel "Fast Action" di bawah dulu menampilkan kalimat tetap "Ada
+  // orderan yang butuh persetujuan manual." tanpa satu pun query di
+  // belakangnya, jadi ia menyala pada sistem yang kosong dan tetap menyala
+  // setelah admin menyelesaikan semuanya. Alasan lengkapnya di
+  // `src/lib/tugas-admin.ts`.
+  //
+  // `where` dibatasi ke status yang memang punya tombolnya, supaya query ini
+  // tidak menghitung sepuluh status hanya untuk membuang enam di memori.
+  const tugasPromise = prisma.booking.groupBy({
+    by: ['status'],
+    where: { status: { in: TUGAS_ADMIN.map((t) => t.status) } },
+    _count: { _all: true },
+  });
+
   const [
     totalBillboards,
     totalOrders,
     totalCustomers,
     hasilUangMasuk,
     hasilRefund,
-    identitas
+    identitas,
+    hasilTugas
   ] = await Promise.all([
     totalBillboardsPromise,
     totalOrdersPromise,
     totalCustomersPromise,
     uangMasukPromise,
     refundPromise,
-    identitasPromise
+    identitasPromise,
+    tugasPromise
   ]);
+
+  const tugas = ringkasTugasAdmin(
+    hasilTugas.map((b) => ({ status: b.status, jumlah: b._count._all }))
+  );
 
   // `_sum` mengembalikan null bila tidak ada baris yang cocok. Dibiarkan
   // masuk ke helper money.ts, yang memperlakukan null sebagai nol.
@@ -122,16 +144,54 @@ export default async function AdminDashboard() {
             <p className="text-gray-500 text-sm">Pantau kinerja penjualan {identitas.nama}.</p>
         </div>
 
-        {/* STATS CARDS */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+        {/* STATS CARDS
+
+            Dulu `grid-cols-1 sm:grid-cols-2 lg:grid-cols-3`, dan breakpoint
+            Tailwind mengukur VIEWPORT — padahal yang menentukan muat atau
+            tidaknya kartu ini adalah lebar WADAHNYA. Keduanya berbeda jauh di
+            sini: sidebar admin `w-64` baru muncul dari `md`, jadi melewati
+            768px layar bertambah 256px sementara ruang isi justru BERKURANG
+            256px. Akibatnya di 768px kartu tersisa 212px, dan di 1024px —
+            tempat `lg:grid-cols-3` mulai berlaku — tersisa 219px.
+
+            Pada lebar itu dua hal rusak sekaligus, dan keduanya terukur:
+
+            1. Ikon `w-12 h-12` menyusut dari 48px menjadi 24px, jadi
+               kotak "bulat" berwarnanya menjadi lonjong. Lebar dan tinggi
+               yang ditulis tidak menahan apa pun: item flex boleh menyusut
+               secara bawaan, dan yang dituntut `w-12` hanya lebar DASAR.
+            2. Nominalnya meluber keluar kartu (7px di 1024, 14px di 768).
+               Ia tidak terpotong dan tidak memicu gulungan, jadi angkanya
+               menumpuk di atas tepi kartu tanpa satu pun tanda ada yang
+               salah — bentuk kerusakan yang paling mudah lolos dari mata.
+
+            `auto-fit` + `minmax(250px,1fr)` menggantinya: jumlah kolom
+            diturunkan dari lebar wadah yang sebenarnya, jadi ia tidak perlu
+            tahu apa-apa tentang sidebar. 250px adalah lebar minimum yang
+            terukur cukup untuk nominal terpanjang yang masuk akal
+            (Rp 2.345.678.901 pada `text-xl`) bersama ikon 48px, gap, dan
+            padding. Terverifikasi pada 11 lebar dari 375px sampai 1536px:
+            nol luber, nol ikon gepeng. */}
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(250px,1fr))] gap-6">
             {stats.map((stat, idx) => (
                 <div key={idx} className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 flex items-center gap-4 hover:translate-y-[-2px] transition duration-200">
-                    <div className={`${stat.color} w-12 h-12 rounded-xl flex items-center justify-center text-white shadow-md`}>
+                    {/* `flex-shrink-0` wajib: tanpanya `w-12 h-12` hanya lebar
+                        dasar, dan kotaknya menggepeng menjadi 24px. */}
+                    <div className={`${stat.color} w-12 h-12 flex-shrink-0 rounded-xl flex items-center justify-center text-white shadow-md`}>
                         <stat.icon size={24}/>
                     </div>
-                    <div>
-                        <p className="text-gray-500 text-xs font-bold uppercase tracking-wider">{stat.title}</p>
-                        <h3 className="text-xl font-extrabold text-gray-800 mt-1">{stat.value}</h3>
+                    {/* `min-w-0` supaya blok teks boleh lebih sempit dari isinya
+                        saat kartu tersempit, dan `truncate` di bawahnya punya
+                        sesuatu untuk dipotong. Tanpa ini teksnya mendorong
+                        keluar kartu alih-alih menyesuaikan diri. */}
+                    <div className="min-w-0">
+                        <p className="text-gray-500 text-xs font-bold uppercase tracking-wider truncate">{stat.title}</p>
+                        {/* Nominal TIDAK di-`truncate`: angka rupiah yang
+                            terpotong di tengah ("Rp 2.345.67…") terbaca sebagai
+                            nilai yang lain, dan itu lebih berbahaya daripada
+                            membungkus. `break-words` membiarkannya turun baris
+                            bila memang tidak muat. */}
+                        <h3 className="text-xl font-extrabold text-gray-800 mt-1 break-words">{stat.value}</h3>
                     </div>
                 </div>
             ))}
@@ -154,14 +214,55 @@ export default async function AdminDashboard() {
                 <RevenueSection initialData={initialChartData} />
             </div>
 
-            {/* QUICK ACTIONS / SIDE WIDGET (KANAN) */}
-            <div className="bg-gradient-to-br from-utero to-red-800 rounded-2xl p-6 text-white flex flex-col justify-between shadow-xl">
+            {/* QUICK ACTIONS / SIDE WIDGET (KANAN)
+
+                Kalimat di panel ini dulu tetap: "Ada orderan yang butuh
+                persetujuan manual." — tanpa satu pun query di belakangnya. Ia
+                menyala pada sistem yang belum punya satu pun pesanan, dan tetap
+                menyala setelah admin menyelesaikan semuanya. Panel yang selalu
+                berkata sama adalah panel yang berhenti dibaca, dan begitu ia
+                berhenti dibaca, pesanan yang MEMANG menunggu ikut tidak
+                terlihat. Jadi cacatnya bukan kalimat yang salah; cacatnya adalah
+                melatih admin mengabaikan satu-satunya tempat yang memberi tahu.
+
+                Sekarang angkanya dari `groupBy` atas status yang benar-benar
+                punya tombolnya di `OrderActions` (lihat
+                `src/lib/tugas-admin.ts`), setiap baris menyebut apa yang harus
+                dilakukan, dan tautannya membuka tab yang menampilkan barisnya.
+                Warnanya pun mengikuti: merah hanya saat ada yang menunggu. */}
+            <div className={`rounded-2xl p-6 text-white flex flex-col justify-between shadow-xl ${
+                tugas.total > 0
+                    ? 'bg-gradient-to-br from-utero to-red-800'
+                    : 'bg-gradient-to-br from-slate-700 to-slate-900'
+            }`}>
                 <div>
-                    <h3 className="font-bold text-lg mb-2">🔥 Fast Action</h3>
-                    <p className="text-white/80 text-sm mb-6">Ada orderan yang butuh persetujuan manual.</p>
+                    <h3 className="font-bold text-lg mb-2">
+                        {tugas.total > 0 ? `🔥 ${tugas.total} Pesanan Menunggu Anda` : '✅ Tidak Ada Tunggakan'}
+                    </h3>
+                    {tugas.total === 0 ? (
+                        <p className="text-white/80 text-sm mb-6">
+                            Tidak ada pesanan yang menunggu tindakan admin saat ini.
+                        </p>
+                    ) : (
+                        <ul className="space-y-2 mb-6">
+                            {tugas.rincian.map((baris) => (
+                                <li key={baris.status}>
+                                    <Link
+                                        href={`/admin/orders?status=${baris.tab}`}
+                                        className="flex items-baseline gap-2 text-sm text-white/90 hover:text-white hover:underline transition"
+                                    >
+                                        <span className="font-extrabold tabular-nums">{baris.jumlah}</span>
+                                        <span className="text-white/75">{baris.ajakan}</span>
+                                    </Link>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
                 </div>
                 <div className="space-y-3">
-                    <Link href="/admin/orders" className="block bg-white text-red-600 px-4 py-3 rounded-xl font-bold text-sm text-center hover:bg-gray-100 transition shadow-sm">
+                    <Link href="/admin/orders" className={`block bg-white px-4 py-3 rounded-xl font-bold text-sm text-center hover:bg-gray-100 transition shadow-sm ${
+                        tugas.total > 0 ? 'text-red-600' : 'text-slate-800'
+                    }`}>
                         Cek Order Masuk
                     </Link>
                     <Link href="/admin/billboards/form" className="block bg-white/20 text-white border border-white/30 px-4 py-3 rounded-xl font-bold text-sm text-center hover:bg-white/30 transition">
