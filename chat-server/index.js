@@ -35,6 +35,37 @@ const ALLOWED_ORIGINS = (process.env.CHAT_CORS_ORIGINS || "")
   .map((origin) => origin.trim())
   .filter(Boolean);
 
+// DI PRODUCTION TIDAK ADA CADANGAN — SERVER BERHENTI, TIDAK BERJALAN SETENGAH
+// ---------------------------------------------------------------------------
+// Baris ini dulu jatuh ke DEFAULT_DEV_ORIGINS dengan satu `console.warn`, dan
+// itu terbaca seolah cadangannya membuat server tetap berguna. Tidak: daftar
+// cadangan seluruhnya `localhost`, jadi di production browser pengunjung
+// memblokir SETIAP koneksi ke server ini. Hasilnya persis sama dengan server
+// yang tidak menyala — live chat mati untuk semua orang — hanya saja server
+// tampak sehat, port terbuka, health check lewat, dan satu-satunya petunjuk
+// adalah satu baris peringatan di log start yang sudah tergulung jauh ke atas
+// pada saat ada yang melaporkan chat tidak jalan.
+//
+// Jadi keputusannya bukan antara "aman" dan "berjalan": chat sama-sama mati.
+// Yang dipilih adalah antara mati yang MENYEBUT SEBABNYA dan mati yang diam.
+// Alasan dan bentuknya sama dengan `src/lib/alamat-chat.ts`, yang menolak
+// menanam `localhost` ke bundel produksi karena kegagalan paling mahal adalah
+// kegagalan yang tidak kelihatan.
+//
+// Keluar dengan kode 1, bukan melayani tanpa CORS: supervisor proses (pm2,
+// systemd, Docker) memperlakukan keluar tidak-nol sebagai deploy yang gagal,
+// dan itu memunculkannya di tempat yang memang dibaca orang.
+if (ALLOWED_ORIGINS.length === 0 && process.env.NODE_ENV === "production") {
+  console.error(
+    "❌ CHAT_CORS_ORIGINS wajib diisi saat NODE_ENV=production.\n" +
+      "   Tanpa itu satu-satunya origin yang diizinkan adalah localhost, jadi\n" +
+      "   browser pengunjung memblokir seluruh koneksi chat dan server ini hanya\n" +
+      "   tampak sehat. Isi daftar origin aplikasi (dipisah koma) di\n" +
+      "   chat-server/.env — lihat chat-server/.env.example."
+  );
+  process.exit(1);
+}
+
 const CORS_ORIGINS = ALLOWED_ORIGINS.length > 0 ? ALLOWED_ORIGINS : DEFAULT_DEV_ORIGINS;
 
 if (ALLOWED_ORIGINS.length === 0) {

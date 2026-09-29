@@ -14293,6 +14293,195 @@ describe('pemasangan kehadiran', () => {
 });
 
 // ===========================================================================
+// KONFIGURASI SERVER CHAT: DAFTAR KUNCINYA, DAN CORS YANG GAGAL TERTUTUP
+// ===========================================================================
+//
+// `chat-server/index.js:1` memuat dotenv dari
+// direktorinya sendiri. Artinya `.env` di akar repo TIDAK terbaca oleh proses
+// itu — dan itu bukan detail: `chat-server/.env` yang ditemukan hanya berisi dua
+// kunci sementara servernya membaca tujuh, jadi lima sisanya jatuh ke nilai
+// bawaan tanpa satu pun galat saat start.
+describe('konfigurasi chat-server', () => {
+  const AKAR_CHAT = path.join(__dirname, '..');
+  const JALUR_INDEX_CHAT = path.join(AKAR_CHAT, 'chat-server', 'index.js');
+  const JALUR_CONTOH_CHAT = path.join(AKAR_CHAT, 'chat-server', '.env.example');
+  const JALUR_CONTOH_AKAR = path.join(AKAR_CHAT, '.env.example');
+  const JALUR_GITIGNORE = path.join(AKAR_CHAT, '.gitignore');
+
+  /** Nama kunci yang benar-benar dideklarasikan sebuah berkas contoh. */
+  function kunciContoh(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .split(/\r?\n/)
+      .map((baris) => /^([A-Z_][A-Z0-9_]*)\s*=/.exec(baris))
+      .filter(Boolean)
+      .map((m) => m[1]);
+  }
+
+  it('setiap variabel yang dibaca chat-server terdaftar di contohnya', () => {
+    // DITURUNKAN dari sumbernya, bukan daftar yang ditulis ulang di sini.
+    // Daftar yang ditulis ulang adalah daftar yang akan menyimpang: kunci yang
+    // ditambahkan ke `index.js` bulan depan tidak akan membuat test ini merah,
+    // dan pemasang berikutnya menemukannya lewat gejala, bukan lewat dokumen.
+    const kode = fs.readFileSync(JALUR_INDEX_CHAT, 'utf8');
+    const dibaca = [...new Set(
+      [...kode.matchAll(/process\.env\.([A-Z_][A-Z0-9_]*)/g)].map((m) => m[1])
+    )];
+
+    // `NODE_ENV` dikecualikan: ia disetel oleh runtime, bukan oleh pemasang.
+    const wajib = dibaca.filter((k) => k !== 'NODE_ENV');
+    assert.ok(wajib.length >= 6, 'pembacaan env di chat-server tidak terdeteksi');
+
+    const terdaftar = kunciContoh(JALUR_CONTOH_CHAT);
+    for (const kunci of wajib) {
+      assert.ok(
+        terdaftar.includes(kunci),
+        `${kunci} dibaca chat-server/index.js tapi tidak ada di chat-server/.env.example`
+      );
+    }
+  });
+
+  it('DATABASE_URL ikut terdaftar walau dibaca Prisma secara implisit', () => {
+    // `new PrismaClient()` membacanya tanpa satu pun `process.env` yang terlihat,
+    // jadi test derivasi di atas secara struktural tidak bisa melihatnya. Ini
+    // satu-satunya kunci yang memang harus dituntut per nama.
+    assert.ok(
+      kunciContoh(JALUR_CONTOH_CHAT).includes('DATABASE_URL'),
+      'chat-server memakai PrismaClient; tanpa DATABASE_URL ia mati saat query pertama'
+    );
+  });
+
+  it('contoh chat-server tidak memuat satu pun nilai', () => {
+    // Berkas ini MASUK Git. Satu nilai yang tertinggal di sini adalah rahasia
+    // yang terbit ke seluruh riwayat repo, dan menghapusnya di commit berikutnya
+    // tidak menariknya kembali.
+    const baris = fs.readFileSync(JALUR_CONTOH_CHAT, 'utf8').split(/\r?\n/);
+    for (const b of baris) {
+      const m = /^([A-Z_][A-Z0-9_]*)\s*=(.*)$/.exec(b);
+      if (!m) continue;
+      assert.equal(
+        m[2].trim(),
+        '',
+        `${m[1]} membawa nilai di berkas yang ikut Git`
+      );
+    }
+  });
+
+  it('.gitignore mengizinkan contoh di subdirektori, bukan hanya di akar', () => {
+    // `!/.env.example` berpaku di akar, jadi `chat-server/.env.example` tetap
+    // terabaikan oleh pola `.env*` — dan berkas contoh yang tidak pernah masuk
+    // Git adalah berkas yang tidak pernah dibaca siapa pun.
+    const isi = fs.readFileSync(JALUR_GITIGNORE, 'utf8');
+    assert.match(isi, /^!\*\*\/\.env\.example$/m);
+
+    // Yang RAHASIA harus tetap terabaikan. Negasi yang kelewat lebar
+    // (mis. `!**/.env*`) membuat `.env` produksi ikut masuk Git.
+    assert.match(isi, /^\.env\*$/m);
+    assert.doesNotMatch(isi, /^!\*\*\/\.env\*$/m);
+  });
+
+  it('contoh di akar menyebut bahwa chat-server membaca berkasnya sendiri', () => {
+    // Lima kunci chat tercantum di `.env.example` akar padahal proses chat tidak
+    // pernah membacanya. Tanpa keterangan ini, mengisinya di sana terasa cukup —
+    // dan gejalanya adalah "chat tidak menyambung", yang tidak menyebut satu pun
+    // nama kunci.
+    const isi = fs.readFileSync(JALUR_CONTOH_AKAR, 'utf8');
+    assert.match(isi, /chat-server\/\.env\.example/);
+    assert.match(isi, /TIDAK DIBACA OLEH SERVER CHAT/);
+  });
+
+  it('CORS kosong di production menghentikan proses, bukan memperingatkan', () => {
+    // Cadangan `DEFAULT_DEV_ORIGINS` seluruhnya localhost. Di production itu
+    // berarti browser pengunjung memblokir SETIAP koneksi — chat mati untuk
+    // semua orang — sementara server tampak sehat dan health check lewat.
+    // Jadi pilihannya bukan antara aman dan berjalan; chat sama-sama mati. Yang
+    // dipilih adalah antara mati yang menyebut sebabnya dan mati yang diam.
+    const kode = kodeSajaAny(JALUR_INDEX_CHAT);
+
+    const gerbang =
+      /ALLOWED_ORIGINS\.length === 0 && process\.env\.NODE_ENV === "production"/;
+    assert.match(kode, gerbang, 'gerbang production hilang');
+    assert.match(kode.slice(kode.search(gerbang)), /process\.exit\(1\)/);
+  });
+
+  it('gerbang production berdiri SEBELUM daftar origin disusun', () => {
+    // Urutan inilah isinya. Gerbang yang diletakkan setelah `CORS_ORIGINS`
+    // dihitung tetap membuat test di atas hijau, sementara `cors()` dan
+    // `new Server()` di bawahnya sudah menerima daftar localhost — dan pada
+    // proses yang akan keluar satu baris kemudian itu tidak terlihat sama
+    // sekali. Yang membuatnya berbahaya adalah kalau suatu saat `process.exit`
+    // diganti `throw` yang tertangkap, atau gerbangnya dipindahkan ke dalam
+    // sebuah fungsi: server lalu benar-benar melayani dengan daftar yang salah.
+    const kode = kodeSajaAny(JALUR_INDEX_CHAT);
+
+    const exit = kode.indexOf('process.exit(1)');
+    const susun = kode.indexOf('const CORS_ORIGINS =');
+
+    assert.ok(exit !== -1, 'penghentian production hilang seluruhnya');
+    assert.ok(susun !== -1, 'penyusunan CORS_ORIGINS hilang seluruhnya');
+    assert.ok(
+      exit < susun,
+      'process.exit(1) harus mendahului penyusunan CORS_ORIGINS'
+    );
+  });
+
+  it('di luar production cadangan lokal dipertahankan, dengan peringatan', () => {
+    // Pagar produksi tidak boleh ikut mematikan `npm run dev`. Pengembang tidak
+    // punya daftar origin untuk diisi, dan server yang menolak menyala di mesin
+    // sendiri adalah pagar yang akan dilepas orang berikutnya.
+    const kode = kodeSajaAny(JALUR_INDEX_CHAT);
+    assert.match(kode, /CORS_ORIGINS = ALLOWED_ORIGINS\.length > 0 \? ALLOWED_ORIGINS : DEFAULT_DEV_ORIGINS/);
+    assert.match(kode, /console\.warn\(/);
+  });
+
+  it('pesan penghentian menyebut nama kunci dan berkas yang harus diisi', () => {
+    // Galat yang hanya berbunyi "konfigurasi CORS tidak valid" memindahkan
+    // pekerjaan mencari ke orang yang sedang kena masalah pukul dua pagi.
+    // Jendela berukuran tetap TIDAK cukup. Potongan 900 karakter dari gerbang
+    // melewati penutupnya dan menjangkau `console.warn` cadangan dev di
+    // bawahnya — yang juga menyebut CHAT_CORS_ORIGINS. Jadi pesan galat yang
+    // sudah dikosongkan menjadi "Konfigurasi CORS tidak valid" tetap membuat
+    // test ini hijau: yang lulus adalah jendelanya, bukan pesannya.
+    //
+    // Yang dibaca di sini adalah blok gerbang saja, dibatasi `process.exit(1)`
+    // yang mengakhirinya.
+    const kode = fs.readFileSync(JALUR_INDEX_CHAT, 'utf8');
+    const mulai = kode.indexOf('NODE_ENV === "production"');
+    assert.ok(mulai !== -1, 'gerbang production hilang');
+    const akhir = kode.indexOf('process.exit(1)', mulai);
+    assert.ok(akhir !== -1, 'penghentian production hilang');
+    const blok = kode.slice(mulai, akhir);
+
+    // Dan yang dituntut adalah ARGUMEN console.error-nya, bukan sembarang teks
+    // dalam blok: nama kunci yang hanya muncul di komentar tidak menolong orang
+    // yang sedang membaca log pukul dua pagi.
+    const galat = /console\.error\(([\s\S]*?)\);/.exec(blok);
+    assert.ok(galat, 'gerbang production tidak mencatat galat apa pun');
+    const pesan = galat[1];
+
+    assert.match(pesan, /CHAT_CORS_ORIGINS/);
+    assert.match(pesan, /chat-server\/\.env/);
+  });
+
+  it('nilai token tamu dan kunci Gemini tidak pernah ikut dicatat', () => {
+    // Pagar yang sama seperti di webhook Xendit: yang dicatat adalah NAMA
+    // variabel dan akibatnya, bukan isinya. Log server bukan tempat menyimpan
+    // bahan tebakan token orang lain.
+    const kode = kodeSajaAny(JALUR_INDEX_CHAT);
+    const catatan = [...kode.matchAll(/console\.(log|warn|error)\(([\s\S]{0,400}?)\);/g)]
+      .map((m) => m[2]);
+
+    for (const isi of catatan) {
+      assert.doesNotMatch(
+        isi,
+        /GUEST_TOKEN_SECRET\b(?!\s*\/)|GEMINI_API_KEY\s*[,)]|NEXTAUTH_SECRET\s*[,)]/,
+        `nilai rahasia ikut tercatat: ${isi.slice(0, 80)}`
+      );
+    }
+  });
+});
+
+// ===========================================================================
 // KODE MATI YANG DIBUANG, DAN BATAS MUAT DASHBOARD PEMBELI
 // ===========================================================================
 describe('kode mati dibuang dan dashboard pembeli dibatasi', () => {

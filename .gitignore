@@ -44,6 +44,11 @@ yarn-error.log*
 .env*
 !/.env.example
 !/.env.sample
+# Server chat memuat `.env`-nya sendiri (chat-server/index.js:1), jadi contohnya
+# pun terpisah. Negasi berpola, bukan satu jalur: `!/.env.example` yang berpaku
+# di akar membuat `chat-server/.env.example` tetap terabaikan — dan berkas contoh
+# yang tidak pernah masuk Git adalah berkas yang tidak pernah dibaca siapa pun.
+!**/.env.example
 
 # Database
 prisma/dev.db
