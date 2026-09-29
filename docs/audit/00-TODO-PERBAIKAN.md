@@ -67,7 +67,7 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | — (4.26, 4.28, 4.29, 4.31 semua tuntas; 4.31 ternyata sudah divalidasi di kode — yang kurang adalah testnya, dan penulisannya menemukan `db-error.ts` tidak membaca `error.code`) |
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.20–5.29 (5.7, 5.9, 5.12, 5.18, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas) |
+| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.21–5.29 (5.7, 5.9, 5.12, 5.18, 5.20, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas; premis 5.20 juga basi — dua daftar sudah punya saringan status, dan yang ditemukan justru bahwa 5.19 ditandai selesai atas pencarian sisi-klien yang menjawab salah) |
 | 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | ✅ selesai | — (8.9 tuntas: nol dependency mati DAN nol paket diimpor tanpa terdaftar, kedua arah kini dijaga test; 8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
@@ -491,7 +491,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | **K** | 5.2, 5.4, 5.9, 5.12 | `admin/(dashboard)/layout.tsx`, `page.tsx` |
 | **L** | 5.5, 5.6, 5.10, 5.13, 5.16, 5.19 | `UserClientPage.tsx`, `billboards/page.tsx`, `TransactionClient.tsx` |
 | **M** | 5.7, 5.11, 5.31, 5.32 | `CS_InboxLayout.tsx` |
-| **N** | 5.20–5.29 | Komponen bersama baru (`DataTable`, `ExportButton`). 5.18 selesai sebagai `src/lib/paginasi.ts` + `NavigasiHalaman.tsx` — bukan `Pagination` dari nol seperti rencana laporan, karena paginasinya sudah ada di keempat halaman |
+| **N** | 5.21–5.29 | Komponen bersama baru (`DataTable`, `ExportButton`). 5.18 selesai sebagai `src/lib/paginasi.ts` + `NavigasiHalaman.tsx` — bukan `Pagination` dari nol seperti rencana laporan, karena paginasinya sudah ada di keempat halaman. 5.20 selesai sebagai `src/lib/kueri-daftar.ts` + `KotakCari.tsx` + `KepalaUrut.tsx` — juga bukan `DataTable`, karena keempat tabelnya punya kolom yang berbeda dan yang benar-benar dibagi hanya pembacaan parameter URL-nya |
 
 ## 5A. Fitur mati (CRITICAL)
 
@@ -530,8 +530,8 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | # | Task | Ref | Status |
 |---|---|---|---|
 | 5.18 | ⚠️ Komponen paginasi bersama. **Premis laporan sudah basi** (lihat catatan di bawah): bukan "nol pagination" — keempat daftar admin sudah punya `skip`/`take`/`count` dan tombol halaman. Yang benar-benar ada adalah duplikasi berempat, dan **keempatnya salah dengan cara yang sama: nomor halaman dijepit ke bawah, tidak ke atas** | `[05]F-24` | [x] |
-| 5.19 | Hubungkan search box yang mati — tanpa `value`/`onChange`, user mengetik dan tidak terjadi apa-apa | `[05]F-25` | [x] |
-| 5.20 | Filter & sort pada tabel admin | `[05]` | [ ] |
+| 5.19 | Hubungkan search box yang mati — tanpa `value`/`onChange`, user mengetik dan tidak terjadi apa-apa. **Ditandai selesai terlalu dini**: penghubungannya menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi di halaman 2. Dituntaskan di 5.20 dengan memindahkan pencarian ke `where` Prisma | `[05]F-25` | [x] |
+| 5.20 | ⚠️ Filter & sort pada tabel admin. **Premis laporan sudah basi** (lihat catatan di bawah): `orders` dan `pengajuan` sudah punya saringan status. Yang tidak ada sama sekali adalah **pencarian yang menyaring di database** dan **pengurutan** — dan 5.19 ditandai selesai atas kotak cari yang menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi ada di halaman 2 | `[05]` | [x] |
 | 5.21 | Export CSV/Excel | `[05]` | [ ] |
 | 5.22 | Date-range filter di dashboard/revenue | `[05]` | [ ] |
 | 5.23 | Kalender ketersediaan / timeline booking untuk admin | `[05]` | [ ] |
@@ -662,6 +662,90 @@ hidup di dalam komponen bersama.
 
 40 test baru (`paginasi daftar admin: satu aturan, dan tidak ada halaman yang
 terkurung`), **8/8 mutasi tertangkap**, `1888 lulus / 0 gagal`, `tsc` bersih.
+
+### Catatan 5.20 — premisnya basi juga, dan 5.19 ditandai selesai atas pencarian yang menjawab salah
+
+Laporan meminta "filter & sort" seolah tidak ada satu pun. Diperiksa lebih dulu:
+**`orders` dan `pengajuan` sudah punya saringan status** berupa tab, lengkap
+dengan `where` di database. Yang benar-benar tidak ada adalah **pengurutan** (nol
+kolom bisa diklik di keempat tabel) dan **pencarian yang menyaring di database**.
+
+**Yang ditemukan sambil jalan: 5.19 ditandai `[x]` atas kotak cari yang
+menjawab salah.** Kotak cari yang "dihubungkan" di 5.19 menyaring array yang
+sudah dipaginasi — 30 baris satu halaman. Jadi mencari "Budi" menjawab "tidak
+ada pengguna yang cocok" selama Budi ada di halaman 2, dan admin menyimpulkan
+pelanggannya belum pernah terdaftar. Kotak yang tidak bereaksi sama sekali (cacat
+asli 5.19) setidaknya tidak berbohong; yang ini berbohong dengan tampilan yang
+persis sama seperti jawaban benar. Pencarian karena itu dipindahkan seluruhnya ke
+`where` Prisma, dan `count()` memakai `where` yang sama — kalau tidak, "Halaman 1
+dari 4" muncul di atas 3 baris hasil.
+
+**Kenapa `orderBy` tidak boleh dirangkai dari teks URL.** Ini gerbang keamanan,
+bukan kerapian. `orderBy: { [paramsQuery.urut]: 'desc' }` pada halaman `users`
+berarti `?urut=password` mengurutkan baris menurut hash bcrypt, `?urut=ktp`
+menurut nomor KTP, `?urut=npwp` menurut NPWP. Urutan baris **membocorkan
+perbandingan antar nilai** yang tidak boleh terbaca sama sekali — dan ia
+membocorkannya lewat URL yang bisa di-bookmark, tanpa satu pun baris kolom itu
+dirender. Karena itu `URUT` adalah `Record` tertutup yang diketik
+`Prisma.UserOrderByWithRelationInput`, dan `bacaPilihan()` mengembalikan nilai
+baku untuk apa pun yang tidak persis ada di dalamnya.
+
+Yang dikerjakan:
+
+- `src/lib/kueri-daftar.ts` — `bacaPilihan()`, `bacaKataKunci()`,
+  `PANJANG_KATA_KUNCI_MAKS`. **Nol impor**, alasan yang sama seperti `paginasi.ts`.
+  `bacaPilihan()` memakai `find` pada daftar kunci, **bukan** `PETA[nilai]`:
+  lookup objek meloloskan `constructor`, `toString`, `hasOwnProperty`, dan
+  `valueOf` dari `Object.prototype` — yang artinya sebuah fungsi bawaan
+  diserahkan ke `orderBy` Prisma. Testnya menuntut keempat nama itu ditolak,
+  supaya penulisan ulang ke bentuk lookup gagal dengan suara.
+  `bacaKataKunci()` merapikan spasi lalu memotong di 80 karakter, dan `maks`
+  yang tidak masuk akal (`0`, `-5`, `NaN`, `Infinity`) jatuh ke 80 — bukan ke
+  `slice(0, 0)`, yang berarti "tidak ada pencarian sama sekali": pencarian yang
+  dibatalkan diam-diam adalah kelas cacat yang butir ini justru ada untuk dihapus.
+- `src/components/admin/KotakCari.tsx` — Server Component, `<form method="get">`.
+  Saringan yang sedang berlaku dibawa sebagai `<input type="hidden">`, **bukan**
+  ditempel ke `action`: form GET **membuang query string di `action`**, jadi tab
+  yang sedang dibuka hilang begitu tombol Cari ditekan. Medannya `defaultValue`,
+  bukan `value` — `value` tanpa `onChange` membuat React menganggapnya hanya-baca
+  dan admin tidak bisa mengetik apa pun.
+- `src/components/admin/KepalaUrut.tsx` — Server Component, nol hook. Yang diklik
+  `<Link>`, bukan `onClick`: kepala kolom yang butuh JavaScript untuk mengurutkan
+  adalah kepala kolom yang mati sampai bundel selesai dimuat. `aria-sort` di
+  `<th>` (tempat yang dibaca pembaca layar), panahnya `aria-hidden` supaya arahnya
+  tidak diumumkan dua kali. Nomor halaman **selalu dikembalikan ke 1** saat urutan
+  berubah — halaman 4 dari urutan lama bukan halaman 4 dari urutan baru.
+- Keempat halaman: `kueriAktif` sebagai **satu** tempat per halaman yang memegang
+  "nilai mana yang dianggap baku". Dua duplikasi yang ditemukan test sendiri ikut
+  dibuang (`billboards` dan `orders` masing-masing menurunkan ulang aturan itu di
+  `tersembunyi=`); duplikasi itu penting karena saat ia menyimpang, saringannya
+  hilang tanpa suara begitu Cari ditekan.
+- Keadaan kosong dibedakan di keempat daftar: "Tidak ada X yang cocok dengan …"
+  saat ada kata kunci, "Belum ada X" saat tidak. Dengan pencarian, keadaan kosong
+  adalah keadaan yang **paling sering** muncul — dan "Belum ada" di atas hasil
+  pencarian membuat admin menyimpulkan barisnya sudah terhapus.
+
+62 test baru (`saringan & urutan daftar admin`), **18/18 mutasi tertangkap**,
+`1958 lulus / 0 gagal`, `tsc` bersih.
+
+Empat mutasi lolos di putaran pertama, dan keempatnya karena assertion diuji atas
+**seluruh berkas** alih-alih atas bagian yang dimaksud — jenis kesalahan yang
+membuat suite hijau tanpa menjaga apa pun:
+
+1. `basis="/admin/billboards"` dicari di seluruh berkas, padahal
+   `NavigasiHalaman` di halaman yang sama membawa basis yang sama. Kotak cari yang
+   menunjuk ke `/admin/orders` tetap lolos. → elemen `<KotakCari …/>`-nya dipotong
+   dulu, baru diperiksa.
+2. `Prisma.QueryMode.insensitive` dicari sekali, padahal `users` mencari empat
+   kolom. Satu kolom yang kehilangannya berhenti ditemukan sama sekali, tapi tiga
+   sisanya membuat pemeriksaan lulus. → diperiksa per klausa `contains`.
+3. `AND: [` pada `pengajuan` tidak dijaga satu assertion pun. Mutasi satu kata
+   menjadi `OR:` membuat pengajuan dari tab **lain** muncul di dalam tab yang
+   sedang dibuka — pada tab "Ditolak" itu berarti pengaju yang sudah ditolak
+   bercampur dengan yang belum pernah dihubungi.
+4. "cocok dengan" dicari di seluruh berkas, dan di `UserClientPage` frasa itu juga
+   dipakai subjudulnya ("3 pengguna cocok dengan …"). Keadaan kosong yang
+   dikembalikan ke "Belum ada pengguna" pada **kedua** cabang tetap lolos.
 
 ---
 

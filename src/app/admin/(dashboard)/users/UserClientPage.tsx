@@ -7,6 +7,8 @@ import { Pencil, Wallet } from 'lucide-react';
 import UserFormModal from './UserFormModal';
 import { rupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
+import KepalaUrut from '@/components/admin/KepalaUrut';
+import KotakCari from '@/components/admin/KotakCari';
 
 const GOOGLE_ICON = "https://cdn.iconscout.com/icon/free/png-256/free-google-1772223-1507807.png";
 
@@ -37,7 +39,37 @@ export type BarisPengguna = {
     totalSpent: number;
 };
 
-export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
+// `KepalaUrut` dan `KotakCari` dirender dari dalam Client Component ini, dan itu
+// sah: keduanya tidak memakai satu pun hook dan tidak menyentuh API khusus
+// server, jadi Next menyusunnya sebagai bagian dari bundel client tanpa keluhan.
+// Yang tidak boleh adalah sebaliknya — Server Component di dalam client tree
+// yang MEMBACA database — dan tidak satu pun dari keduanya melakukannya.
+//
+// Menyalin isi keduanya ke sini supaya "tetap di client" akan menghasilkan dua
+// salinan aturan yang sama: `aria-sort` yang harus ada di `<th>`, dan saringan
+// yang harus dibawa sebagai medan tersembunyi. Dua salinan adalah dua tempat
+// yang akan menyimpang.
+export default function UserClientPage({
+    users,
+    urutAktif,
+    kataKunci,
+    kueriAktif,
+    total,
+}: {
+    users: BarisPengguna[];
+    /** Kunci urut yang sedang berlaku menurut URL; dipakai kepala kolom. */
+    urutAktif: string;
+    /**
+     * Kata kunci yang SUDAH dipakai server untuk menyaring. Komponen ini tidak
+     * menyaring apa pun dengannya — daftar yang tiba sudah merupakan hasilnya.
+     * Ia hanya dipakai mengisi kotak cari dan menulis keadaan kosong yang benar.
+     */
+    kataKunci: string;
+    /** Urutan + kata kunci yang aktif, untuk dibawa tautan kepala kolom. */
+    kueriAktif: Record<string, string | undefined>;
+    /** Jumlah baris SELURUH hasil (bukan 25 baris halaman ini). */
+    total: number;
+}) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     return (
@@ -47,15 +79,38 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
             <div className="flex justify-between items-center">
                 <div>
                     <h1 className="text-2xl font-bold text-gray-800">Manajemen Pengguna</h1>
-                    <p className="text-gray-500 text-sm">Kelola pelanggan, hak akses, dan status akun.</p>
+                    {/* Label jumlahnya berubah saat mencari. "Total: 4.000
+                        pengguna" di atas hasil pencarian yang berisi 3 baris
+                        adalah angka yang benar untuk pertanyaan yang tidak
+                        sedang ditanyakan. */}
+                    <p className="text-gray-500 text-sm">
+                        {kataKunci === '' ? (
+                            <>Kelola pelanggan, hak akses, dan status akun.</>
+                        ) : (
+                            <>
+                                <span className="font-bold text-utero">{total}</span> pengguna cocok dengan
+                                &ldquo;{kataKunci}&rdquo;
+                            </>
+                        )}
+                    </p>
                 </div>
-                <button 
+                <button
                     onClick={() => setIsModalOpen(true)}
                     className="inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
                 >
                     + Tambah User Baru
                 </button>
             </div>
+
+            {/* Urutan dibawa sebagai medan tersembunyi. Tanpa itu, menekan Cari
+                mengembalikan urutan ke bakunya tanpa satu pun tanda. */}
+            <KotakCari
+              basis="/admin/users"
+              nilai={kataKunci}
+              label="Cari pengguna berdasarkan nama, email, nomor WhatsApp, atau nama perusahaan"
+              placeholder="Cari nama, email, nomor WhatsApp, perusahaan…"
+              tersembunyi={{ urut: kueriAktif.urut }}
+            />
 
             {/* `overflow-hidden` dulu ada di pembungkus ini, dan yang ia
                 potong adalah kolom "Aksi" — tombol edit dan hapus di ujung
@@ -75,18 +130,88 @@ export default function UserClientPage({ users }: { users: BarisPengguna[] }) {
                 <table className="w-full text-left min-w-[860px]">
                     <thead className="bg-gray-50 text-xs uppercase font-bold text-gray-500 border-b border-gray-100">
                         <tr>
-                            <th className="px-6 py-4">User Info</th>
-                            <th className="px-6 py-4">Role</th>
-                            <th className="px-6 py-4">Metode Daftar</th>
-                            <th className="px-6 py-4">Riwayat Order</th>
+                            <KepalaUrut
+                              className="px-6 py-4"
+                              label="User Info"
+                              basis="/admin/users"
+                              urutAktif={urutAktif}
+                              naik="nama-naik"
+                              turun="nama-turun"
+                              parameter={kueriAktif}
+                            />
+                            <KepalaUrut
+                              className="px-6 py-4"
+                              label="Role"
+                              basis="/admin/users"
+                              urutAktif={urutAktif}
+                              naik="peran-naik"
+                              turun="peran-turun"
+                              parameter={kueriAktif}
+                            />
+                            {/* Kolom ini menampilkan metode daftar DAN tanggal
+                                daftar, dan yang diurutkan adalah tanggalnya —
+                                yaitu `terbaru`/`terlama`, urutan bakunya.
+                                Mengurutkan menurut `authProvider` hanya
+                                menghasilkan dua blok ("EMAIL" lalu "GOOGLE"),
+                                dan itu penyaringan yang dipaksa jadi urutan. */}
+                            <KepalaUrut
+                              className="px-6 py-4"
+                              label="Metode Daftar"
+                              basis="/admin/users"
+                              urutAktif={urutAktif}
+                              naik="terlama"
+                              turun="terbaru"
+                              parameter={kueriAktif}
+                            />
+                            <KepalaUrut
+                              className="px-6 py-4"
+                              label="Riwayat Order"
+                              basis="/admin/users"
+                              urutAktif={urutAktif}
+                              naik="order-sedikit"
+                              turun="order-banyak"
+                              parameter={kueriAktif}
+                            />
                             {/* "Total Dibayar", bukan "Total Spending": isinya
                                 uang yang benar-benar diterima dari pelanggan
-                                ini, bukan nilai pesanan yang pernah ia buat. */}
+                                ini, bukan nilai pesanan yang pernah ia buat.
+
+                                TIDAK bisa diurutkan, dan itu keputusan, bukan
+                                kelalaian: angkanya bukan kolom mana pun. Ia
+                                `Payment PAID` dikurangi refund yang sudah
+                                ditransfer, dilipat di sini atas 25 baris halaman
+                                ini. Kepala kolom yang bisa diklik akan
+                                mengurutkan 25 baris itu saja — sehingga
+                                "halaman 1 menurut pembayaran terbesar" tidak
+                                memuat pembayar terbesar, hanya pembayar terbesar
+                                di antara pendaftar terbaru. Kepala kolom yang
+                                menjawab salah lebih buruk daripada kepala kolom
+                                yang tidak bisa diklik.
+
+                                Mengurutkannya dengan benar menuntut agregasi di
+                                dalam query utamanya (view, atau kolom ringkasan
+                                yang dipelihara) — itu perubahan schema, dan fase
+                                ini tidak menambah migration. */}
                             <th className="px-6 py-4">Total Dibayar</th>
                             <th className="px-6 py-4 text-center">Aksi</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 text-sm">
+                        {/* Keadaan kosong. Sebelum ini tidak ada: `users.map`
+                            atas array kosong merender `<tbody>` tanpa satu pun
+                            baris, jadi admin melihat kepala tabel yang melayang
+                            di atas ruang putih tanpa satu kata pun yang
+                            menjelaskan kenapa — dan sekarang, dengan pencarian,
+                            itu adalah keadaan yang PALING sering muncul. */}
+                        {users.length === 0 && (
+                            <tr>
+                                <td colSpan={6} className="p-8 text-center text-gray-400">
+                                    {kataKunci !== ''
+                                        ? `Tidak ada pengguna yang cocok dengan "${kataKunci}".`
+                                        : 'Belum ada pengguna.'}
+                                </td>
+                            </tr>
+                        )}
                         {users.map((user) => {
                             // Penjumlahan kolom ini dulu dilakukan di sini, di
                             // browser, atas seluruh baris pesanan yang dikirim

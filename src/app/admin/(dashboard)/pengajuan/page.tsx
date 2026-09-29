@@ -13,12 +13,14 @@
 
 import Link from 'next/link';
 import { Inbox } from 'lucide-react';
-import { StatusPengajuanTitik } from '@prisma/client';
+import { Prisma, StatusPengajuanTitik } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { nilaiEnumSah } from '@/lib/enum-guard';
 import { keTautanWa } from '@/lib/telepon';
 import PengajuanClient from './PengajuanClient';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import { bacaKataKunci } from '@/lib/kueri-daftar';
+import KotakCari from '@/components/admin/KotakCari';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
 import { redirect } from 'next/navigation';
 
@@ -39,7 +41,7 @@ const TAB = [
 export default async function PengajuanTitikPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ halaman?: string; status?: string }>;
+  searchParams?: Promise<{ halaman?: string; status?: string; q?: string }>;
 }) {
   // Sejak Next 16 `searchParams` adalah Promise dan wajib di-`await`. Dibaca
   // langsung, nilainya selalu `undefined` dan paginasi tidak pernah berlaku —
@@ -56,7 +58,45 @@ export default async function PengajuanTitikPage({
     ? statusParam
     : 'SEMUA';
 
-  const where = statusAktif === 'SEMUA' ? {} : { status: statusAktif };
+  const kataKunci = bacaKataKunci(paramsQuery?.q);
+
+  // Pencarian pengajuan. Tabel ini yang paling tidak punya cara dicari di antara
+  // empat daftar admin: pengaju menelepon balik menyebut nama dan kotanya, dan
+  // satu-satunya cara menemukan barisnya adalah membuka tab demi tab lalu
+  // menggulung. Urutannya tanggal masuk, yaitu urutan yang tidak diketahui
+  // penelepon.
+  //
+  // `catatanAdmin` TIDAK ikut dicari walau kolomnya ada di `select`. Isinya
+  // catatan internal yang ditulis admin, dan pencarian yang menjangkaunya
+  // membuat baris muncul karena alasan yang tidak terlihat di kartunya — admin
+  // melihat hasil yang, menurut layar, tidak memuat kata yang ia cari.
+  //
+  // `AND` dengan `status` disusun eksplisit, tidak ditulis sebagai properti
+  // bersaudara: `{ status, OR: [...] }` sebetulnya juga benar (properti
+  // bersaudara di Prisma memang AND), tapi bentuk yang tertulis di sini adalah
+  // bentuk yang tidak bisa disalahbaca oleh pembaca berikutnya sebagai "status
+  // ATAU salah satu kata kunci" — yaitu pembacaan yang akan membocorkan pengajuan
+  // dari tab lain ke dalam tab yang sedang dibuka.
+  const saringanStatus: Prisma.PengajuanTitikWhereInput =
+    statusAktif === 'SEMUA' ? {} : { status: statusAktif };
+
+  const where: Prisma.PengajuanTitikWhereInput =
+    kataKunci === ''
+      ? saringanStatus
+      : {
+          AND: [
+            saringanStatus,
+            {
+              OR: [
+                { namaPemilik: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+                { nomorWa: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+                { email: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+                { kota: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+                { alamat: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+              ],
+            },
+          ],
+        };
 
   const [pengajuan, total, jumlahBaru] = await prisma.$transaction([
     prisma.pengajuanTitik.findMany({
@@ -95,15 +135,19 @@ export default async function PengajuanTitikPage({
 
   const paginasi = hitungPaginasi(halamanDiminta, total);
 
+  // Tab dan kata kunci dikumpulkan sekali, lalu dipakai pengalihan, tab, kotak
+  // cari, dan navigasi halaman. Empat salinan daftar yang sama adalah empat
+  // tempat yang akan menyimpang.
+  const kueriAktif = {
+    status: statusAktif === 'SEMUA' ? undefined : statusAktif,
+    q: kataKunci === '' ? undefined : kataKunci,
+  };
+
   // Tab yang sedang dibuka ikut dibawa ke pengalihan, sama seperti ia dibawa
   // tombol "Berikutnya". Pengalihan yang membuangnya akan memindahkan admin dari
   // tab "Baru" ke seluruh pengajuan tanpa satu pun petunjuk.
   if (paginasi.terlaluJauh) {
-    redirect(
-      urlHalaman('/admin/pengajuan', paginasi.totalHalaman, {
-        status: statusAktif === 'SEMUA' ? undefined : statusAktif,
-      }),
-    );
+    redirect(urlHalaman('/admin/pengajuan', paginasi.totalHalaman, kueriAktif));
   }
 
   const { halaman, totalHalaman } = paginasi;
@@ -153,11 +197,15 @@ export default async function PengajuanTitikPage({
           return (
             <Link
               key={tab.kunci}
-              href={
-                tab.kunci === 'SEMUA'
-                  ? '/admin/pengajuan'
-                  : `/admin/pengajuan?status=${tab.kunci}`
-              }
+              // Lewat `urlHalaman`, bukan template teks. Dua alasan: kata kunci
+              // ikut terbawa saat admin berpindah tab — tanpa itu, mengeklik
+              // "Dihubungi" di tengah pencarian membuang pencariannya tanpa
+              // suara — dan nilainya ter-encode, sedangkan `?status=${…}` yang
+              // ditempel apa adanya akan pecah pada kata kunci bertanda `&`.
+              href={urlHalaman('/admin/pengajuan', 1, {
+                status: tab.kunci === 'SEMUA' ? undefined : tab.kunci,
+                q: kataKunci === '' ? undefined : kataKunci,
+              })}
               className={`px-4 py-2 rounded-xl text-xs font-bold border transition ${
                 aktif
                   ? 'bg-gray-900 text-white border-gray-900'
@@ -179,31 +227,62 @@ export default async function PengajuanTitikPage({
         })}
       </nav>
 
+      {/* Tab yang sedang aktif dibawa sebagai medan tersembunyi, bukan ditempel
+          ke `action`: query di `action` dibuang peramban saat formulir GET
+          dikirim. Menaruh `?status=BARU` di sana menghasilkan tab yang diam-diam
+          kembali ke "Semua" setiap kali admin menekan Cari. */}
+      <KotakCari
+        basis="/admin/pengajuan"
+        nilai={kataKunci}
+        label="Cari pengajuan berdasarkan nama pemilik, nomor WhatsApp, email, kota, atau alamat"
+        placeholder="Cari nama, nomor WhatsApp, kota, alamat…"
+        tersembunyi={{ status: kueriAktif.status }}
+      />
+
       {daftar.length === 0 ? (
         // Layar kosong menjelaskan keadaannya, bukan hanya menampilkan ruang
         // putih yang terbaca seperti halaman gagal dimuat.
+        //
+        // "Tidak ada yang cocok" dibedakan dari "belum ada": kalimat kedua pada
+        // hasil pencarian membuat admin menyimpulkan pengajuannya sudah terhapus,
+        // padahal ia hanya tidak cocok dengan kata yang diketik.
         <div className="bg-white rounded-2xl border border-gray-100 p-12 text-center">
           <Inbox className="mx-auto text-gray-300" size={40} />
-          <p className="font-bold text-gray-700 mt-4">Belum ada pengajuan di tab ini</p>
-          <p className="text-sm text-gray-500 mt-1.5">
-            Pengajuan masuk otomatis begitu pemilik lahan mengirim formulir di
-            /sewakan-tempat.
-          </p>
+          {kataKunci !== '' ? (
+            <>
+              <p className="font-bold text-gray-700 mt-4">
+                Tidak ada pengajuan yang cocok dengan &ldquo;{kataKunci}&rdquo;
+              </p>
+              <p className="text-sm text-gray-500 mt-1.5">
+                Pencarian ini hanya mencakup tab yang sedang dibuka. Coba tab
+                &ldquo;Semua&rdquo; bila pengajuannya mungkin sudah ditandai
+                selesai atau ditolak.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="font-bold text-gray-700 mt-4">Belum ada pengajuan di tab ini</p>
+              <p className="text-sm text-gray-500 mt-1.5">
+                Pengajuan masuk otomatis begitu pemilik lahan mengirim formulir di
+                /sewakan-tempat.
+              </p>
+            </>
+          )}
         </div>
       ) : (
         <PengajuanClient daftar={daftar} />
       )}
 
-      {/* Saringan status ikut dibawa ke halaman berikutnya lewat `parameter`.
-          Tanpa itu, tombol "Berikutnya" melompat ke seluruh pengajuan dan admin
-          kehilangan tab yang sedang ia buka. */}
+      {/* Saringan status dan kata kunci ikut dibawa ke halaman berikutnya lewat
+          `parameter`. Tanpa itu, tombol "Berikutnya" melompat ke seluruh
+          pengajuan dan admin kehilangan tab serta pencarian yang sedang aktif. */}
       <NavigasiHalaman
         basis="/admin/pengajuan"
         halaman={halaman}
         totalHalaman={totalHalaman}
         total={total}
         satuan="pengajuan"
-        parameter={{ status: statusAktif === 'SEMUA' ? undefined : statusAktif }}
+        parameter={kueriAktif}
       />
     </div>
   );

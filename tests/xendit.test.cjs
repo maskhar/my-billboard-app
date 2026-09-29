@@ -10570,28 +10570,126 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
     });
   });
 
-  describe('pencarian transaksi admin benar-benar menyaring', () => {
+  // BUTIR 5.19 DITULIS ULANG OLEH 5.20, DAN INI CATATAN KENAPA.
+  //
+  // 5.19 menemukan kotak `placeholder="Search..."` yang tidak punya `value`
+  // maupun `onChange`: ia menerima ketikan lalu membuangnya. Perbaikannya waktu
+  // itu memasang `useState('')` + `Array.filter` atas prop `transactions`, dan
+  // suite di bawah ini mengikat bentuk itu.
+  //
+  // Bentuk itu memperbaiki gejalanya sambil memasang cacat yang lebih buruk.
+  // `transactions` adalah 25 BARIS HALAMAN INI. Jadi pada tabel 4.000 baris,
+  // operator mengetik nomor pesanan yang ADA dan layar menjawab bahwa ia tidak
+  // ada — sementara header halaman yang sama menulis jumlah seluruh tabel, dan
+  // tidak ada satu pun tanda yang membuat operator curiga jawabannya hanya
+  // berlaku atas satu halaman. Itu bukan pencarian yang kurang lengkap, itu
+  // jawaban yang salah pada pertanyaan yang paling sering ditanyakan ke halaman
+  // ini.
+  //
+  // Assertion di sini karena itu DIPINDAHKAN, bukan dilonggarkan: yang lama
+  // dibalik menjadi `doesNotMatch` (bentuk client-side tidak boleh kembali), dan
+  // jaminannya ditulis ulang di tempat barunya — `where` di `orders/page.tsx`
+  // dan `KotakCari`.
+  describe('pencarian transaksi admin menyaring SELURUH tabel, bukan satu halaman', () => {
     const kode = kodeSaja('app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx');
+    const kodeHalaman = kodeSaja('app', 'admin', '(dashboard)', 'orders', 'page.tsx');
+    // `kodeSajaAny`, bukan `kodeSaja` lokal suite ini: penghapus blok komentar
+    // di `kodeSaja` rakus (`/*[sS]*?*/` tanpa penjaga), dan di berkas ini
+    // ia menelan seluruh JSX antara JSDoc terakhir pada tipe prop dan komentar
+    // `{/* */}` pertama di dalam `<form>` — termasuk `<form>` itu sendiri. Hasilnya
+    // bukan galat, melainkan teks yang hilang separuh, jadi assertion di bawah
+    // gagal atas kode yang sebenarnya benar. `kodeSajaAny` hanya membuang baris
+    // yang DIMULAI dengan `//`, `*`, atau `/*`, jadi ia tidak bisa melakukan itu.
+    const kodeKotak = kodeSajaAny(
+      path.join(__dirname, '..', 'src', 'components', 'admin', 'KotakCari.tsx')
+    );
 
-    it('kotak pencarian terhubung ke state dan menyaring daftar', () => {
+    it('kotak yang membuang ketikan tidak kembali', () => {
+      // Cacat asli butir 5.19, persis. Ia tetap dijaga di sini.
       assert.doesNotMatch(kode, /placeholder="Search\.\.\."/);
-      assert.match(kode, /const \[cari, setCari\] = useState\(''\)/);
-      assert.match(kode, /value=\{cari\}/);
-      assert.match(kode, /onChange=\{\(e\) => setCari\(e\.target\.value\)\}/);
-      // Daftar yang dirender adalah hasil saring, bukan daftar penuh.
-      assert.match(kode, /\{terlihat\.map\(\(t\) =>/);
-      assert.doesNotMatch(kode, /\{transactions\.map\(\(t\) =>/);
+    });
+
+    it('penyaringan di client dibuang — ia hanya bisa melihat 25 baris', () => {
+      assert.doesNotMatch(kode, /const \[cari, setCari\] = useState/);
+      assert.doesNotMatch(kode, /\bterlihat\b/);
+      // Daftar yang dirender adalah apa yang dikirim server, apa adanya: server
+      // yang sudah menyaringnya.
+      assert.match(kode, /\{transactions\.map\(\(t\) =>/);
+    });
+
+    it('kata kunci sampai ke `where` Prisma, dengan AND ke saringan tab', () => {
+      assert.match(kodeHalaman, /const kataKunci = bacaKataKunci\(/);
+      assert.match(kodeHalaman, /whereClause\.OR = \[/);
+      // `count` memakai `where` yang sama, kalau tidak header menulis jumlah
+      // seluruh tabel di atas hasil pencarian.
+      assert.match(kodeHalaman, /count\(\{ where: whereClause \}\)/);
     });
 
     it('dicari lewat nomor pesanan yang dilihat operator, bukan cuid mentah', () => {
-      // Yang tertera di layar dan di invoice adalah hasil `labelPesanan(t.id)`.
-      assert.match(kode, /labelPesanan\(t\.id\),/);
+      // Yang tertera di layar dan di invoice adalah 8 karakter TERAKHIR id,
+      // huruf besar (`PANJANG_NOMOR_PESANAN`). Jadi `endsWith`, bukan `contains`:
+      // `contains` juga cocok dengan bagian TENGAH cuid pesanan lain, sehingga
+      // satu nomor yang dicari mengembalikan beberapa pesanan.
+      //
+      // `mode: insensitive` wajib: yang dibaca operator huruf besar, cuid di
+      // database huruf kecil. Tanpanya, nomor yang dibacakan lewat telepon tidak
+      // pernah cocok dengan apa pun.
+      assert.match(kodeHalaman, /id: \{ endsWith: nomor, mode: Prisma\.QueryMode\.insensitive \}/);
+      assert.doesNotMatch(kodeHalaman, /id: \{ contains:/);
+      assert.match(kodeHalaman, /PANJANG_NOMOR_PESANAN/);
+    });
+
+    it('nomor WhatsApp dicari apa adanya, tidak dinormalkan lebih dulu', () => {
+      // Kolomnya menyimpan bentuk `628…`, tapi yang dipakai `contains` — yaitu
+      // potongan tengah nomor. Menormalkan `0812` menjadi `62812` justru membuat
+      // potongan yang diketik admin tidak cocok dengan apa pun.
+      assert.match(kodeHalaman, /whatsapp: \{ contains: kataKunci/);
+      assert.doesNotMatch(kodeHalaman, /normalisasiNomorLokal\(kataKunci\)/);
     });
 
     it('hasil kosong karena pencarian dibedakan dari belum ada pesanan', () => {
+      // Kalimatnya kini dibangun dari `kataKunci` yang DIKIRIM SERVER, yaitu
+      // kata kunci yang benar-benar dipakai menyaring. Tanpa prop itu, keadaan
+      // kosong hanya bisa berbunyi "Belum ada pesanan" — kalimat yang salah pada
+      // hasil pencarian: pesanannya ada, hanya tidak ada yang cocok.
+      assert.match(kode, /kataKunci\?: string/);
       assert.match(kode, /Tidak ada pesanan yang cocok/);
       assert.match(kode, /Belum ada pesanan\./);
-      assert.match(kode, /aria-live="polite"/);
+    });
+
+    it('kotak cari adalah formulir GET, dan saringan dibawa medan tersembunyi', () => {
+      // GET supaya kata kuncinya jadi bagian URL: hasilnya bisa di-bookmark,
+      // tombol kembali bekerja, dan paginasi bisa membawanya.
+      assert.match(kodeKotak, /<form method="get" action=\{basis\}/);
+      // Query di `action` DIBUANG peramban saat formulir GET dikirim — seluruhnya
+      // diganti pasangan nama/nilai dari medannya. Menempelkan `?status=REFUND`
+      // ke `action` karena itu menghasilkan tab yang diam-diam kembali ke "Semua"
+      // setiap kali admin menekan Cari.
+      assert.match(kodeKotak, /type="hidden" name=\{kunci\}/);
+      // `defaultValue`, bukan `value`: tanpa `onChange`, `value` membuat React
+      // menjadikan medannya hanya-baca dan admin tidak bisa mengetik apa pun.
+      assert.match(kodeKotak, /defaultValue=\{nilai\}/);
+      assert.doesNotMatch(kodeKotak, /\svalue=\{nilai\}/);
+      // `type="reset"` bukan pilihan: ia hanya mengembalikan medan ke
+      // `defaultValue` — yaitu ke kata kunci yang sedang berlaku — sehingga
+      // tombolnya tampak tidak melakukan apa pun.
+      assert.doesNotMatch(kodeKotak, /type="reset"/);
+    });
+
+    it('panel detail tidak bisa menahan pesanan dari daftar sebelumnya', () => {
+      // `useState(transactions[0])` hanya berlaku SAAT MOUNT, dan navigasi Next
+      // di dalam segmen yang sama TIDAK me-mount ulang komponen. Jadi begitu
+      // daftarnya berganti — halaman berikutnya, tab lain, dan sekarang hasil
+      // pencarian — panel kanan tetap menampilkan pesanan dari daftar SEBELUMNYA,
+      // yang tidak ada di daftar di sebelahnya. Dan tombol aksi di panel itu
+      // bekerja atas pesanan tersebut.
+      //
+      // Diperbaiki tanpa efek: pilihan disimpan bersama kunci daftarnya, lalu
+      // diturunkan saat render. Dengan `useEffect`, akan ada satu frame yang
+      // menampilkan pasangan yang salah.
+      assert.match(kode, /const kunciDaftar = transactions\.map\(\(t\) => t\.id\)\.join\(','\)/);
+      assert.match(kode, /const idTerpilih = pilihan\.kunci === kunciDaftar/);
+      assert.doesNotMatch(kode, /useEffect/);
     });
   });
 });
@@ -17885,9 +17983,29 @@ describe('alur "Sewakan Tempat" dari pengaju sampai admin', () => {
       // tangan (`&status=${statusAktif}`) adalah bentuk yang sengaja
       // ditinggalkan — di situlah `&` lolos tanpa encode. Yang dijaga sekarang
       // adalah saringannya benar-benar DISERAHKAN ke komponen itu.
+      //
+      // Objek saringannya juga tidak lagi ditulis sebaris di dalam
+      // `parameter={{…}}`: sejak kata kunci pencarian ikut dibawa, daftar
+      // parameter yang sama dipakai tab, kotak cari, pengalihan, DAN tombol
+      // halaman. Empat salinan sebaris adalah empat tempat yang akan menyimpang,
+      // jadi ia dikumpulkan sekali sebagai `kueriAktif`.
       const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
       assert.doesNotMatch(kode, /&status=\$\{statusAktif\}/);
-      assert.match(kode, /parameter=\{\{ status: statusAktif === 'SEMUA' \? undefined : statusAktif \}\}/);
+      assert.match(kode, /const kueriAktif = \{/);
+      assert.match(kode, /status: statusAktif === 'SEMUA' \? undefined : statusAktif/);
+      assert.match(kode, /parameter=\{kueriAktif\}/);
+    });
+
+    it('tab tidak lagi merangkai URL-nya sendiri — kata kunci ikut terbawa', () => {
+      // Tab dulu `href={`/admin/pengajuan?status=${tab.kunci}`}`, dan bentuk itu
+      // punya dua cacat sekaligus: nilainya tidak di-encode, dan ia MEMBUANG
+      // setiap parameter lain yang sedang aktif. Yang terbuang sekarang adalah
+      // kata kunci pencarian — jadi berpindah tab di tengah mencari membatalkan
+      // pencariannya tanpa satu pun tanda, dan admin membaca daftar penuh tab
+      // baru sebagai hasil pencarian di dalam tab itu.
+      const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
+      assert.doesNotMatch(kode, /\/admin\/pengajuan\?status=\$\{tab\.kunci\}/);
+      assert.match(kode, /href=\{urlHalaman\('\/admin\/pengajuan', 1, \{/);
     });
 
     it('lencana "BARU" dihitung tanpa saringan tab supaya tetap jujur', () => {
@@ -26633,11 +26751,16 @@ describe('paginasi daftar admin: satu aturan, dan tidak ada halaman yang terkuru
   // Keempat halaman daftar. `satuan` dan `basis` ikut dicek supaya tidak ada
   // halaman yang menautkan ke jalur halaman lain — kesalahan yang paling mudah
   // terjadi saat blok ini disalin.
+  //
+  // `saringan` dulu `false` untuk billboards dan users, karena keduanya belum
+  // punya apa pun untuk disaring. Sejak butir 5.20 keempatnya punya — dua lewat
+  // tab status, dua lewat urutan — dan semuanya punya kotak cari, jadi keempatnya
+  // sekarang wajib membawa kuerinya ke tombol halaman dan ke pengalihannya.
   const HALAMAN_DAFTAR = [
-    { nama: 'billboards', basis: '/admin/billboards', satuan: 'titik', saringan: false },
-    { nama: 'orders', basis: '/admin/orders', satuan: 'transaksi', saringan: true },
-    { nama: 'users', basis: '/admin/users', satuan: 'pengguna', saringan: false },
-    { nama: 'pengajuan', basis: '/admin/pengajuan', satuan: 'pengajuan', saringan: true },
+    { nama: 'billboards', basis: '/admin/billboards', satuan: 'titik' },
+    { nama: 'orders', basis: '/admin/orders', satuan: 'transaksi' },
+    { nama: 'users', basis: '/admin/users', satuan: 'pengguna' },
+    { nama: 'pengajuan', basis: '/admin/pengajuan', satuan: 'pengajuan' },
   ];
 
   const jalurHalaman = (nama) =>
@@ -26805,7 +26928,7 @@ describe('paginasi daftar admin: satu aturan, dan tidak ada halaman yang terkuru
   });
 
   describe('keempat halaman daftar memakai aturan bersama', () => {
-    for (const { nama, basis, satuan, saringan } of HALAMAN_DAFTAR) {
+    for (const { nama, basis, satuan } of HALAMAN_DAFTAR) {
       it(`${nama}: tidak lagi menghitung nomor halaman sendiri`, () => {
         const kode = kodeSajaAny(jalurHalaman(nama));
 
@@ -26868,20 +26991,38 @@ describe('paginasi daftar admin: satu aturan, dan tidak ada halaman yang terkuru
         assert.match(kode, new RegExp(`satuan=["']${satuan}["']`), `satuan bukan ${satuan}`);
       });
 
-      if (saringan) {
-        it(`${nama}: saringan ikut dibawa tombol halaman DAN pengalihannya`, () => {
-          const kode = kodeSajaAny(jalurHalaman(nama));
-          assert.match(kode, /parameter=\{\{[\s\S]*?status/, 'saringan tidak dibawa tombol');
+      it(`${nama}: saringan ikut dibawa tombol halaman DAN pengalihannya`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
 
-          // Pengalihannya juga. Pengalihan yang membuang saringan memindahkan
-          // admin keluar dari tab yang sedang ia buka — dan pada halaman
-          // transaksi itu tab yang paling mendesak.
-          const mulai = kode.indexOf('if (paginasi.terlaluJauh)');
-          assert.ok(mulai > 0, 'blok pengalihan tidak ditemukan');
-          const blok = kode.slice(mulai, kode.indexOf('\n  }', mulai) + 4);
-          assert.match(blok, /status/, 'pengalihan membuang saringan');
-        });
-      }
+        // Yang dijaga BUKAN lagi kata `status` di dalam `parameter={{…}}`.
+        //
+        // Bentuk itu ditinggalkan karena ia hanya bisa mengikat dua halaman dari
+        // empat: billboards dan users tidak punya tab status, saringan aktifnya
+        // adalah `urut` dan `q`. Assertion yang mencari `status` karena itu
+        // memaksa dua halaman melewati pemeriksaan ini sama sekali — dan yang
+        // tidak diperiksa adalah persis yang baru saja ditambahkan.
+        //
+        // Yang dijaga sekarang lebih keras: setiap halaman menyusun kuerinya
+        // SEKALI ke dalam `kueriAktif`, lalu menyerahkan objek yang SAMA ke
+        // tombol halaman dan ke pengalihannya. Dua salinan daftar parameter
+        // adalah dua tempat yang akan menyimpang — dan yang menyimpang adalah
+        // saringan yang hilang tanpa suara di salah satu dari dua tombol.
+        assert.match(kode, /const kueriAktif = \{/, 'kueri tidak dikumpulkan sekali');
+        assert.match(kode, /parameter=\{kueriAktif\}/, 'kueri tidak dibawa tombol halaman');
+
+        // Kotak cari ada di keempatnya, dan kata kuncinya masuk ke `kueriAktif`.
+        assert.match(kode, /\bq: kataKunci === '' \? undefined : kataKunci\b/);
+
+        // Pengalihannya juga. Pengalihan yang membuang kueri memindahkan admin
+        // keluar dari tab atau hasil pencarian yang sedang ia buka — dan jumlah
+        // halaman HASIL PENCARIAN jauh lebih kecil daripada jumlah halaman
+        // seluruh tabel, jadi pengalihan inilah yang paling sering terjadi
+        // justru saat sedang mencari.
+        const mulai = kode.indexOf('if (paginasi.terlaluJauh)');
+        assert.ok(mulai > 0, 'blok pengalihan tidak ditemukan');
+        const blok = kode.slice(mulai, kode.indexOf('\n  }', mulai) + 4);
+        assert.match(blok, /kueriAktif/, 'pengalihan membuang kueri');
+      });
 
       it(`${nama}: query memakai halamanDiminta, bukan nomor yang sudah dijepit`, () => {
         const kode = kodeSajaAny(jalurHalaman(nama));
@@ -26969,5 +27110,435 @@ describe('paginasi daftar admin: satu aturan, dan tidak ada halaman yang terkuru
       const kode = kodeSajaAny(JALUR_PAGINASI);
       assert.doesNotMatch(kode, /Decimal|angkaRupiah|uangUntukClient/);
     });
+  });
+});
+
+// ===========================================================================
+// SARINGAN DAN URUTAN PADA EMPAT DAFTAR ADMIN (butir 5.20)
+// ===========================================================================
+//
+// Yang dijaga di sini bukan "adanya kotak cari". Ada tiga jaminan, dan yang
+// kedua adalah gerbang keamanan:
+//
+//  1. Nilai asing dari URL JATUH KE BAKU, tidak hilang tanpa suara. Cacat asli
+//     di orders: `paramsQuery.status || 'ALL'` dibandingkan dengan deretan `if`,
+//     sehingga `?status=SELESAI` tidak cocok dengan satu pun cabang,
+//     `whereClause` tetap kosong, dan SELURUH transaksi ditampilkan tanpa satu
+//     tab pun tersorot.
+//
+//  2. `orderBy` TIDAK PERNAH dirangkai dari teks URL. Tabel `User` punya
+//     `password`, `ktp`, dan `npwp`. Tidak satu pun dirender, tapi
+//     `?urut=password` yang lolos ke Prisma MENGURUTKAN baris menurut hash
+//     bcrypt — dan urutan baris adalah informasi: ia membocorkan perbandingan
+//     antar nilai yang tidak pernah boleh terbaca siapa pun.
+//
+//  3. Kata kunci dicari DI DATABASE, bukan atas 25 baris yang sudah dikirim.
+//     Jaminan itu dijaga di suite butir 5.19 di atas.
+describe('saringan & urutan daftar admin', () => {
+  const JALUR_KUERI = path.join(__dirname, '..', 'src', 'lib', 'kueri-daftar.ts');
+  const JALUR_KEPALA = path.join(
+    __dirname, '..', 'src', 'components', 'admin', 'KepalaUrut.tsx');
+
+  const { bacaPilihan, bacaKataKunci, PANJANG_KATA_KUNCI_MAKS } = require(JALUR_KUERI);
+
+  function jalurDaftar(...bagian) {
+    return path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', ...bagian);
+  }
+
+  describe('bacaPilihan() — daftar tertutup, bukan teks URL', () => {
+    const PILIHAN = ['terbaru', 'terlama', 'harga-naik'];
+
+    it('nilai yang sah diteruskan apa adanya', () => {
+      assert.equal(bacaPilihan('harga-naik', PILIHAN, 'terbaru'), 'harga-naik');
+    });
+
+    it('nilai asing jatuh ke baku, tidak melempar dan tidak lolos', () => {
+      // Melempar akan menghasilkan layar galat penuh dari satu karakter yang
+      // tercemar di URL yang disalin lewat chat. Meloloskannya jauh lebih buruk:
+      // di halaman users ia menjadi nama kolom untuk `orderBy`.
+      for (const jahat of ['password', 'ktp', 'npwp', 'SELESAI', '', '__proto__', 'id']) {
+        assert.equal(bacaPilihan(jahat, PILIHAN, 'terbaru'), 'terbaru', jahat);
+      }
+    });
+
+    it('cocok persis, bukan awalan maupun beda huruf besar-kecil', () => {
+      assert.equal(bacaPilihan('harga', PILIHAN, 'terbaru'), 'terbaru');
+      assert.equal(bacaPilihan('harga-naik-x', PILIHAN, 'terbaru'), 'terbaru');
+      assert.equal(bacaPilihan('HARGA-NAIK', PILIHAN, 'terbaru'), 'terbaru');
+    });
+
+    it('array dari ?urut=a&urut=b dibaca nilai pertamanya', () => {
+      // Next menyerahkan ARRAY untuk parameter ganda. Kode yang mengira nilainya
+      // selalu teks membandingkan array dengan teks — selalu false — sehingga
+      // urutannya diam-diam kembali ke baku tanpa satu pun tanda.
+      assert.equal(bacaPilihan(['harga-naik', 'terlama'], PILIHAN, 'terbaru'), 'harga-naik');
+      assert.equal(bacaPilihan(['jahat', 'harga-naik'], PILIHAN, 'terbaru'), 'terbaru');
+      assert.equal(bacaPilihan([], PILIHAN, 'terbaru'), 'terbaru');
+    });
+
+    it('tidak ada parameter berarti baku', () => {
+      assert.equal(bacaPilihan(undefined, PILIHAN, 'terbaru'), 'terbaru');
+      assert.equal(bacaPilihan(null, PILIHAN, 'terbaru'), 'terbaru');
+    });
+
+    it('nilai bawaan objek tidak bisa dipanen lewat ?urut=', () => {
+      // `pilihan.find` membandingkan nilai, bukan menengok properti objek, jadi
+      // `constructor`/`toString` tidak pernah lolos. Kasus ini menjaga agar
+      // implementasinya tidak diganti menjadi lookup `PETA[nilai]` — bentuk itu
+      // mengembalikan fungsi bawaan `Object.prototype` untuk kunci-kunci ini,
+      // dan fungsi itu akan sampai ke `orderBy` Prisma.
+      for (const kunci of ['constructor', 'toString', 'hasOwnProperty', 'valueOf']) {
+        assert.equal(bacaPilihan(kunci, PILIHAN, 'terbaru'), 'terbaru', kunci);
+      }
+    });
+  });
+
+  describe('bacaKataKunci() — dibersihkan, dibatasi, dan kosong berarti kosong', () => {
+    it('spasi di ujung dibuang', () => {
+      // Kata kunci yang disalin dari spreadsheet hampir selalu membawa spasi
+      // ikutan, dan `contains: 'Budi '` tidak cocok dengan satu baris pun.
+      assert.equal(bacaKataKunci('  Budi  '), 'Budi');
+      assert.equal(bacaKataKunci('\tBudi\n'), 'Budi');
+    });
+
+    it('spasi berurutan di tengah diringkas menjadi satu', () => {
+      assert.equal(bacaKataKunci('Budi   Santoso'), 'Budi Santoso');
+      assert.equal(bacaKataKunci('Budi \t\n Santoso'), 'Budi Santoso');
+    });
+
+    it('teks yang hanya berisi spasi menjadi kosong, bukan satu spasi', () => {
+      // Satu spasi yang lolos akan dipakai `contains: ' '` — yang cocok dengan
+      // hampir setiap baris, lalu ditulis ke layar sebagai hasil pencarian.
+      assert.equal(bacaKataKunci('   '), '');
+      assert.equal(bacaKataKunci('\t\n'), '');
+    });
+
+    it('kosong berarti teks kosong, bukan undefined', () => {
+      // Pemanggil memakai teks kosong sebagai "tidak ada pencarian", dan
+      // `urlHalaman` membuang nilai kosong dari tautan, jadi `?q=` tidak pernah
+      // ikut tertulis.
+      assert.equal(bacaKataKunci(undefined), '');
+      assert.equal(bacaKataKunci(null), '');
+      assert.equal(bacaKataKunci(''), '');
+    });
+
+    it('dipotong di 80 karakter', () => {
+      // Kata kunci ikut DIBAWA ke setiap tautan paginasi dan setiap tautan urut.
+      // Kata kunci 8 KB menjadikan setiap tombol di halaman itu URL 8 KB, dan
+      // server HTTP menolaknya dengan 431 — tombol "Berikutnya" berhenti bekerja
+      // tanpa satu pun pesan.
+      assert.equal(PANJANG_KATA_KUNCI_MAKS, 80);
+      const panjang = 'a'.repeat(500);
+      assert.equal(bacaKataKunci(panjang).length, 80);
+      assert.equal(bacaKataKunci(panjang, 10), 'aaaaaaaaaa');
+    });
+
+    it('batas yang tidak masuk akal jatuh ke batas baku, tidak menghapus kata kunci', () => {
+      // `slice(0, 0)` dan `slice(0, NaN)` sama-sama mengembalikan teks kosong,
+      // yaitu "tidak ada pencarian" — pencarian yang batal tanpa suara.
+      const panjang = 'b'.repeat(200);
+      for (const maks of [0, -5, NaN, Infinity]) {
+        assert.equal(bacaKataKunci(panjang, maks).length, 80, String(maks));
+      }
+    });
+
+    it('array dari ?q=a&q=b dibaca nilai pertamanya', () => {
+      assert.equal(bacaKataKunci(['Budi', 'Santoso']), 'Budi');
+      assert.equal(bacaKataKunci([]), '');
+    });
+
+    it('isi kata kuncinya tidak diubah — huruf besar dan tanda baca dipertahankan', () => {
+      // Huruf besar-kecil ditangani `mode: insensitive` di Prisma, bukan di sini.
+      // Menurunkan hurufnya di sini justru merusak pencarian nomor pesanan, yang
+      // memakai `endsWith` atas 8 karakter huruf besar.
+      assert.equal(bacaKataKunci('PT. Maju & Co.'), 'PT. Maju & Co.');
+      assert.equal(bacaKataKunci('A1B2C3D4'), 'A1B2C3D4');
+      assert.equal(bacaKataKunci('0812-3456'), '0812-3456');
+    });
+  });
+
+  describe('modul kueri-daftar tetap bisa diuji tanpa satu pun mock', () => {
+    it('nol impor — tidak menarik Prisma maupun Next ke dalamnya', () => {
+      // Alasan yang sama seperti `paginasi.ts`. Dan `bacaPilihan` memang TIDAK
+      // boleh terikat ke enum Prisma: nilai yang dijaganya (`judul-naik`,
+      // `PROGRESS`) bukan enum apa pun.
+      const kode = kodeSajaAny(JALUR_KUERI);
+      assert.doesNotMatch(kode, /^\s*import\s/m);
+      assert.doesNotMatch(kode, /require\(/);
+    });
+  });
+
+  describe('KepalaUrut — yang diklik tautan, dan arahnya diumumkan sekali', () => {
+    const kode = kodeSajaAny(JALUR_KEPALA);
+
+    it('aria-sort ada di <th>, bukan di tautannya', () => {
+      // Atribut itu hanya berarti pada sel kepala. Di `<a>` ia diabaikan, jadi
+      // pembaca layar tidak pernah mengumumkan kolom mana yang sedang diurutkan.
+      assert.match(kode, /<th className=\{className\} aria-sort=\{ariaSort\}>/);
+      assert.match(
+        kode,
+        /const ariaSort = sedangNaik \? 'ascending' : sedangTurun \? 'descending' : 'none'/,
+      );
+    });
+
+    it('yang diklik <Link>, bukan <th onClick>', () => {
+      // `<th onClick>` tidak bisa dicapai lewat Tab, tidak bisa ditekan Enter,
+      // dan tidak dibacakan sebagai sesuatu yang bisa ditekan. Tabel yang hanya
+      // bisa diurutkan dengan tetikus adalah tabel yang tidak bisa diurutkan oleh
+      // sebagian operator.
+      assert.doesNotMatch(kode, /onClick/);
+      assert.match(kode, /<Link\s/);
+    });
+
+    it('panah arah aria-hidden, supaya arahnya tidak dibacakan dua kali', () => {
+      assert.match(kode, /<span aria-hidden="true"/);
+    });
+
+    it('tautannya punya penanda fokus kasatmata', () => {
+      assert.match(kode, /focus-visible:outline-2/);
+    });
+
+    it('klik kedua pada kolom yang sama membalik arah, tidak menghasilkan tautan mati', () => {
+      assert.match(kode, /const tujuan = sedangNaik \? turun : naik/);
+    });
+
+    it('nomor halaman TIDAK dibawa saat urutan berubah', () => {
+      // Mengubah urutan menyusun ulang seluruh daftar, jadi "halaman 7 menurut
+      // harga" tidak punya hubungan apa pun dengan "halaman 7 menurut nama" —
+      // membawa nomornya akan mendaratkan admin di tengah daftar yang belum
+      // pernah ia lihat awalnya.
+      assert.match(kode, /urlHalaman\(basis, 1, \{ \.\.\.parameter, urut: tujuan \}\)/);
+    });
+
+    it('saringan dan kata kunci yang aktif ikut terbawa', () => {
+      // Tanpa `...parameter`, mengurutkan di tengah pencarian membuang pencarian
+      // itu tanpa suara — dan admin membaca seluruh tabel sebagai hasil urut.
+      assert.match(kode, /parameter = \{\}/);
+      assert.match(kode, /\.\.\.parameter/);
+    });
+  });
+
+  describe('orderBy tidak pernah dirangkai dari teks URL', () => {
+    // Dua halaman yang punya kepala kolom bisa diurutkan. Keduanya diperiksa
+    // dengan aturan yang sama, karena yang dijaga bukan kolomnya melainkan
+    // bentuknya: peta tertutup, dan satu-satunya jalan masuk lewat `bacaPilihan`.
+    const HALAMAN_URUT = [
+      { nama: 'billboards', jalur: jalurDaftar('billboards', 'page.tsx'), tipe: 'Billboard' },
+      { nama: 'users', jalur: jalurDaftar('users', 'page.tsx'), tipe: 'User' },
+    ];
+
+    for (const { nama, jalur, tipe } of HALAMAN_URUT) {
+      describe(nama, () => {
+        const kode = kodeSajaAny(jalur);
+
+        it('peta urut tertutup dan bertipe orderBy Prisma', () => {
+          assert.match(
+            kode,
+            new RegExp(
+              'const URUT: Record<string, Prisma\\.' + tipe + 'OrderByWithRelationInput> = \\{',
+            ),
+          );
+        });
+
+        it('kunci yang sah diambil dari peta itu, bukan dikarang di tempat lain', () => {
+          assert.match(kode, /const KUNCI_URUT = Object\.keys\(URUT\)/);
+          assert.match(kode, /bacaPilihan\(paramsQuery\?\.urut, KUNCI_URUT, 'terbaru'\)/);
+        });
+
+        it('orderBy dibaca dari peta, tidak pernah dari parameter', () => {
+          // Nilainya selalu `URUT[urutAktif]`. Letaknya boleh berbeda: di
+          // `billboards` peta itu diserahkan sebagai ARGUMEN ke fungsi pengambil,
+          // yang menuliskan `orderBy,` singkat di dalam query. Yang dijaga asal
+          // nilainya, bukan letak propertinya.
+          assert.match(kode, /URUT\[urutAktif\]/);
+          // Tiga bentuk yang MELOLOSKAN nama kolom dari URL ke Prisma.
+          assert.doesNotMatch(kode, /orderBy: \{ \[/);
+          assert.doesNotMatch(kode, /orderBy: \[?\s*paramsQuery/);
+          assert.doesNotMatch(kode, /orderBy: \{ \.\.\./);
+        });
+
+        it('tidak satu pun kunci urut menyentuh kolom yang tidak dirender', () => {
+          // Nama kunci di URL sengaja tidak sama dengan nama kolom, supaya skema
+          // tabel tidak ikut tertulis di bilah alamat. Dan kalaupun seseorang
+          // menambah kunci baru, ia tidak boleh menyentuh kolom rahasia.
+          const mulai = kode.indexOf('const URUT');
+          const peta = kode.slice(mulai, kode.indexOf('};', mulai));
+          for (const rahasia of ['password', 'ktp', 'npwp', 'emailVerified']) {
+            assert.ok(!peta.includes(rahasia), 'kunci urut menyentuh ' + rahasia);
+          }
+        });
+      });
+    }
+
+    it('halaman users menolak ?urut=password di tingkat peta, bukan di tingkat tampilan', () => {
+      // Kolomnya tidak dirender, jadi tidak ada satu pun NILAI yang bocor ke
+      // layar. Yang bocor adalah URUTANNYA: `?urut=password` mengurutkan baris
+      // menurut hash bcrypt, dan itu membocorkan perbandingan antar nilai yang
+      // tidak pernah boleh terbaca. Jadi yang harus menolak adalah petanya.
+      const kode = kodeSajaAny(jalurDaftar('users', 'page.tsx'));
+      const mulai = kode.indexOf('const URUT');
+      const kunci = kode
+        .slice(mulai, kode.indexOf('};', mulai))
+        .split('\n')
+        .map((baris) => baris.match(/^\s*'?([a-zA-Z-]+)'?:/))
+        .filter(Boolean)
+        .map((m) => m[1]);
+      assert.ok(kunci.length >= 6, 'peta urut users tidak terbaca');
+      for (const rahasia of ['password', 'ktp', 'npwp']) {
+        assert.ok(!kunci.includes(rahasia), rahasia + ' ada di peta urut');
+      }
+    });
+  });
+
+  describe('keempat daftar punya kotak cari yang menyaring di database', () => {
+    const DAFTAR = [
+      { nama: 'billboards', jalur: jalurDaftar('billboards', 'page.tsx'), basis: '/admin/billboards' },
+      { nama: 'orders', jalur: jalurDaftar('orders', 'page.tsx'), basis: '/admin/orders' },
+      { nama: 'users', jalur: jalurDaftar('users', 'UserClientPage.tsx'), basis: '/admin/users' },
+      { nama: 'pengajuan', jalur: jalurDaftar('pengajuan', 'page.tsx'), basis: '/admin/pengajuan' },
+    ];
+
+    for (const { nama, jalur, basis } of DAFTAR) {
+      describe(nama, () => {
+        const kodeHalaman = kodeSajaAny(jalurDaftar(nama, 'page.tsx'));
+        const kodeKotak = kodeSajaAny(jalur);
+
+        it('kata kunci dibaca lewat bacaKataKunci, tidak dari URL apa adanya', () => {
+          // `paramsQuery?.q` di tiga halaman, `paramsQuery.q` di `orders` —
+          // di sana `searchParams` tidak opsional. Keduanya benar.
+          assert.match(kodeHalaman, /const kataKunci = bacaKataKunci\(paramsQuery\??\.q\)/);
+        });
+
+        it('count memakai where yang sama dengan findMany', () => {
+          // Tanpa itu, headernya menulis jumlah SELURUH tabel di atas hasil
+          // pencarian, dan paginasinya menawarkan halaman yang tidak punya isi.
+          assert.match(kodeHalaman, /count\(\{ where(Clause)?[:\s}]/);
+        });
+
+        it('SETIAP kolom yang dicari memakai mode insensitive, bukan salah satunya', () => {
+          // Tanpa `insensitive`, "budi" tidak menemukan "Budi" — dan admin
+          // menyimpulkan pelanggannya belum pernah terdaftar.
+          //
+          // Diperiksa per klausa, bukan sekali per berkas: halaman users mencari
+          // empat kolom, jadi `mode` yang hilang dari SATU kolom tetap
+          // meninggalkan tiga yang membuat pemeriksaan tingkat berkas lulus —
+          // sementara kolom yang kehilangannya berhenti ditemukan sama sekali.
+          const klausa = kodeHalaman.match(/\{ contains: (?:kataKunci|nomor|kata)[^}]*\}/g) ?? [];
+          assert.ok(klausa.length > 0, 'tidak satu pun kolom dicari dengan contains');
+          for (const k of klausa) {
+            assert.match(k, /mode: Prisma\.QueryMode\.insensitive/, k);
+          }
+        });
+
+        it('kata kunci ikut dikumpulkan sekali di kueriAktif', () => {
+          // Satu tempat, lalu dipakai pengalihan, paginasi, kepala kolom, dan
+          // kotak cari. Empat salinan daftar yang sama adalah empat tempat yang
+          // akan menyimpang.
+          assert.match(kodeHalaman, /const kueriAktif = \{/);
+          assert.match(kodeHalaman, /q: kataKunci === '' \? undefined : kataKunci/);
+        });
+
+        // Elemen `<KotakCari …/>`-nya saja, bukan seluruh berkas: di halaman yang
+        // sama ada `<NavigasiHalaman basis="…">` dengan basis YANG SAMA, jadi
+        // pencarian `basis="/admin/x"` atas seluruh berkas tetap cocok walaupun
+        // kotak carinya sendiri menunjuk ke daftar lain.
+        const elemenKotak = (() => {
+          const mulai = kodeKotak.indexOf('<KotakCari');
+          assert.ok(mulai > 0, 'KotakCari tidak dirender di ' + nama);
+          return kodeKotak.slice(mulai, kodeKotak.indexOf('/>', mulai) + 2);
+        })();
+
+        it('kotak carinya membawa basis halaman ini, bukan halaman lain', () => {
+          // Kesalahan yang paling mudah terjadi saat blok ini disalin antar
+          // halaman, dan akibatnya kotak cari yang melempar admin ke daftar lain.
+          assert.match(elemenKotak, new RegExp('basis="' + basis + '"'));
+        });
+
+        it('kotak cari diberi nilai kata kunci yang sedang berlaku', () => {
+          // Tanpa itu, kotaknya kosong setelah pencarian dikirim — dan admin
+          // tidak punya cara tahu daftar yang ia lihat adalah hasil pencarian.
+          assert.match(elemenKotak, /nilai=\{kataKunci\}/);
+        });
+      });
+    }
+
+    it('saringan tab di-AND dengan kata kunci, tidak di-OR', () => {
+      // Satu kata, dan akibatnya pengajuan dari tab LAIN muncul di dalam tab yang
+      // sedang dibuka — lalu dibaca admin sebagai hasil pencarian di tab itu.
+      // Pada tab "Ditolak" itu berarti pengaju yang sudah ditolak bercampur
+      // dengan yang belum pernah dihubungi.
+      //
+      // `{ status, OR: [...] }` (properti bersaudara) sebetulnya juga benar di
+      // Prisma, tapi yang dituntut di sini bentuk EKSPLISIT-nya: ia tidak bisa
+      // disalahbaca pembaca berikutnya sebagai "status ATAU salah satu kata
+      // kunci" — dan pembacaan itulah yang menghasilkan mutasi satu kata ini.
+      const kode = kodeSajaAny(jalurDaftar('pengajuan', 'page.tsx'));
+      const mulai = kode.indexOf('const where: Prisma.PengajuanTitikWhereInput');
+      assert.ok(mulai > 0, 'klausa where pengajuan tidak ditemukan');
+      const blok = kode.slice(mulai, kode.indexOf('\n  const ', mulai + 10));
+      assert.match(blok, /AND: \[\s*\n\s*saringanStatus,/);
+      assert.doesNotMatch(blok, /OR: \[\s*\n\s*saringanStatus,/);
+      // Kata kuncinya tetap OR antar KOLOM — itu memang yang dimaksud: satu kata
+      // boleh cocok di nama ATAU kota ATAU alamat.
+      assert.match(blok, /OR: \[\s*\n\s*\{ namaPemilik:/);
+    });
+
+    it('halaman yang punya tab membawa tabnya sebagai medan tersembunyi', () => {
+      // Query di `action` DIBUANG peramban saat formulir GET dikirim. Tanpa medan
+      // tersembunyi, menekan Cari di dalam tab "Refund" melempar admin ke seluruh
+      // transaksi — dan ia akan membaca hasilnya sebagai hasil pencarian di dalam
+      // tab itu.
+      for (const nama of ['orders', 'pengajuan']) {
+        const kode = kodeSajaAny(jalurDaftar(nama, 'page.tsx'));
+        assert.match(kode, /tersembunyi=\{\{ status: kueriAktif\.status \}\}/, nama);
+      }
+    });
+
+    it('halaman yang punya kepala kolom membawa urutannya sebagai medan tersembunyi', () => {
+      // Alasan yang sama, akibat yang berbeda: tanpa itu, menekan Cari
+      // mengembalikan urutan ke bakunya tanpa satu pun tanda.
+      const kodeBillboards = kodeSajaAny(jalurDaftar('billboards', 'page.tsx'));
+      const kodeUsers = kodeSajaAny(jalurDaftar('users', 'UserClientPage.tsx'));
+      assert.match(kodeBillboards, /tersembunyi=\{\{ urut: kueriAktif\.urut \}\}/);
+      assert.match(kodeUsers, /tersembunyi=\{\{ urut: kueriAktif\.urut \}\}/);
+    });
+  });
+
+  describe('keadaan kosong membedakan "tidak cocok" dari "belum ada"', () => {
+    // Kalimat "Belum ada data" pada hasil pencarian membuat admin menyimpulkan
+    // barisnya sudah terhapus, padahal ia hanya tidak cocok dengan kata yang
+    // diketik. Dan dengan pencarian, keadaan kosong adalah keadaan yang PALING
+    // sering muncul di keempat halaman ini.
+    const BERKAS = [
+      jalurDaftar('billboards', 'page.tsx'),
+      jalurDaftar('users', 'UserClientPage.tsx'),
+      jalurDaftar('pengajuan', 'page.tsx'),
+      jalurDaftar('orders', 'TransactionClient.tsx'),
+    ];
+
+    for (const jalur of BERKAS) {
+      it(path.basename(path.dirname(jalur)) + '/' + path.basename(jalur), () => {
+        const kode = kodeSajaAny(jalur);
+
+        // Kedua kalimat harus ADA, dan harus BERBEDA. Memeriksa keberadaannya
+        // saja tidak cukup: di `UserClientPage` frasa "cocok dengan" juga dipakai
+        // subjudulnya ("3 pengguna cocok dengan …"), jadi keadaan kosong yang
+        // memakai "Belum ada" pada KEDUA cabang tetap lolos — dan itulah cacat
+        // aslinya: admin membaca "Belum ada pengguna" di atas hasil pencarian,
+        // lalu menyimpulkan datanya sudah terhapus.
+        const cocok = kode.match(/(?:Tidak ada|tidak ada)[^\n]*cocok dengan[^\n]*/g) ?? [];
+        assert.ok(cocok.length > 0, 'tidak ada kalimat "tidak ada yang cocok"');
+        for (const kalimat of cocok) {
+          assert.doesNotMatch(kalimat, /Belum ada/, kalimat);
+        }
+        assert.match(kode, /Belum ada/);
+
+        // Dan kalimatnya dipilih oleh `kataKunci`, bukan oleh panjang daftar:
+        // daftar kosong TANPA pencarian adalah "belum ada", dan daftar kosong
+        // DENGAN pencarian adalah "tidak ada yang cocok". Hanya `kataKunci` yang
+        // bisa membedakan keduanya.
+        assert.match(kode, /kataKunci (?:!==|===) ''/);
+      });
+    }
   });
 });

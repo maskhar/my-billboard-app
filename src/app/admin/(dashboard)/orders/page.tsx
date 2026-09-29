@@ -14,8 +14,56 @@ import Link from 'next/link';
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import KotakCari from '@/components/admin/KotakCari';
+import { PANJANG_NOMOR_PESANAN } from '@/lib/nomor-pesanan';
 import { redirect } from 'next/navigation';
+
+/**
+ * Tab saringan yang sah. `ALL` bukan saringan — ia berarti tidak menyaring.
+ *
+ * Daftarnya dituliskan, bukan disimpulkan dari deretan `if` di bawah, karena
+ * nilai dari URL kini DIPERIKSA terhadapnya. Sebelumnya `paramsQuery.status`
+ * diterima apa adanya: `?status=SELESAI` (nama tab dalam Bahasa Indonesia —
+ * wajar diketik orang yang menyalin tulisan di tombolnya) tidak cocok dengan
+ * satu pun `if`, jadi `whereClause` tetap kosong dan SELURUH transaksi
+ * ditampilkan sementara tidak ada tab yang tersorot. Admin membacanya sebagai
+ * hasil saringan.
+ */
+const TAB_STATUS = ['ALL', 'PENDING', 'PROGRESS', 'ACTIVE', 'REFUND', 'DONE'] as const;
+
+// Label dan warna dipisah dari daftar kuncinya supaya `Record<…>` di bawah
+// memaksa setiap kunci baru punya keduanya. Sebelumnya keenam tab ditulis satu
+// per satu sebagai `<Link>`: menambah tab ketujuh berarti menyalin satu baris
+// panjang, dan satu tab pernah lahir dengan `status` yang tidak pernah ditulis
+// database (`REFUND_REQUESTED`) tanpa satu pun galat.
+const LABEL_TAB: Record<(typeof TAB_STATUS)[number], string> = {
+  ALL: 'Semua',
+  PENDING: 'Pending',
+  PROGRESS: 'Dikerjakan',
+  ACTIVE: 'Aktif',
+  REFUND: 'Refund',
+  DONE: 'Selesai',
+};
+
+const WARNA_TAB_AKTIF: Record<(typeof TAB_STATUS)[number], string> = {
+  ALL: 'bg-gray-800',
+  PENDING: 'bg-yellow-500',
+  PROGRESS: 'bg-purple-600',
+  ACTIVE: 'bg-green-600',
+  REFUND: 'bg-blue-600',
+  DONE: 'bg-red-500',
+};
+
+const WARNA_TAB_HOVER: Record<(typeof TAB_STATUS)[number], string> = {
+  ALL: 'hover:bg-gray-50',
+  PENDING: 'hover:bg-yellow-50',
+  PROGRESS: 'hover:bg-purple-50',
+  ACTIVE: 'hover:bg-green-50',
+  REFUND: 'hover:bg-blue-50',
+  DONE: 'hover:bg-red-50',
+};
 
 /**
  * Kolom Payment yang boleh menyeberang ke komponen client.
@@ -42,7 +90,7 @@ const PILIH_PEMBAYARAN = {
 export default async function AdminTransactionsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; halaman?: string }>;
+  searchParams: Promise<{ status?: string; halaman?: string; q?: string }>;
 }) {
   const paramsQuery = await searchParams;
   const session = await getServerSession(authOptions);
@@ -58,7 +106,21 @@ export default async function AdminTransactionsPage({
   //    maksudnya: yang ditangani di sini adalah sesi yang tidak ada.
   const currentUserRole: Role = session?.user?.role ?? Role.USER;
 
-  const filterStatus = paramsQuery.status || 'ALL';
+  // `bacaPilihan`, bukan `|| 'ALL'`. Nilai asing kini jatuh ke `ALL` SECARA
+  // EKSPLISIT, sehingga tab yang tersorot selalu cocok dengan baris yang
+  // ditampilkan. Sebelumnya nilai asing tetap tersimpan di `filterStatus`: tidak
+  // satu pun `if` di bawah cocok, `whereClause` tetap kosong, seluruh transaksi
+  // ditampilkan, dan tidak ada tab yang tersorot untuk memberi tahu itu.
+  const filterStatus = bacaPilihan(paramsQuery.status, TAB_STATUS, 'ALL');
+
+  // Kata kunci pencarian. DI SERVER, bukan di komponen client.
+  //
+  // Sebelumnya pencarian halaman ini adalah `useState` + `Array.filter` di
+  // `TransactionClient` atas prop `transactions` — yaitu atas 25 baris halaman
+  // ini. Pada tabel 4.000 baris, admin mengetik nomor pesanan yang ADA dan
+  // membaca `Tidak ada pesanan yang cocok dengan "…"`. Butir audit 5.19
+  // ditandai tuntas atas pencarian yang menjawab salah.
+  const kataKunci = bacaKataKunci(paramsQuery.q);
 
   // `Prisma.BookingWhereInput`, bukan `any`. Dengan `any`, nama status yang
   // salah tulis di kanan (`'REFUND_REQUESTED'` — persis cacat yang dicatat
@@ -85,6 +147,46 @@ export default async function AdminTransactionsPage({
   // tidak muncul di tab mana pun yang berarti "sedang dikerjakan".
   if (filterStatus === 'PROGRESS') whereClause.status = { in: ['DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION'] };
   if (filterStatus === 'DONE') whereClause.status = { in: ['REFUNDED', 'CANCELLED'] };
+
+  if (kataKunci !== '') {
+    // `AND`-nya implisit: `whereClause.status` dan `whereClause.OR` berdampingan
+    // di objek yang sama, dan Prisma menggabungkan properti sekerabat dengan
+    // AND. Jadi pencarian TIDAK membocorkan baris dari tab lain — admin yang
+    // mencari di tab "Refund" tetap hanya melihat pesanan refund.
+    //
+    // Nomor pesanan dicari dengan `endsWith`, bukan `contains`, dan itu bukan
+    // sekadar optimasi: yang tertera di layar, di invoice, dan yang dibacakan
+    // pembeli lewat telepon adalah `labelPesanan(id)` — 8 KARAKTER TERAKHIR id,
+    // dalam huruf besar (lihat `src/lib/nomor-pesanan.ts`). `contains` atas
+    // potongan itu mencocokkan juga bagian TENGAH cuid pesanan lain, sehingga
+    // satu nomor yang dicari memunculkan beberapa pesanan yang tidak ada
+    // hubungannya — dan admin tidak punya cara membedakan mana yang ia maksud.
+    //
+    // Awalan `#` dibuang lebih dulu: nomor yang dibaca admin di layar
+    // memuatnya, jadi ia akan ikut tersalin saat disalin-tempel.
+    //
+    // `mode: 'insensitive'` pada kolom `id` bukan kelalaian: nomor tampilannya
+    // huruf besar sedangkan cuid di database huruf kecil, jadi tanpa itu
+    // menyalin nomor dari layar TIDAK menemukan satu baris pun.
+    const nomor = kataKunci.replace(/^#/, '').trim();
+
+    whereClause.OR = [
+      // Potongan yang lebih panjang daripada nomor tampilannya tidak mungkin
+      // menjadi nomor pesanan, dan `endsWith` atasnya hanya membebani database.
+      ...(nomor !== '' && nomor.length <= PANJANG_NOMOR_PESANAN
+        ? [{ id: { endsWith: nomor, mode: Prisma.QueryMode.insensitive } }]
+        : []),
+      { billboard: { title: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
+      { user: { name: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
+      { user: { email: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
+      // Nomor WA dicari apa adanya, TANPA normalisasi. Kolomnya menyimpan bentuk
+      // `628…` (lihat `src/lib/telepon.ts`), jadi `contains` atas `812…` yang
+      // diketik admin tetap menemukannya — sementara menormalkan kata kuncinya
+      // lebih dulu akan mengubah `0812` menjadi `62812` dan membuat pencarian
+      // atas potongan tengah nomor gagal.
+      { user: { whatsapp: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
+    ];
+  }
 
   // Relasi `user` sebelumnya diambil utuh (`user: true`), sehingga hash
   // password, otpCode, dan otpExpires milik tiap pemesan ikut terkirim ke
@@ -122,15 +224,22 @@ export default async function AdminTransactionsPage({
 
   const paginasi = hitungPaginasi(halamanDiminta, totalTransaksi);
 
+  // Saringan yang sedang aktif dikumpulkan SEKALI lalu dipakai oleh pengalihan,
+  // navigasi halaman, dan kotak cari. Tiga salinan dari daftar yang sama adalah
+  // tiga tempat yang akan menyimpang — dan yang menyimpang di sini adalah
+  // saringan yang hilang tanpa suara saat admin menekan salah satu tombolnya.
+  const kueriAktif = {
+    status: filterStatus === 'ALL' ? undefined : filterStatus,
+    q: kataKunci === '' ? undefined : kataKunci,
+  };
+
   // Saringan status IKUT dibawa ke pengalihan. Tanpa itu, admin yang membuka
-  // `?status=NEED_REFUND&halaman=99` mendarat di seluruh transaksi — tabnya
+  // `?status=REFUND&halaman=99` mendarat di seluruh transaksi — tabnya
   // berganti tanpa satu pun petunjuk, dan itu justru tab yang paling mendesak.
+  // Kata kuncinya ikut karena alasan yang sama: jumlah halaman HASIL PENCARIAN
+  // jauh lebih kecil, jadi `?q=budi&halaman=9` adalah URL yang biasa terjadi.
   if (paginasi.terlaluJauh) {
-    redirect(
-      urlHalaman('/admin/orders', paginasi.totalHalaman, {
-        status: filterStatus === 'ALL' ? undefined : filterStatus,
-      }),
-    );
+    redirect(urlHalaman('/admin/orders', paginasi.totalHalaman, kueriAktif));
   }
 
   const { halaman, totalHalaman } = paginasi;
@@ -222,23 +331,62 @@ export default async function AdminTransactionsPage({
             <h1 className="text-2xl font-bold text-gray-800">Transactions</h1>
             {/* Dulu tertulis `transactions.length` — sejak ada paginasi, itu
                 jumlah baris DI HALAMAN INI, bukan jumlah transaksi. Admin
-                akan membaca "25 transaksi" untuk usaha yang punya ribuan. */}
-            <p className="text-gray-500 text-sm">Total: <span className="font-bold text-utero">{totalTransaksi}</span> transaksi</p>
+                akan membaca "25 transaksi" untuk usaha yang punya ribuan.
+
+                Sejak pencarian pindah ke server, angka ini adalah jumlah baris
+                YANG COCOK, bukan jumlah seluruh tabel — jadi kalimatnya ikut
+                menyebutkan itu. "Total: 3 transaksi" pada tabel 4.000 baris
+                adalah angka yang benar dengan label yang salah. */}
+            <p className="text-gray-500 text-sm">
+              {kataKunci === '' ? 'Total: ' : 'Cocok: '}
+              <span className="font-bold text-utero">{totalTransaksi}</span> transaksi
+              {kataKunci !== '' && <> untuk &ldquo;{kataKunci}&rdquo;</>}
+            </p>
         </div>
-        
-        {/* Filter Tabs */}
+
+        {/* Filter Tabs. Tautannya lewat `urlHalaman` supaya kata kunci pencarian
+            ikut terbawa saat tab berganti — dan supaya nilainya di-encode.
+            Sebelumnya tautannya dirangkai dengan tangan (`?status=PENDING`),
+            yang tidak punya tempat untuk membawa apa pun selain status. */}
         <div className="flex flex-wrap gap-2 p-1 bg-white border border-gray-200 rounded-lg shadow-sm">
-            <Link href='/admin/orders' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='ALL'?'bg-gray-800 text-white shadow':'text-gray-500 hover:bg-gray-50'}`}>Semua</Link>
-            <Link href='/admin/orders?status=PENDING' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='PENDING'?'bg-yellow-500 text-white shadow':'text-gray-500 hover:bg-yellow-50'}`}>Pending</Link>
-            <Link href='/admin/orders?status=PROGRESS' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='PROGRESS'?'bg-purple-600 text-white shadow':'text-gray-500 hover:bg-purple-50'}`}>Dikerjakan</Link>
-            <Link href='/admin/orders?status=ACTIVE' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='ACTIVE'?'bg-green-600 text-white shadow':'text-gray-500 hover:bg-green-50'}`}>Aktif</Link>
-            <Link href='/admin/orders?status=REFUND' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='REFUND'?'bg-blue-600 text-white shadow':'text-gray-500 hover:bg-blue-50'}`}>Refund</Link>
-            <Link href='/admin/orders?status=DONE' className={`px-4 py-2 rounded-md text-xs font-bold transition ${filterStatus==='DONE'?'bg-red-500 text-white shadow':'text-gray-500 hover:bg-red-50'}`}>Selesai</Link>
+            {TAB_STATUS.map((kunci) => {
+              const aktif = filterStatus === kunci;
+              return (
+                <Link
+                  key={kunci}
+                  href={urlHalaman('/admin/orders', 1, {
+                    status: kunci === 'ALL' ? undefined : kunci,
+                    q: kataKunci === '' ? undefined : kataKunci,
+                  })}
+                  className={`px-4 py-2 rounded-md text-xs font-bold transition ${
+                    aktif ? `${WARNA_TAB_AKTIF[kunci]} text-white shadow` : `text-gray-500 ${WARNA_TAB_HOVER[kunci]}`
+                  }`}
+                >
+                  {LABEL_TAB[kunci]}
+                </Link>
+              );
+            })}
         </div>
       </div>
+
+      {/* Kotak cari DI ATAS daftar, bukan di dalam kolom kirinya seperti
+          sebelumnya: yang disaringnya sekarang adalah seluruh tabel, jadi
+          menaruhnya di dalam panel daftar akan menyarankan cakupan yang lebih
+          sempit daripada yang sebenarnya. */}
+      <div className="mb-6">
+        <KotakCari
+          basis="/admin/orders"
+          nilai={kataKunci}
+          label="Cari pesanan berdasarkan nomor, billboard, nama, email, atau nomor WhatsApp"
+          placeholder="Cari nomor pesanan, billboard, penyewa…"
+          tersembunyi={{ status: kueriAktif.status }}
+        />
+      </div>
+
       <TransactionClient
         transactions={transactionsUntukClient}
         currentUserRole={currentUserRole}
+        kataKunci={kataKunci}
       />
 
       {/* Jumlah barisnya sekarang ikut tertulis. Sebelumnya halaman ini
@@ -251,7 +399,7 @@ export default async function AdminTransactionsPage({
           totalHalaman={totalHalaman}
           total={totalTransaksi}
           satuan="transaksi"
-          parameter={{ status: filterStatus === 'ALL' ? undefined : filterStatus }}
+          parameter={kueriAktif}
         />
       </div>
     </div>

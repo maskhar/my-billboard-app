@@ -81,6 +81,16 @@ interface Props {
   // diam-diam selalu tertutup. `import type` terhapus saat build, jadi tidak
   // ada Prisma yang ikut ke bundle client.
   currentUserRole: Role;
+  /**
+   * Kata kunci yang SUDAH dipakai server untuk menyaring, semata untuk menulis
+   * keadaan kosong. Komponen ini tidak menyaring apa pun dengannya — daftar yang
+   * tiba sudah merupakan hasilnya.
+   *
+   * Tanpa prop ini, keadaan kosong hanya bisa berbunyi "Belum ada pesanan",
+   * yang pada hasil pencarian adalah kalimat yang salah: pesanan memang ada,
+   * hanya tidak ada yang cocok.
+   */
+  kataKunci?: string;
 }
 
 const LABEL_TUJUAN: Record<string, string> = {
@@ -262,37 +272,56 @@ const InfoPair = ({ label, value }: { label: string, value: string | undefined |
   </div>
 );
 
-export default function TransactionClient({ transactions, currentUserRole }: Props) {
-  const [selected, setSelected] = useState<TransaksiUntukClient | null>(transactions.length > 0 ? transactions[0] : null);
+export default function TransactionClient({ transactions, currentUserRole, kataKunci = '' }: Props) {
+  // Pesanan yang sedang dibuka disimpan sebagai ID + IDENTITAS DAFTARNYA, bukan
+  // sebagai salinan objeknya.
+  //
+  // Sebelumnya: `useState(transactions.length > 0 ? transactions[0] : null)`.
+  // Nilai awal `useState` hanya dipakai saat komponen pertama dipasang, dan
+  // navigasi Next di dalam segmen yang sama TIDAK memasang ulang komponen ini.
+  // Jadi begitu daftarnya berganti — halaman berikutnya, tab lain, dan sejak
+  // sekarang juga hasil pencarian — panel detail di kanan tetap menampilkan
+  // pesanan dari daftar SEBELUMNYA, yang tidak ada di daftar di kirinya. Admin
+  // membaca nomor pesanan yang tidak ia cari, di sebelah daftar yang tidak
+  // memuatnya, dan tombol aksi di panel itu bekerja atas pesanan tersebut.
+  //
+  // `kunci` menyimpan daftar mana yang sedang berlaku saat pilihannya dibuat.
+  // Saat daftarnya berganti, pilihan lama diabaikan dan baris pertama yang baru
+  // yang dibuka — cara React menyesuaikan state terhadap props tanpa efek,
+  // sehingga tidak ada satu pun render yang sempat menampilkan pasangan yang
+  // salah.
+  const kunciDaftar = transactions.map((t) => t.id).join(',');
+  const [pilihan, setPilihan] = useState<{ kunci: string; id: string | null }>({
+    kunci: kunciDaftar,
+    id: transactions[0]?.id ?? null,
+  });
+
+  const idTerpilih = pilihan.kunci === kunciDaftar ? pilihan.id : (transactions[0]?.id ?? null);
+  const selected = idTerpilih === null ? null : (transactions.find((t) => t.id === idTerpilih) ?? null);
+
+  const pilih = (id: string | null) => setPilihan({ kunci: kunciDaftar, id });
+
   const router = useRouter();
   const toast = useToast();
   const konfirmasi = useKonfirmasi();
 
-  // Kotak `placeholder="Search..."` di kolom kiri dulu tidak punya `value`
-  // maupun `onChange`: ia menerima ketikan lalu membuangnya. Daftar pesanan di
-  // halaman ini juga tidak punya paginasi, jadi setelah beberapa ratus pesanan
-  // satu-satunya cara menemukan satu transaksi adalah menggulir — dan kotak
-  // yang tampak seperti pencarian membuat operator berhenti menggulir, mengetik
-  // nomor pesanan, lalu menyimpulkan pesanannya tidak ada.
-  const [cari, setCari] = useState('');
-
-  const kunci = cari.trim().toLowerCase();
-  const terlihat = !kunci
-    ? transactions
-    : transactions.filter((t) =>
-        [
-          // Nomor pesanan sebagaimana YANG DILIHAT operator, bukan cuid mentah:
-          // yang tertera di layar dan di invoice adalah hasil `labelPesanan`.
-          labelPesanan(t.id),
-          t.billboard.title,
-          t.user.name,
-          t.user.email,
-          t.user.whatsapp,
-        ]
-          .filter((nilai): nilai is string => typeof nilai === 'string' && nilai !== '')
-          .some((nilai) => nilai.toLowerCase().includes(kunci))
-      );
-
+  // PENCARIANNYA DI SERVER SEKARANG, dan komponen ini tidak menyaring apa pun.
+  //
+  // Riwayatnya: kotak `placeholder="Search..."` di kolom kiri mula-mula tidak
+  // punya `value` maupun `onChange` — ia menerima ketikan lalu membuangnya
+  // (butir 5.19). Perbaikannya waktu itu memasang `useState` + `Array.filter`
+  // atas prop `transactions`, dan itu memperbaiki gejalanya sambil memasang
+  // cacat yang lebih buruk: `transactions` adalah 25 BARIS HALAMAN INI.
+  //
+  // Jadi pada tabel 4.000 baris, operator mengetik nomor pesanan yang ADA, dan
+  // layar ini menjawab `Tidak ada pesanan yang cocok dengan "…"` setelah
+  // memeriksa 25 baris — sementara header halaman yang sama menulis jumlah
+  // seluruh tabel. Tidak ada satu pun tanda di layar yang membuat operator
+  // curiga bahwa jawabannya hanya berlaku atas satu halaman.
+  //
+  // Sekarang `orders/page.tsx` menyaring lewat `where` di database dan
+  // menyerahkan kata kuncinya ke sini HANYA untuk menulis keadaan kosong yang
+  // jujur. `transactions` yang tiba sudah merupakan hasil pencarian.
   const handleDesignStatusUpdate = async (status: 'APPROVED' | 'REJECTED') => {
     if (!selected) return;
 
@@ -368,31 +397,24 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       
       {/* Kolom Kiri: Daftar Transaksi */}
       <div className="lg:col-span-4 bg-white rounded-xl shadow-sm border border-gray-200 p-4 flex flex-col">
-        <input
-          type="search"
-          value={cari}
-          onChange={(e) => setCari(e.target.value)}
-          aria-label="Cari pesanan berdasarkan nomor, billboard, nama, email, atau telepon"
-          placeholder="Cari nomor pesanan, billboard, penyewa..."
-          className="w-full px-3 py-2 rounded-md border text-sm mb-4"
-        />
-        {kunci !== '' && (
-          <p className="text-xs text-gray-500 mb-2" aria-live="polite">
-            {terlihat.length} dari {transactions.length} pesanan cocok.
-          </p>
-        )}
+        {/* Kotak carinya tidak lagi di sini — ia ada di atas daftar sebagai
+            formulir GET (`KotakCari`), karena yang disaringnya adalah seluruh
+            tabel dan bukan panel ini. Ringkasan "x dari y cocok" juga hilang
+            bersamanya: `transactions.length` di posisi ini adalah 25, jadi
+            kalimat apa pun yang dibangun darinya salah. Jumlah yang cocok kini
+            ditulis header halaman dari `count` database. */}
         <div className="flex-1 overflow-y-auto">
-          {terlihat.length === 0 && (
+          {transactions.length === 0 && (
             <p className="p-4 text-center text-sm text-gray-400">
-              {kunci
-                ? `Tidak ada pesanan yang cocok dengan "${cari.trim()}".`
+              {kataKunci !== ''
+                ? `Tidak ada pesanan yang cocok dengan "${kataKunci}".`
                 : 'Belum ada pesanan.'}
             </p>
           )}
-          {terlihat.map((t) => (
+          {transactions.map((t) => (
             <button
               key={t.id}
-              onClick={() => setSelected(t)}
+              onClick={() => pilih(t.id)}
               className={`w-full text-left p-4 rounded-lg mb-2 transition ${selected?.id === t.id ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
             >
               <div className="flex justify-between items-center mb-1">
@@ -410,7 +432,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       <div className="lg:col-span-8">
         {selected ? (
           <div className="bg-white rounded-xl shadow-sm border border-gray-200 h-full p-8 relative overflow-y-auto">
-              <button onClick={() => setSelected(null)} className="absolute top-4 right-4 p-2 rounded-full hover:bg-gray-100 transition"><X size={20}/></button>
+              <button onClick={() => pilih(null)} className="absolute top-4 right-4 p-2 rounded-full hover:bg-gray-100 transition"><X size={20}/></button>
 
               {/* Header Detail */}
               <div className="flex justify-between items-start pb-4 border-b mb-6">

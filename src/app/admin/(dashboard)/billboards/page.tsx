@@ -3,11 +3,14 @@ import Link from 'next/link';
 import { Plus, MapPin, Edit, Eye, Clock } from 'lucide-react';
 import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn';
 import StatusChanger from '@/components/admin/StatusChanger';
-import { Billboard } from '@prisma/client';
+import { Billboard, Prisma } from '@prisma/client';
 import { angkaRupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import KepalaUrut from '@/components/admin/KepalaUrut';
+import KotakCari from '@/components/admin/KotakCari';
 import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
@@ -18,6 +21,35 @@ type BillboardWithUsers = Billboard & {
   updatedBy: { id: string; name: string | null } | null;
   createdBy: { id: string; name: string | null } | null;
 }
+
+/**
+ * Urutan yang boleh diminta URL, beserta `orderBy` Prisma-nya.
+ *
+ * Daftarnya TERTUTUP, dan itu bukan sekadar kehati-hatian: `orderBy` yang
+ * dirangkai dari teks URL berarti nama kolom apa pun bisa diminta pengunjung,
+ * termasuk kolom yang tidak dirender halaman ini. Prisma menolak nama yang tidak
+ * dikenalnya dengan melempar — jadi `?urut=password` menghasilkan layar galat
+ * penuh, dan yang lebih buruk, nama kolom yang KEBETULAN ada menjadi saluran
+ * untuk menyimpulkan isi tabel dari urutan barisnya.
+ *
+ * Peta ini juga yang membuat kunci urutnya boleh berbeda dari nama kolom
+ * database. `harga-naik` lebih jelas di URL daripada `price:asc`, dan tidak
+ * membocorkan nama kolom.
+ */
+const URUT: Record<string, Prisma.BillboardOrderByWithRelationInput> = {
+  // `terbaru` adalah bakunya: yang paling sering dicari admin adalah titik yang
+  // baru saja ia sunting.
+  terbaru: { updatedAt: 'desc' },
+  terlama: { updatedAt: 'asc' },
+  'judul-naik': { title: 'asc' },
+  'judul-turun': { title: 'desc' },
+  'harga-naik': { price: 'asc' },
+  'harga-turun': { price: 'desc' },
+  'status-naik': { status: 'asc' },
+  'status-turun': { status: 'desc' },
+};
+
+const KUNCI_URUT = Object.keys(URUT) as [string, ...string[]];
 
 // Sebelumnya lewat HTTP ke backend NestJS. Halaman ini Server Component dan
 // akses ke halaman admin sudah dijaga middleware, jadi query langsung sudah
@@ -36,11 +68,21 @@ type BillboardWithUsers = Billboard & {
 // setelah `count` diketahui. Yang dijepit tidak bisa dipakai di sini — ia baru
 // ada setelah query ini selesai — jadi nama `halaman` di posisi ini adalah nama
 // yang mengundang salah pakai.
-async function getAdminBillboards(halamanDiminta: number): Promise<{ data: BillboardWithUsers[]; total: number }> {
+//
+// `where` dan `orderBy` diserahkan pemanggil, sudah dalam bentuk Prisma. Fungsi
+// ini sengaja TIDAK membaca `searchParams` sendiri: keputusan tentang nilai apa
+// yang sah diambil sekali, di satu tempat, oleh pemanggilnya — karena keputusan
+// yang sama juga menentukan tautan tab dan tautan paginasinya.
+async function getAdminBillboards(
+  halamanDiminta: number,
+  where: Prisma.BillboardWhereInput,
+  orderBy: Prisma.BillboardOrderByWithRelationInput,
+): Promise<{ data: BillboardWithUsers[]; total: number }> {
   try {
     const [data, total] = await prisma.$transaction([
       prisma.billboard.findMany({
-        orderBy: { updatedAt: 'desc' },
+        where,
+        orderBy,
         include: {
           createdBy: { select: { id: true, name: true } },
           updatedBy: { select: { id: true, name: true } },
@@ -48,7 +90,7 @@ async function getAdminBillboards(halamanDiminta: number): Promise<{ data: Billb
         skip: (halamanDiminta - 1) * PER_HALAMAN,
         take: PER_HALAMAN,
       }),
-      prisma.billboard.count(),
+      prisma.billboard.count({ where }),
     ]);
     return { data, total };
   } catch (error) {
@@ -64,7 +106,7 @@ async function getAdminBillboards(halamanDiminta: number): Promise<{ data: Billb
 export default async function AdminBillboardsPage({
   searchParams,
 }: {
-  searchParams?: Promise<{ halaman?: string }>;
+  searchParams?: Promise<{ halaman?: string; urut?: string; q?: string }>;
 }) {
   const paramsQuery = await searchParams;
 
@@ -73,8 +115,42 @@ export default async function AdminBillboardsPage({
   // ke 1, beserta `Infinity` dan parameter ganda (`?halaman=2&halaman=5`).
   const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
 
-  const { data: billboards, total } = await getAdminBillboards(halamanDiminta);
+  const urutAktif = bacaPilihan(paramsQuery?.urut, KUNCI_URUT, 'terbaru');
+  const kataKunci = bacaKataKunci(paramsQuery?.q);
+
+  // Pencarian inventori DI DATABASE, bukan di browser. Halaman ini tidak pernah
+  // punya kotak cari sama sekali — satu-satunya cara menemukan satu titik di
+  // antara ribuan adalah menebak halaman berapa ia berada.
+  //
+  // `sku` ikut dicari karena itulah yang tertulis di kontrak dan surat jalan,
+  // dan itulah yang dibacakan tim lapangan lewat telepon. `address` ikut karena
+  // titik lebih sering disebut lewat lokasinya daripada judulnya.
+  const where: Prisma.BillboardWhereInput =
+    kataKunci === ''
+      ? {}
+      : {
+          OR: [
+            { title: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+            { sku: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+            { address: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
+          ],
+        };
+
+  const { data: billboards, total } = await getAdminBillboards(halamanDiminta, where, URUT[urutAktif]);
   const paginasi = hitungPaginasi(halamanDiminta, total);
+
+  // Urutan dan kata kunci dikumpulkan sekali, lalu dipakai pengalihan, navigasi
+  // halaman, kepala kolom, dan kotak cari. Empat salinan dari daftar yang sama
+  // adalah empat tempat yang akan menyimpang — dan yang menyimpang adalah
+  // saringan yang hilang tanpa suara saat admin menekan salah satu tombolnya.
+  //
+  // `urut: 'terbaru'` dibuang dari tautan karena ia bakunya: URL yang menuliskan
+  // nilai baku tidak salah, tapi ia membuat tautan "Berikutnya" berbeda
+  // tergantung dari mana admin datang, dan itu menyulitkan membandingkan dua URL.
+  const kueriAktif = {
+    urut: urutAktif === 'terbaru' ? undefined : urutAktif,
+    q: kataKunci === '' ? undefined : kataKunci,
+  };
 
   // Nomor di luar jangkauan DIALIHKAN, tidak dibetulkan diam-diam: sebelumnya
   // `?halaman=999` pada 30 baris merender tabel kosong dengan tulisan "Halaman
@@ -82,8 +158,13 @@ export default async function AdminBillboardsPage({
   // kosong. Admin harus menyunting URL dengan tangan untuk keluar, dan URL
   // halaman admin memang di-bookmark lalu dibuka lagi setelah barisnya
   // berkurang.
+  //
+  // Urutan dan kata kunci ikut dibawa. Jumlah halaman HASIL PENCARIAN jauh lebih
+  // kecil daripada jumlah halaman seluruh inventori, jadi `?q=jakarta&halaman=9`
+  // adalah URL yang biasa terjadi — dan pengalihan yang membuang `q` mendaratkan
+  // admin di seluruh inventori tanpa satu pun petunjuk bahwa pencariannya batal.
   if (paginasi.terlaluJauh) {
-    redirect(urlHalaman('/admin/billboards', paginasi.totalHalaman));
+    redirect(urlHalaman('/admin/billboards', paginasi.totalHalaman, kueriAktif));
   }
 
   const { halaman, totalHalaman } = paginasi;
@@ -100,6 +181,18 @@ export default async function AdminBillboardsPage({
             </Link>
         </div>
 
+        {/* Urutan ikut dibawa sebagai medan tersembunyi. Tanpa itu, menekan Cari
+            mengembalikan urutan ke bakunya tanpa satu pun tanda — dan admin yang
+            baru mengurutkan menurut harga akan membaca hasil pencarian sebagai
+            hasil yang masih terurut. */}
+        <KotakCari
+          basis="/admin/billboards"
+          nilai={kataKunci}
+          label="Cari titik berdasarkan judul, SKU, atau alamat"
+          placeholder="Cari judul, SKU, atau alamat…"
+          tersembunyi={{ urut: kueriAktif.urut }}
+        />
+
         {/* Tanpa pembungkus penggulung, luberan tabel ini bocor ke `<body>`:
             yang menggulung adalah SELURUH halaman, jadi header dan sidebar
             admin ikut bergeser mengikuti kolom yang dikejar. `overflow-x-auto`
@@ -114,19 +207,89 @@ export default async function AdminBillboardsPage({
             <table className="w-full text-left min-w-[820px]">
                 <thead className="bg-gray-50 text-xs uppercase font-bold text-gray-500 border-b border-gray-100">
                     <tr>
+                        {/* Kolom Foto tidak bisa diurutkan, dan itu disengaja:
+                            urutan menurut URL gambar bukan urutan yang punya
+                            arti bagi siapa pun. Kepala kolom yang bisa diklik
+                            tanpa menghasilkan urutan yang berguna hanya
+                            mengajak salah klik. */}
                         <th className="px-6 py-4">Foto</th>
-                        <th className="px-6 py-4">Info Produk</th>
-                        <th className="px-6 py-4">Audit (Admin)</th>
-                        <th className="px-6 py-4">Status</th>
+                        <KepalaUrut
+                          className="px-6 py-4"
+                          label="Info Produk"
+                          basis="/admin/billboards"
+                          urutAktif={urutAktif}
+                          naik="judul-naik"
+                          turun="judul-turun"
+                          parameter={kueriAktif}
+                        />
+                        {/* Kolom "Audit (Admin)" menampilkan pengubah TERAKHIR
+                            beserta waktunya, jadi urutannya `updatedAt` — yaitu
+                            `terbaru`/`terlama`, kunci yang sama dengan urutan
+                            bakunya. Mengurutkan menurut NAMA pengubah akan
+                            mengurutkan relasi, dan nama itu bukan yang dicari
+                            admin saat ia menekan kolom ini. */}
+                        <KepalaUrut
+                          className="px-6 py-4"
+                          label="Audit (Admin)"
+                          basis="/admin/billboards"
+                          urutAktif={urutAktif}
+                          naik="terlama"
+                          turun="terbaru"
+                          parameter={kueriAktif}
+                        />
+                        {/* Satu kolom, dua angka — status dan harga — jadi ia
+                            punya dua kepala urut berdampingan. Menaruh keduanya
+                            di satu tautan berarti salah satunya tidak pernah
+                            bisa diminta. */}
+                        <th className="px-6 py-4" aria-sort={
+                          urutAktif === 'status-naik' ? 'ascending'
+                          : urutAktif === 'status-turun' ? 'descending'
+                          : 'none'
+                        }>
+                          <span className="flex flex-col gap-1">
+                            <Link
+                              href={urlHalaman('/admin/billboards', 1, {
+                                ...kueriAktif,
+                                urut: urutAktif === 'status-naik' ? 'status-turun' : 'status-naik',
+                              })}
+                              className="inline-flex items-center gap-1 hover:text-gray-800"
+                            >
+                              Status
+                              <span aria-hidden="true" className={urutAktif.startsWith('status-') ? 'text-utero' : 'text-gray-300'}>
+                                {urutAktif === 'status-naik' ? '▲' : urutAktif === 'status-turun' ? '▼' : '↕'}
+                              </span>
+                            </Link>
+                            <Link
+                              href={urlHalaman('/admin/billboards', 1, {
+                                ...kueriAktif,
+                                urut: urutAktif === 'harga-naik' ? 'harga-turun' : 'harga-naik',
+                              })}
+                              className="inline-flex items-center gap-1 text-[10px] font-bold hover:text-gray-800"
+                            >
+                              Harga
+                              <span aria-hidden="true" className={urutAktif.startsWith('harga-') ? 'text-utero' : 'text-gray-300'}>
+                                {urutAktif === 'harga-naik' ? '▲' : urutAktif === 'harga-turun' ? '▼' : '↕'}
+                              </span>
+                            </Link>
+                          </span>
+                        </th>
                         <th className="px-6 py-4 text-center">Aksi</th>
                     </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100 text-sm">
                     {billboards.length === 0 ? (
-                        <tr><td colSpan={5} className="p-8 text-center text-gray-400">Belum ada data.</td></tr>
+                        // Keadaan kosong membedakan "tidak ada yang cocok" dari
+                        // "belum ada data". Keduanya terlihat sama di layar, dan
+                        // yang pertama membuat admin menyimpulkan titiknya sudah
+                        // terhapus.
+                        <tr><td colSpan={5} className="p-8 text-center text-gray-400">
+                          {kataKunci !== ''
+                            ? `Tidak ada titik yang cocok dengan "${kataKunci}".`
+                            : 'Belum ada data.'}
+                        </td></tr>
                     ) : billboards.map((item) => (
                         <tr key={item.id} className="hover:bg-gray-50 transition group">
-                            
+
                             <td className="px-6 py-3 w-24">
                                 <Link href={`/billboard/${item.slug}`} target="_blank">
                                     {/*
@@ -151,7 +314,7 @@ export default async function AdminBillboardsPage({
                                     <img src={item.mainImage} alt={`Foto ${item.title}`} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
                                 </Link>
                             </td>
-                            
+
                             <td className="px-6 py-3 max-w-[250px]">
                                 <div className="font-bold text-gray-800 line-clamp-1">{item.title}</div>
                                 <div className="text-[10px] font-mono text-gray-400 mt-0.5">{item.sku || '-'}</div>
@@ -204,6 +367,7 @@ export default async function AdminBillboardsPage({
                 totalHalaman={totalHalaman}
                 total={total}
                 satuan="titik"
+                parameter={kueriAktif}
               />
             </div>
         </div>
