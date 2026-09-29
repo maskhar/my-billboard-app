@@ -33,6 +33,21 @@
 // yang sudah dipasang sebelum halamannya ditulis. Dua-duanya kini ada, jadi
 // keduanya tertaut; `/list` tetap tidak dipasang karena alasannya tidak
 // berubah.
+//
+// KEBIJAKAN PRIVASI DAN KETENTUAN: DI MENU MOBILE SAJA
+// ---------------------------------------------------
+// Aplikasi ini tidak punya footer, dan tidak bisa punya dengan mudah: komponen
+// ini dipanggil di dalam 13 halaman satu per satu, bukan di layout akar, jadi
+// tidak ada satu tempat pun yang dirender di bawah setiap halaman. Sampai ada
+// footer sungguhan, kedua tautan itu ditaruh di dasar menu mobile — daftar
+// navigasi satu-satunya yang muncul di setiap halaman publik.
+//
+// Keduanya SENGAJA tidak ditaruh di bilah desktop. Bilah itu memuat empat
+// kontrol yang mengantar pengunjung ke transaksi, dan menyelipkan dua tautan
+// dokumen di antaranya memperebutkan perhatian untuk hal yang bukan tugas
+// pengunjung. Yang menggantikannya lebih baik: teks persetujuan di formulir
+// pendaftaran, pemesanan, dan pengajuan titik menautkan keduanya persis di
+// tempat datanya diminta — di mana tautan itu benar-benar dibaca.
 
 import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
@@ -284,6 +299,27 @@ const Navbar = () => {
                 <Link href="/sewakan-tempat" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-bold text-utero border border-utero/30 mt-3 text-center hover:bg-utero/5">
                     Sewakan Tempat Anda
                 </Link>
+
+                {/* Kebijakan privasi dan ketentuan.
+                    Aplikasi ini tidak punya footer — Navbar dipanggil di dalam
+                    masing-masing halaman, jadi tidak ada satu tempat pun di
+                    bawah halaman yang bisa memuat tautan ini secara global.
+                    Menu mobile adalah satu-satunya daftar navigasi yang ada di
+                    setiap halaman publik, jadi keduanya dipasang di sini —
+                    dengan ukuran kecil, karena ini bukan tugas utama pengunjung,
+                    tapi harus bisa ditemukan tanpa mencari.
+                    Teks persetujuan di formulir pendaftaran, pemesanan, dan
+                    pengajuan titik menautkan keduanya secara langsung di tempat
+                    datanya benar-benar diminta. */}
+                <div className="flex items-center justify-center gap-3 mt-4 pt-4 border-t border-gray-100">
+                    <Link href="/kebijakan-privasi" onClick={() => setIsOpen(false)} className="text-xs text-gray-500 hover:text-utero">
+                        Kebijakan Privasi
+                    </Link>
+                    <span className="text-xs text-gray-300" aria-hidden="true">|</span>
+                    <Link href="/syarat-ketentuan" onClick={() => setIsOpen(false)} className="text-xs text-gray-500 hover:text-utero">
+                        Syarat &amp; Ketentuan
+                    </Link>
+                </div>
             </div>
         </div>
       )}

@@ -69,7 +69,7 @@
 | 2 | ✅ selesai | — |
 | 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.18–5.29, 5.30, 5.33 (5.7, 5.9, 5.12 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`) |
 | 6 | 🔶 sebagian | 6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
-| 7 | 🔶 sebagian | 7.17, 7.18 |
+| 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | 🔶 sebagian | 8.9 (8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
 
 ### Commit terbaru (branch `feat/fondasi-xendit-aman`)
@@ -665,8 +665,54 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | # | Task | Ref | Status |
 |---|---|---|---|
 | 7.16 | ⚠️ **Bangun alur lupa password** — tidak ada sama sekali; `otpCode` menganggur. **User registrasi manual tidak bisa memulihkan akun selamanya** | `[06]F-019` | [x] |
-| 7.17 | ⚠️ Terbitkan halaman **Kebijakan Privasi & S&K** — mengumpulkan KTP + NPWP tanpa keduanya = risiko UU PDP | `[06]F-020` | [ ] |
-| 7.18 | Tegakkan `isVerified` (email verification) — kolom ada, tidak pernah di-gate | `[01]F-30` | [ ] |
+| 7.17 | ⚠️ Terbitkan halaman **Kebijakan Privasi & S&K** — mengumpulkan KTP + NPWP tanpa keduanya = risiko UU PDP | `[06]F-020` | [x] |
+| 7.18 | Tegakkan `isVerified` (email verification) — kolom ada, tidak pernah di-gate | `[01]F-30` | [!] |
+
+**7.17 — selesai.** `/kebijakan-privasi` dan `/syarat-ketentuan` terbit, keduanya
+Server Component. Isinya BUKAN teks di dalam JSX melainkan data di
+`src/lib/kebijakan.ts`, dan itu keputusan utamanya: test membandingkan kolom yang
+diklasifikasikan di modul itu dengan kolom `User` yang sungguh ada di
+`prisma/schema.prisma`, sehingga kolom data pribadi baru **menggagalkan suite**
+sampai kebijakannya ikut diperbarui. Kegagalan yang dicegahnya adalah kegagalan
+yang khas untuk dokumen jenis ini: ditulis sekali saat peluncuran, lalu skema
+terus bertambah tanpanya, dan enam bulan kemudian aplikasi mengumpulkan kolom
+yang tidak disebut satu pun paragraf — yaitu pengumpulan data tanpa
+pemberitahuan, persis pelanggaran yang hendak dicegah halamannya.
+
+Yang SENGAJA tidak ditulis: masa retensi berupa angka. Satu-satunya pekerjaan
+terjadwal di repo ini adalah `/api/cron/sweep`, dan ia menghanguskan pesanan
+kedaluwarsa serta token reset sandi — bukan menghapus data pribadi. Menulis
+"dihapus setelah N tahun" adalah janji yang dilanggar setiap hari sejak
+halamannya terbit, jadi ada test yang menolak pola itu. Juga tidak ada nominal
+maupun persentase: tarif punya sumbernya sendiri dan menyalinnya ke dokumen
+sengketa membuat salinan yang paling mungkin terlupakan.
+
+Penautan: aplikasi ini **tidak punya footer** — `Navbar` dipanggil di dalam 13
+halaman satu per satu, bukan di layout akar, jadi tidak ada satu tempat pun yang
+dirender di bawah setiap halaman. Keduanya karena itu ditaruh di dasar menu
+mobile, dan yang lebih penting: teks pemberitahuan dipasang di tiga titik
+pengumpulan data — `register` (di atas tombol kirim, bukan di bawahnya),
+`CheckoutForm` (tempat NPWP dan data penagihan diminta), dan
+`FormSewakanTempat`. Test menuntut kelima tautan itu tetap ada.
+
+**7.18 — ditunda, butuh migration.** Temuan intinya benar dan tidak berubah:
+`isVerified` tidak pernah menjadi gerbang di mana pun. Tapi task ini tidak bisa
+dikerjakan di fase ini karena dua hal:
+
+1. **Kolom penopangnya sudah tidak ada.** `otpCode` dan `otpExpires` dihapus di
+   task 3.27, dengan aturan yang ditulis di `prisma/schema.prisma:179-189`:
+   "Bila verifikasi OTP benar-benar dibangun nanti, kolomnya dibuat ulang
+   bersama kodenya, bukan sebelum." Alur verifikasi butuh tabel token
+   ber-`tokenHash` seperti `PasswordResetToken` → **migration baru**, yang di
+   luar batas fase ini.
+2. **Rekomendasi laporannya sendiri salah arah** (sudah tercatat di baris 793).
+   Memblokir login atas `isVerified` akan mengunci **seluruh akun yang sudah
+   ada**, karena semuanya `false` — kolomnya tidak pernah ditulis `true` oleh
+   kode mana pun. Penegakan yang benar dimulai dari mengirim surel verifikasi,
+   memberi tenggang untuk akun lama, dan baru menggerbang fitur tertentu (bukan
+   login) — urutan yang tidak muat dalam satu task.
+
+Diangkat sebagai fasenya sendiri bersama 3.20, 3.22, 5.17, dan 6.22.
 
 ---
 

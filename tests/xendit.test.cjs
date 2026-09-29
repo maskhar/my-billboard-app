@@ -22728,6 +22728,8 @@ describe('setiap halaman punya tepat satu landmark `<main>`', () => {
   const PEMILIK_LANDMARK = {
     'page.tsx': berkas('app', 'page.tsx'),
     'about/page.tsx': berkas('app', 'about', 'page.tsx'),
+    'kebijakan-privasi/page.tsx': berkas('app', 'kebijakan-privasi', 'page.tsx'),
+    'syarat-ketentuan/page.tsx': berkas('app', 'syarat-ketentuan', 'page.tsx'),
     'sewakan-tempat/page.tsx': berkas('app', 'sewakan-tempat', 'page.tsx'),
     'checkout/page.tsx': berkas('app', 'checkout', 'page.tsx'),
     'pembayaran/selesai/page.tsx': berkas('app', 'pembayaran', 'selesai', 'page.tsx'),
@@ -25287,6 +25289,283 @@ describe('audit 3.21 — tidak ada klien Supabase yang masuk kembali diam-diam',
       'kunci Supabase berawalan NEXT_PUBLIC_ akan di-inline ke bundel browser ' +
         'oleh Next.js, jadi nilainya terbaca siapa pun yang membuka situs: ' +
         bocor.join(', ')
+    );
+  });
+});
+
+// ===========================================================================
+// KEBIJAKAN PRIVASI & SYARAT KETENTUAN
+//
+// Yang dijaga di sini BUKAN kata-katanya, melainkan satu hal yang bisa mati
+// tanpa suara: kecocokan antara `src/lib/kebijakan.ts` dan kolom `User` yang
+// sungguh ada di `prisma/schema.prisma`.
+//
+// Kegagalan yang ditangkap: seseorang menambah kolom data pribadi ke `User` —
+// nomor paspor, tanggal lahir, koordinat rumah — dan halaman kebijakan privasi
+// tidak menyebutnya. Itu bukan dokumen usang, itu pengumpulan data pribadi
+// tanpa pemberitahuan, yaitu persis pelanggaran yang hendak dicegah halaman
+// itu. Tanpa test di bawah, tidak ada apa pun di repo ini yang akan
+// memberitahu penulisnya.
+//
+// Test ini TIDAK memeriksa isi paragraf dan tidak memeriksa tata letak:
+// keduanya wajar berubah, dan test yang menguncinya hanya akan dihapus orang
+// pertama yang memperbaiki kalimatnya.
+// ===========================================================================
+describe('kebijakan privasi & syarat ketentuan', () => {
+  const AKAR = path.join(__dirname, '..');
+  const JALUR_SKEMA = path.join(AKAR, 'prisma', 'schema.prisma');
+  const JALUR_MODUL = path.join(AKAR, 'src', 'lib', 'kebijakan.ts');
+  const JALUR_PRIVASI = path.join(AKAR, 'src', 'app', 'kebijakan-privasi', 'page.tsx');
+  const JALUR_SYARAT = path.join(AKAR, 'src', 'app', 'syarat-ketentuan', 'page.tsx');
+
+  function kodeSaja(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+  }
+
+  /**
+   * Kolom satu model di schema.prisma.
+   *
+   * Parser baris-per-baris, bukan regex multibaris: regex `([\s\S]*?)\n\}` ikut
+   * menelan blok berikutnya bila ada kurung tutup yang menjorok, dan
+   * kegagalannya berupa daftar kosong — yaitu test yang lulus tanpa memeriksa
+   * apa pun.
+   */
+  function kolomModel(nama) {
+    const baris = fs.readFileSync(JALUR_SKEMA, 'utf8').split(/\r?\n/);
+    const hasil = [];
+    let didalam = null;
+
+    for (const mentah of baris) {
+      const l = mentah.trim();
+      const buka = l.match(/^model\s+(\w+)\s*\{/);
+      if (buka) {
+        didalam = buka[1];
+        continue;
+      }
+      if (didalam && l === '}') {
+        didalam = null;
+        continue;
+      }
+      if (didalam !== nama) continue;
+      if (!l || l.startsWith('//') || l.startsWith('@@')) continue;
+      const kolom = l.match(/^(\w+)\s+/);
+      if (kolom) hasil.push(kolom[1]);
+    }
+
+    return hasil;
+  }
+
+  /** Nilai larik string di dalam sebuah properti `kolom: [...]`. */
+  function kolomTerdaftar(sumber) {
+    const hasil = [];
+    for (const blok of sumber.match(/kolom:\s*\[[^\]]*\]/g) || []) {
+      for (const kutip of blok.match(/'[^']*'/g) || []) {
+        hasil.push(kutip.slice(1, -1));
+      }
+    }
+    return hasil;
+  }
+
+  /** Kunci tingkat atas objek `KOLOM_BUKAN_DATA_PRIBADI`. */
+  function kolomDikecualikan(sumber) {
+    const mulai = sumber.indexOf('KOLOM_BUKAN_DATA_PRIBADI');
+    assert.ok(mulai !== -1, 'KOLOM_BUKAN_DATA_PRIBADI tidak ditemukan di kebijakan.ts');
+    const buka = sumber.indexOf('{', mulai);
+    let tutup = buka;
+    let dalam = 0;
+    for (let i = buka; i < sumber.length; i += 1) {
+      if (sumber[i] === '{') dalam += 1;
+      if (sumber[i] === '}') {
+        dalam -= 1;
+        if (dalam === 0) {
+          tutup = i;
+          break;
+        }
+      }
+    }
+    const isi = sumber.slice(buka + 1, tutup);
+    const hasil = [];
+    for (const baris of isi.split(/\r?\n/)) {
+      const m = baris.match(/^\s{2}(\w+):/);
+      if (m) hasil.push(m[1]);
+    }
+    return hasil;
+  }
+
+  it('setiap kolom User terklasifikasi: data pribadi atau dikecualikan dengan alasan', () => {
+    const sumber = fs.readFileSync(JALUR_MODUL, 'utf8');
+    const diskema = kolomModel('User');
+    assert.ok(diskema.length > 10, 'parser skema gagal membaca model User');
+
+    const diakui = new Set([...kolomTerdaftar(sumber), ...kolomDikecualikan(sumber)]);
+    const terlewat = diskema.filter((k) => !diakui.has(k));
+
+    assert.deepEqual(
+      terlewat,
+      [],
+      'Kolom `User` ini ada di schema.prisma tapi tidak diklasifikasikan di ' +
+        'src/lib/kebijakan.ts: ' +
+        terlewat.join(', ') +
+        '. Kolom data pribadi yang tidak disebut kebijakan privasi berarti ' +
+        'data dikumpulkan tanpa pemberitahuan. Masukkan ke KATEGORI_DATA bila ' +
+        'itu data pribadi, atau ke KOLOM_BUKAN_DATA_PRIBADI dengan alasannya.'
+    );
+  });
+
+  it('tidak menyebut kolom yang sudah tidak ada di skema', () => {
+    const sumber = fs.readFileSync(JALUR_MODUL, 'utf8');
+    const diskema = new Set(kolomModel('User'));
+
+    const hantu = [...kolomTerdaftar(sumber), ...kolomDikecualikan(sumber)].filter(
+      (k) => !diskema.has(k)
+    );
+
+    assert.deepEqual(
+      hantu,
+      [],
+      'Kebijakan menyebut kolom yang tidak ada lagi di model User: ' +
+        hantu.join(', ') +
+        '. Kolom yang sudah dihapus tapi masih diberitahukan membuat ' +
+        'kebijakannya menggambarkan sistem yang lain.'
+    );
+  });
+
+  it('kolom paling sensitif benar-benar diberitahukan', () => {
+    const daftar = new Set(kolomTerdaftar(fs.readFileSync(JALUR_MODUL, 'utf8')));
+
+    for (const kolom of ['password', 'ktp', 'npwp', 'ktpAddress', 'whatsapp', 'email']) {
+      assert.ok(
+        daftar.has(kolom),
+        'Kolom `' +
+          kolom +
+          '` harus ada di KATEGORI_DATA, bukan di daftar yang dikecualikan: ' +
+          'ini data pribadi yang wajib diberitahukan.'
+      );
+    }
+  });
+
+  it('tidak ada angka masa retensi yang dijanjikan tanpa penghapus terjadwal', () => {
+    // Satu-satunya pekerjaan terjadwal di repo ini adalah `/api/cron/sweep`,
+    // dan ia menghanguskan pesanan kedaluwarsa serta token reset sandi — bukan
+    // menghapus data pribadi. Janji "dihapus setelah N tahun" karena itu
+    // dilanggar setiap hari sejak halamannya terbit.
+    const gabungan = [JALUR_MODUL, JALUR_PRIVASI, JALUR_SYARAT]
+      .map((j) => kodeSaja(j))
+      .join('\n');
+
+    const pola = /(?:dihapus|hapus|disimpan|simpan)[^.'"`]{0,40}\d+\s*(?:hari|bulan|tahun)/gi;
+    const temuan = gabungan.match(pola) || [];
+
+    assert.deepEqual(
+      temuan,
+      [],
+      'Ada janji masa retensi berupa angka: ' +
+        temuan.join(' | ') +
+        '. Tidak ada penghapus data pribadi terjadwal di aplikasi ini, jadi ' +
+        'angka itu adalah janji tanpa kodenya. Tulis penghapusnya lebih dulu, ' +
+        'baru angkanya.'
+    );
+  });
+
+  it('kedua halaman adalah Server Component tanpa use client', () => {
+    for (const jalur of [JALUR_PRIVASI, JALUR_SYARAT]) {
+      const kode = kodeSaja(jalur);
+      assert.ok(
+        !/['"]use client['"]/.test(kode),
+        path.basename(path.dirname(jalur)) +
+          ' tidak punya state maupun penangan peristiwa, jadi tidak ada ' +
+          'alasan mengirim JavaScript-nya ke browser.'
+      );
+      assert.ok(
+        /export\s+async\s+function\s+generateMetadata/.test(kode),
+        path.basename(path.dirname(jalur)) + ' harus punya generateMetadata.'
+      );
+    }
+  });
+
+  it('kedua halaman tidak memasang id="isi" yang menduplikasi milik Navbar', () => {
+    // `Navbar` merender `<div id="isi" tabIndex={-1} />` sendiri di akhir.
+    // Dua elemen dengan id yang sama membuat tautan "Lewati ke isi" selalu
+    // melompat ke yang pertama, yaitu bukan yang dimaksud — jadi fiturnya
+    // rusak tanpa satu pun galat.
+    for (const jalur of [JALUR_PRIVASI, JALUR_SYARAT]) {
+      const kode = kodeSaja(jalur);
+      assert.ok(
+        !/id=["']isi["']/.test(kode),
+        path.basename(path.dirname(jalur)) +
+          ' memasang id="isi" padahal Navbar sudah memasangnya.'
+      );
+    }
+  });
+
+  it('setiap formulir pengumpul data menautkan kebijakannya', () => {
+    const titik = [
+      ['src/app/register/page.tsx', '/kebijakan-privasi'],
+      ['src/app/register/page.tsx', '/syarat-ketentuan'],
+      ['src/components/CheckoutForm.tsx', '/kebijakan-privasi'],
+      ['src/components/CheckoutForm.tsx', '/syarat-ketentuan'],
+      ['src/app/sewakan-tempat/FormSewakanTempat.tsx', '/kebijakan-privasi'],
+    ];
+
+    const kurang = [];
+    for (const [berkas, rute] of titik) {
+      const kode = kodeSaja(path.join(AKAR, berkas));
+      if (!kode.includes(rute)) kurang.push(berkas + ' -> ' + rute);
+    }
+
+    assert.deepEqual(
+      kurang,
+      [],
+      'Formulir ini meminta data pribadi tanpa menautkan kebijakannya: ' +
+        kurang.join(', ') +
+        '. Aplikasi ini tidak punya footer, jadi titik pengumpulan datanya ' +
+        'adalah satu-satunya tempat pemberitahuan itu pasti terbaca.'
+    );
+  });
+
+  it('kedua rute saling menautkan', () => {
+    assert.ok(
+      kodeSaja(JALUR_PRIVASI).includes('/syarat-ketentuan'),
+      'Halaman privasi harus menautkan syarat & ketentuan.'
+    );
+    assert.ok(
+      kodeSaja(JALUR_SYARAT).includes('/kebijakan-privasi'),
+      'Halaman syarat harus menautkan kebijakan privasi.'
+    );
+  });
+
+  it('modul kebijakan tidak mengimpor server-only maupun Prisma', () => {
+    // Modul ini di-`require` langsung oleh test dan dipakai komponen server.
+    // `server-only` akan memutus test, dan mengimpor `@prisma/client` menyeret
+    // klien database ke berkas yang seluruh isinya konstanta.
+    const kode = kodeSaja(JALUR_MODUL);
+    assert.ok(!/['"]server-only['"]/.test(kode), 'kebijakan.ts tidak boleh server-only.');
+    assert.ok(
+      !/from\s+['"]@prisma\/client['"]/.test(kode),
+      'kebijakan.ts tidak boleh mengimpor @prisma/client.'
+    );
+  });
+
+  it('tanggal berlaku ditulis tetap, bukan dihitung saat render', () => {
+    // `new Date()` sebagai tanggal berlaku membuat dokumen yang tidak pernah
+    // diperbarui selalu tampak terbit hari ini — pembaca kehilangan satu-satunya
+    // cara mengetahui versi mana yang ia baca.
+    const kode = kodeSaja(JALUR_MODUL);
+    assert.match(
+      kode,
+      /TANGGAL_BERLAKU_KEBIJAKAN\s*=\s*'\d{4}-\d{2}-\d{2}'/,
+      'TANGGAL_BERLAKU_KEBIJAKAN harus berupa teks ISO tetap.'
+    );
+    assert.ok(
+      !/new Date\(\)/.test(kode),
+      'kebijakan.ts tidak boleh memakai new Date().'
     );
   });
 });

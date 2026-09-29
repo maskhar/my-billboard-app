@@ -134,6 +134,26 @@ export default function RegisterPage() {
                           <input id="daftar-sandi" type="password" name="password" autoComplete="new-password" className={KELAS_ISIAN} placeholder="••••••••" required />
                       </div>
 
+                      {/* Pemberitahuan data, DI ATAS tombol kirim.
+                          Formulir ini meminta nomor WhatsApp tanpa pernah
+                          menyebut untuk apa. Menaruh tautannya di bawah tombol
+                          berarti pengunjung menyetujui sesuatu yang kalimatnya
+                          belum ia lewati.
+
+                          Ini teks, BUKAN kotak centang wajib: menambah gerbang
+                          baru pada satu-satunya jalan membuat akun akan menolak
+                          pendaftar yang lupa mencentang — dan tidak ada satu pun
+                          kotak centang persetujuan di aplikasi ini hari ini,
+                          jadi memasangnya di sini saja hanya membuat satu
+                          formulir berperilaku lain dari yang lain. */}
+                      <p className="text-xs text-gray-500 leading-relaxed">
+                          Dengan mendaftar, Anda menyetujui{' '}
+                          <Link href="/syarat-ketentuan" className="text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero">Syarat &amp; Ketentuan</Link>
+                          {' '}dan mengetahui bagaimana data Anda dipakai sesuai{' '}
+                          <Link href="/kebijakan-privasi" className="text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero">Kebijakan Privasi</Link>.
+                          Nomor WhatsApp dipakai untuk mengabari status pesanan Anda.
+                      </p>
+
                       <button type="submit" disabled={loading} className="w-full text-white bg-utero hover:bg-red-700 font-medium rounded-lg text-sm px-5 py-2.5 text-center transition outline-none focus:ring-2 focus:ring-utero focus:ring-offset-2 disabled:opacity-60 disabled:cursor-not-allowed">
                           {loading ? 'Sedang Mendaftar...' : 'Daftar Sekarang'}
                       </button>

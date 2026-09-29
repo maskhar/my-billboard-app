@@ -255,10 +255,23 @@ export default function FormSewakanTempat({ tautanWa }: { tautanWa: string | nul
           sebelum lokasinya disurvei bukan kesepakatan, dan menyimpannya sebagai
           nominal membuat baris yang terlihat resmi padahal belum pernah
           disetujui siapa pun. Harganya dibicarakan saat kami menghubungi. */}
+      {/* Kalimat kedua sudah berupa janji tentang data ("hanya kami pakai
+          untuk menghubungi Anda"), dan sampai halaman kebijakan ada, janji itu
+          tidak punya satu pun tempat yang bisa dibuka untuk memeriksanya.
+          Tautannya dipasang di kalimat yang sudah ada, bukan sebagai paragraf
+          baru: formulir ini diisi tamu tanpa akun, dan menambah blok hukum di
+          bawah tombol hanya membuatnya terlihat lebih berat dari isinya. */}
       <p className="text-xs text-gray-500 mt-6 leading-relaxed">
         Nilai sewanya dibicarakan setelah kami melihat lokasinya, jadi tidak ada
         kolom harga di sini. Data Anda hanya kami pakai untuk menghubungi Anda
-        soal lokasi ini.
+        soal lokasi ini — selengkapnya di{' '}
+        <Link
+          href="/kebijakan-privasi"
+          className="text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero"
+        >
+          Kebijakan Privasi
+        </Link>
+        .
       </p>
 
       <button

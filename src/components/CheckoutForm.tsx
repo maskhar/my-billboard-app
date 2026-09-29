@@ -8,6 +8,7 @@ import { ArrowLeft, Upload, AlertCircle, Calendar, FileText } from 'lucide-react
 // Impor menganggur bukan sekadar berkas yang lebih panjang — `useSearchParams`
 // yang masih terimpor membuat pembaca berikutnya menyimpulkan komponen ini
 // masih membaca query string, lalu mencari-cari di mana.
+import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { bacaBadan } from '@/lib/baca-jawaban';
@@ -533,6 +534,22 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
                     <button onClick={handlePayment} disabled={isLoading} className="w-full bg-utero hover:bg-white hover:text-utero font-bold py-3 rounded-xl mt-6 transition duration-300 ring-2 ring-utero shadow-lg shadow-utero/50 disabled:opacity-50">
                         {isLoading ? 'Membuat pesanan...' : 'Lanjut ke Pembayaran Otomatis'}
                     </button>
+                    {/* Pemberitahuan data di titik paling sensitif di aplikasi
+                        ini: formulir di atas meminta NPWP, alamat kantor, dan
+                        nama badan usaha, lalu nama/surel/nomor telepon pembeli
+                        dikirim ke penyedia pembayaran. Semua itu tidak
+                        diberitahukan di mana pun sebelum halaman kebijakan ada.
+                        Ditaruh SESUDAH tombol dan bukan sebelum, karena di kartu
+                        gelap ini nominal yang dibayar adalah hal yang harus
+                        dibaca lebih dulu; tautannya tetap terlihat tanpa
+                        menggulung. */}
+                    <p className="text-[11px] text-gray-400 mt-4 leading-relaxed">
+                        Nama, surel, dan nomor telepon Anda dikirim ke penyedia
+                        pembayaran untuk memproses transaksi ini. Selengkapnya di{' '}
+                        <Link href="/kebijakan-privasi" className="text-gray-200 underline hover:text-white rounded outline-none focus:ring-2 focus:ring-white">Kebijakan Privasi</Link>
+                        {' '}dan{' '}
+                        <Link href="/syarat-ketentuan" className="text-gray-200 underline hover:text-white rounded outline-none focus:ring-2 focus:ring-white">Syarat &amp; Ketentuan</Link>.
+                    </p>
                 </div>
             </div>
         </div>
