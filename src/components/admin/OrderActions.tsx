@@ -12,6 +12,7 @@ import { rupiah } from '@/lib/money';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
 import { useKonfirmasi } from '@/components/ui/Konfirmasi';
+import Modal from '@/components/ui/Modal';
 // Tipe saja — terhapus saat build, jadi tidak ada Prisma di client bundle.
 import type { Role } from '@prisma/client';
 
@@ -653,14 +654,22 @@ export default function OrderActions({
             )}
         </div>
 
-        {/* MODAL INSTALLATION PROOF (BARU) */}
-        {showInstallModal && (
-            <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-0 overflow-hidden">
-                    <div className="bg-indigo-50 px-4 py-3 border-b flex justify-between items-center text-indigo-900 font-bold">
-                        <span><Hammer size={16} className='inline mr-2'/>Bukti Pemasangan</span>
-                        <button onClick={() => setShowInstallModal(false)}>✕</button>
-                    </div>
+        {/* MODAL INSTALLATION PROOF (BARU)
+
+            `bolehTutup={!mengunggah}`: satu-satunya modal di berkas ini yang
+            punya pekerjaan berjalan. Menutupnya di tengah unggahan tidak
+            membatalkan unggahannya — berkasnya tetap terkirim — tapi
+            `setInstallData` mendarat di komponen yang isinya sudah dilepas,
+            jadi hasil unggahan itu hilang dan admin harus memilih berkasnya
+            lagi tanpa tahu mengapa. */}
+        <Modal
+            terbuka={showInstallModal}
+            tutup={() => setShowInstallModal(false)}
+            bolehTutup={!mengunggah}
+            judul={<><Hammer size={16}/>Bukti Pemasangan</>}
+            lebar="max-w-sm"
+            kelasKepala="bg-indigo-50 text-indigo-900"
+        >
                     <div className="p-5 space-y-4">
                         <div className="border-2 border-dashed p-6 text-center rounded-xl cursor-pointer hover:bg-indigo-50 transition relative">
                              <input
@@ -704,22 +713,20 @@ export default function OrderActions({
                             Tayangkan &amp; Aktifkan
                         </button>
                     </div>
-                </div>
-            </div>
-        )}
+        </Modal>
 
         {/* MODAL BUKTI TRANSFER REFUND
             Langkah terakhir alur refund: admin sudah mentransfer, lalu mencatat
             buktinya. Unggah berkas TIDAK disediakan di sini — `refundProof`
             hanya menerima URL http/https, dan hasil `FileReader` adalah
             `data:` URL yang ditolak server tanpa jejak. */}
-        {showTransferModal && (
-            <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-0 overflow-hidden">
-                    <div className="bg-green-50 px-4 py-3 border-b flex justify-between items-center text-green-900 font-bold">
-                        <span><Banknote size={16} className='inline mr-2'/>Bukti Transfer Refund</span>
-                        <button onClick={() => setShowTransferModal(false)}>✕</button>
-                    </div>
+        <Modal
+            terbuka={showTransferModal}
+            tutup={() => setShowTransferModal(false)}
+            judul={<><Banknote size={16}/>Bukti Transfer Refund</>}
+            lebar="max-w-sm"
+            kelasKepala="bg-green-50 text-green-900"
+        >
                     <div className="p-5 space-y-4">
                         <div className="rounded-lg bg-gray-50 border border-gray-200 p-3 text-xs space-y-1 text-gray-600">
                             <div className="flex justify-between">
@@ -760,9 +767,7 @@ export default function OrderActions({
                             Tandai Refund Selesai
                         </button>
                     </div>
-                </div>
-            </div>
-        )}
+        </Modal>
 
         {/* MODAL CATAT PEMBAYARAN MANUAL
             Menulis `Payment PAID` untuk uang yang masuk di luar gerbang
@@ -770,13 +775,13 @@ export default function OrderActions({
             perpindahan tahap adalah dua keputusan berbeda, dan menyatukannya di
             satu tombol adalah sebab pesanan bisa memasuki produksi dengan
             pembukuan kosong. */}
-        {showCatatModal && (
-            <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-sm rounded-xl shadow-2xl p-0 overflow-hidden">
-                    <div className="bg-amber-50 px-4 py-3 border-b flex justify-between items-center text-amber-900 font-bold">
-                        <span><Wallet size={16} className='inline mr-2'/>Catat Pembayaran Manual</span>
-                        <button onClick={() => setShowCatatModal(false)}>✕</button>
-                    </div>
+        <Modal
+            terbuka={showCatatModal}
+            tutup={() => setShowCatatModal(false)}
+            judul={<><Wallet size={16}/>Catat Pembayaran Manual</>}
+            lebar="max-w-sm"
+            kelasKepala="bg-amber-50 text-amber-900"
+        >
                     <div className="p-5 space-y-4">
                         <p className="text-[11px] leading-relaxed text-gray-500">
                             Untuk uang yang diterima <b>di luar</b> gerbang pembayaran — mis. transfer
@@ -836,18 +841,16 @@ export default function OrderActions({
                             Catat Pembayaran
                         </button>
                     </div>
-                </div>
-            </div>
-        )}
+        </Modal>
 
         {/* MODAL LIHAT DESAIN USER */}
-        {showDesignModal && (
-            <div className="fixed inset-0 z-[99999] bg-black/60 backdrop-blur-sm flex items-center justify-center p-4">
-                <div className="bg-white w-full max-w-lg rounded-xl shadow-2xl p-0 overflow-hidden">
-                    <div className="bg-blue-50 px-4 py-3 border-b flex justify-between items-center text-blue-900 font-bold">
-                        <span><Eye size={16} className='inline mr-2'/>Desain dari User</span>
-                        <button onClick={() => setShowDesignModal(false)}>✕</button>
-                    </div>
+        <Modal
+            terbuka={showDesignModal}
+            tutup={() => setShowDesignModal(false)}
+            judul={<><Eye size={16}/>Desain dari User</>}
+            lebar="max-w-lg"
+            kelasKepala="bg-blue-50 text-blue-900"
+        >
                     <div className="p-5 space-y-4">
                         {/* `designFileUrl` boleh `null` di status DESIGN_RECEIVED: pembeli
                             yang memilih "upload sendiri" sampai di tahap ini sebelum
@@ -891,9 +894,7 @@ export default function OrderActions({
                             </p>
                         )}
                     </div>
-                </div>
-            </div>
-        )}
+        </Modal>
     </>
   );
 }

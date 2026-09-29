@@ -2,9 +2,13 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { UploadCloud, MapPin, Clock, Eye, AlertTriangle, Landmark, CheckCircle2, ExternalLink, X, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { UploadCloud, MapPin, Clock, Eye, AlertTriangle, Landmark, CheckCircle2, ExternalLink, Image as ImageIcon, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+// Keempat modal di berkas ini dulu `<div className="fixed inset-0">` biasa —
+// tanpa `role="dialog"`, tanpa jebakan fokus, tanpa Escape. `X` ikut dibuang
+// dari impor lucide karena tombol tutupnya sekarang milik `Modal`.
+import Modal from '@/components/ui/Modal';
 // Komponen ini TIDAK menghitung uang. Setiap nominal yang dipakainya sudah
 // dihitung server sebagai `Prisma.Decimal` lalu diserialisasi lewat
 // `uangUntukClient` — lihat `src/app/dashboard/DashboardWrapper.tsx`.
@@ -698,15 +702,19 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
 
     {/* ======================= MODAL AREA ======================= */}
 
-    {/* 1. MODAL UPLOAD DESAIN (BARU) */}
-    {modalType === 'DESIGN_FORM' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in zoom-in duration-300">
-            <div className="bg-white w-full max-w-md p-0 rounded-2xl shadow-2xl overflow-hidden relative">
-                 <div className='bg-gray-50 px-6 py-4 border-b flex justify-between items-center'>
-                    <h3 className="font-bold text-lg text-gray-800">Kirim Materi Iklan</h3>
-                    <button onClick={()=>setModalType('NONE')} className='text-gray-400 hover:text-red-500'><X size={20}/></button>
-                 </div>
-                 
+    {/* 1. MODAL UPLOAD DESAIN (BARU)
+
+        `bolehTutup={!loading}`: modal ini mengunggah berkas sampai 10MB.
+        Menutupnya di tengah unggahan tidak membatalkan permintaannya, jadi
+        berkasnya bisa tersimpan di server sementara pembeli melihat modalnya
+        hilang tanpa pesan — lalu ia mengunggah ulang, dan pesanannya berakhir
+        dengan dua berkas desain yang salah satunya tidak pernah ia maksudkan. */}
+    <Modal
+        terbuka={modalType === 'DESIGN_FORM'}
+        tutup={() => setModalType('NONE')}
+        bolehTutup={!loading}
+        judul="Kirim Materi Iklan"
+    >
                  <div className='p-6'>
                     <div className="flex bg-gray-100 p-1 rounded-lg mb-6">
                         <button onClick={() => setUploadMode('FILE')} className={`flex-1 py-2 text-xs font-bold rounded-md transition ${uploadMode==='FILE' ? 'bg-white shadow text-blue-600' : 'text-gray-500'}`}>Upload File</button>
@@ -736,15 +744,14 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                         </div>
                     )}
                  </div>
-            </div>
-        </div>
-    )}
+    </Modal>
 
     {/* 2. MODAL REASON FORM (ALASAN BATAL) */}
-    {modalType === 'REASON_FORM' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-                <div className="bg-gray-50 px-6 py-4 border-b flex justify-between items-center"><h3 className="font-bold text-gray-800">Kenapa ingin batal?</h3><button onClick={() => setModalType('NONE')} className="text-gray-400 hover:text-red-500">✕</button></div>
+    <Modal
+        terbuka={modalType === 'REASON_FORM'}
+        tutup={() => setModalType('NONE')}
+        judul="Kenapa ingin batal?"
+    >
                 <form onSubmit={handleSubmitReason} className="p-6 space-y-4">
                     {/*
                       Dasar refund disebut lengkap: 90% dari UANG YANG SUDAH
@@ -775,15 +782,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                     <textarea name="reason" placeholder="Jelaskan alasan..." className="w-full border rounded-lg p-3 text-sm mt-1 h-24 outline-none focus:ring-2 focus:ring-utero focus:border-utero" required></textarea>
                     <button disabled={loading} type="submit" className="w-full bg-utero text-white py-3 rounded-lg font-bold hover:bg-red-700 transition">{loading ? 'Mengirim...' : 'Ajukan Pembatalan'}</button>
                 </form>
-            </div>
-        </div>
-    )}
+    </Modal>
 
     {/* 3. MODAL BANK FORM (REKENING REFUND) */}
-    {modalType === 'BANK_FORM' && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-in fade-in">
-            <div className="bg-white w-full max-w-md rounded-2xl shadow-2xl overflow-hidden">
-                <div className="bg-green-50 px-6 py-4 border-b flex justify-between items-center"><h3 className="font-bold text-green-800 flex items-center gap-2"><Landmark size={18}/> Input Rekening</h3><button onClick={() => setModalType('NONE')} className="text-gray-400 hover:text-red-500">✕</button></div>
+    <Modal
+        terbuka={modalType === 'BANK_FORM'}
+        tutup={() => setModalType('NONE')}
+        judul={<><Landmark size={18}/> Input Rekening</>}
+        kelasKepala="bg-green-50 text-green-800"
+    >
                 <form onSubmit={handleSubmitBank} className="p-6 space-y-4">
                     {/* `refundAmount` ditetapkan server saat pengajuan disetujui.
                         Bila sudah ada, itulah angka yang akan ditransfer — bukan
@@ -803,25 +810,25 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
                     </div>
                     <button disabled={loading} type="submit" className="w-full bg-green-600 text-white py-3 rounded-lg font-bold hover:bg-green-700 transition">{loading ? 'Menyimpan...' : 'Konfirmasi'}</button>
                 </form>
-            </div>
-        </div>
-    )}
+    </Modal>
 
-    {/* 4. MODAL BUKTI TRANSFER */}
-    {modalType === 'PROOF_IMAGE' && order.refundProof && (
-        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/80 backdrop-blur-sm p-4 animate-in fade-in zoom-in duration-300">
-            <div className="bg-white rounded-2xl shadow-2xl overflow-hidden max-w-2xl max-h-[90vh] relative flex flex-col">
-                <div className="bg-white px-4 py-3 border-b flex justify-between items-center sticky top-0 z-10">
-                    <div className="flex items-center gap-2"><CheckCircle2 className="text-green-600" size={20}/><span className="font-bold text-gray-800">Bukti Transfer Refund</span></div>
-                    <button onClick={() => setModalType('NONE')} className="bg-gray-100 p-1.5 rounded-full text-gray-500 hover:bg-red-500 hover:text-white transition"><X size={20}/></button>
-                </div>
+    {/* 4. MODAL BUKTI TRANSFER
+
+        `order.refundProof` tetap ikut menentukan `terbuka`, bukan dipindah ke
+        dalam: tanpa gambarnya modal ini hanya kotak kosong berjudul "Bukti
+        Transfer Refund", yang justru membuat pembeli menyangka buktinya hilang. */}
+    <Modal
+        terbuka={modalType === 'PROOF_IMAGE' && Boolean(order.refundProof)}
+        tutup={() => setModalType('NONE')}
+        judul={<><CheckCircle2 className="text-green-600" size={20}/> Bukti Transfer Refund</>}
+        lebar="max-w-2xl"
+        kelasKepala="bg-white text-gray-800"
+    >
                 {/* `<img>` biasa: `refundProof` adalah tautan penyimpanan milik admin
                     (Drive, Dropbox), di luar `remotePatterns` next.config.ts. */}
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <div className="p-2 bg-gray-200 flex-1 overflow-auto flex items-center justify-center"><img src={order.refundProof} alt="Bukti transfer pengembalian dana" className="max-w-full max-h-[70vh] rounded shadow-sm object-contain" /></div>
-            </div>
-        </div>
-    )}
+                <div className="flex items-center justify-center bg-gray-200 p-2"><img src={order.refundProof ?? ''} alt="Bukti transfer pengembalian dana" className="max-h-[70vh] max-w-full rounded object-contain shadow-sm" /></div>
+    </Modal>
     </>
   )
 }

@@ -69,7 +69,7 @@
 | 2 | ✅ selesai | — |
 | 5 | 🔶 sebagian | 5.5, 5.6, 5.7, 5.9, 5.12, 5.18–5.29, 5.30, 5.33 |
 | 6 | 🔶 sebagian | 6.12–6.16, 6.20 (sisa), 6.22, 6.26–6.29 |
-| 7 | 🔶 sebagian | 7.3–7.5, 7.12, 7.17, 7.18 |
+| 7 | 🔶 sebagian | 7.17, 7.18 |
 | 8 | 🔶 sebagian | 8.5, 8.9, 8.11 |
 
 ### Commit terbaru (branch `feat/fondasi-xendit-aman`)
@@ -82,6 +82,9 @@
 | `00b5abc` | Penanda fokus digambar `outline: 2px solid transparent` oleh Preflight — 112 dari 117 tombol tanpa style fokus, `:focus-visible` nol di seluruh repo. Plus nol tautan lewati di tiga navigasi | **7.10**, **7.11** |
 | `f8b13d5` | 11 segmen route tanpa landmark `<main>` sama sekali (hanya 9 dari 77 `.tsx` punya) | 7.12 |
 | `d8d5d8d` | Lima segmen pengambil data tanpa `loading.tsx` → Next.js menahan layar SEBELUMNYA sampai query selesai; paling mahal di `order/[id]/payment`. Plus dua batas galat yang teksnya menyuruh pembeli membayar ulang | **6.17** |
+| `2a37380` | Berkas ini sendiri menyuruh memperbaiki ~140 hal yang sudah beres, plus satu variabel `.env` mati (`NEXT_PUBLIC_API_URL`, nol pemakai) | — |
+| `057a935` | Gerbang peran bertipe `string[]`, jadi satu huruf salah tulis **lolos compiler** dan mengunci satu peran tanpa suara — 33 titik disatukan pada `peranBoleh` + `readonly Role[]`. Arahnya malah terbalik di `admin/login/page.tsx`. Plus slug billboard bentrok yang dijawab 500, dan jam sistem yang diputar balik bisa membangkitkan slug yang sudah terpakai | 3.x, 5.x |
+| *(ini)* | 11 overlay di 5 berkas tanpa semantik dialog — Tab keluar ke elemen di belakang latar, Escape tidak menutup, fokus tidak dikembalikan; empat di antaranya langkah pembayaran/refund. Plus 24 kelas animasi yang **tidak menghasilkan CSS apa pun** karena pluginnya tidak pernah terpasang | **7.3**, **7.4**, **7.5**, **7.19** |
 
 ### ⚠️ URUTAN EKSEKUSI ≠ URUTAN NOMOR
 
@@ -637,9 +640,10 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 |---|---|---|---|---|
 | 7.1 | ⚠️ Ganti `<div onClick>` pemilih durasi → `<button type="button" aria-pressed>` — **user keyboard/screen reader tidak bisa menyelesaikan pembelian** | `CheckoutForm.tsx:110-122` | `[04]A-01` | [x] |
 | 7.2 | ⚠️ Ganti `<div onClick>` pemilih materi desain | `CheckoutForm.tsx:179,184` | `[04]A-02` | [x] |
-| 7.3 | Ganti 4 modal `BookingCard` dengan `@headlessui/react` `<Dialog>` (sudah terpasang) — tanpa `role="dialog"`/`aria-modal`/focus trap/Escape/backdrop-close | `BookingCard.tsx:328,370,384,401` | `[04]A-03` | [x] |
-| 7.4 | Modal trafik: sama | `TrafficReportModal.tsx:21-58` | `[04]A-04` | [ ] |
-| 7.5 | Modal admin. **Lingkupnya menyusut:** `UserFormModal.tsx` dan `UserActions.tsx` **sudah dihapus** (keputusan D2), jadi tinggal dua modal di `OrderActions.tsx` | `OrderActions.tsx:197,219` | `[05]F-21` | [ ] |
+| 7.3 | 4 modal `BookingCard` → `Modal` bersama. **Baris ini sebelumnya bertanda `[x]` dan itu salah:** keempatnya masih `<div className="fixed inset-0">` sampai perbaikan ini. Yang benar-benar sudah beres saat itu hanya `Konfirmasi.tsx` | `BookingCard.tsx` (kirim materi, alasan batal, rekening refund, bukti transfer) | `[04]A-03` | [x] |
+| 7.4 | Modal trafik → `Modal` bersama. **Lingkupnya 5× lebih besar dari yang tertulis:** laporan menyebut SATU berkas, sapuan `fixed inset-0` menemukan **5 berkas / 11 overlay** — empat di antaranya langkah pembayaran & refund. Semua sekarang lewat `src/components/ui/Modal.tsx` (`Dialog` headless UI). Modal trafik didahulukan karena isinya **iframe pihak ketiga**: begitu fokus masuk, satu-satunya jalan keluar dengan papan tombol adalah menelusuri seluruh dokumen asing itu sampai habis, Escape tidak menutup, dan tombol ✕ ada di atas iframe sehingga tidak bisa dijangkau balik | `TrafficReportModal.tsx` | `[04]A-04` | [x] |
+| 7.5 | Modal admin → `Modal` bersama. **Klaim "lingkupnya menyusut" di baris ini salah:** `UserFormModal.tsx` **tidak dihapus**, ia masih dipakai halaman `admin/(dashboard)/users`, dan `OrderActions.tsx` punya **empat** modal, bukan dua (bukti pemasangan, bukti transfer refund, catat pembayaran manual, lihat desain) | `OrderActions.tsx` (4), `users/UserFormModal.tsx` (1) | `[05]F-21` | [x] |
+| 7.19 | **Temuan baru, tidak ada di laporan mana pun: 24 kelas animasi di 7 berkas tidak menghasilkan satu baris CSS.** `animate-in`/`fade-in`/`zoom-in`/`slide-in-from-*` milik plugin `tailwindcss-animate` yang **tidak pernah terpasang**, dan `plugins: []`. Kelas Tailwind yang tidak dikenal **bukan galat build** — namanya tetap tercetak di atribut `class`, jadi tidak ada yang menandainya; di layar hasilnya hanya "modalnya muncul begitu saja". Diperbaiki dengan mendefinisikan sub-kumpulan yang dipakai repo ini langsung di config (memasang pluginnya berarti menyentuh `package.json`, yang tidak ikut di-stage di fase ini), plus `prefers-reduced-motion` dilipat ke dalam `.animate-in` sendiri karena 11 dari 13 pemanggil tidak pernah menulis `motion-safe:`. Ikutannya: `duration-300`/`duration-500` di sebelah `animate-in` hanya menulis `transition-duration`, **bukan** panjang animasi — utilitas `durasi-masuk-*` ditambahkan untuk itu | `tailwind.config.ts`, `admin/login/page.tsx` | — | [x] |
 | 7.6 | Perbaiki `<button disabled>` bersarang di `<Link>` — HTML invalid; keyboard dapat **menembus guard tanggal** | `BillboardDetailClient.tsx:176-187` | `[04]A-05` | [x] |
 | 7.7 | `aria-label` + label `sr-only` pada launcher chat — tombol tanpa nama di perangkat sentuh | `ChatWidget.tsx:111-112` | `[04]A-06` | [x] |
 | 7.8 | Tombol hapus gambar selalu tampil di `md:` ke bawah — hover-only, tak terjangkau di sentuh | `ImageUpload.tsx:127` | `[04]A-07` | [x] |

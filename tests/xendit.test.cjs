@@ -23140,3 +23140,395 @@ describe('setiap segmen yang mengambil data punya batas galat dan keadaan memuat
     }
   });
 });
+
+// ============================================================================
+// Semantik dialog pada setiap overlay, dan kelas animasi yang benar-benar
+// menghasilkan CSS.
+//
+// DUA CACAT YANG DIJAGA DI SINI, KEDUANYA SUNYI
+// ---------------------------------------------
+// 1. `<div className="fixed inset-0">` bukan dialog. Tanpa `role="dialog"` dan
+//    `aria-modal`, halaman di belakangnya tetap dibacakan, Tab keluar ke
+//    elemen yang tertutup latar gelap, Escape tidak menutup, dan fokus tidak
+//    kembali ke tombol pemicunya. Tidak ada yang error — di layar tampak
+//    normal, jadi pola ini disalin ulang sebelas kali.
+//
+// 2. Kelas Tailwind yang tidak dikenal DIBUANG TANPA SUARA. Ia bukan galat
+//    build: nama kelasnya tetap muncul di atribut `class` pada HTML jadi, dan
+//    tidak ada satu pun tanda bahwa ia tidak menghasilkan satu baris CSS.
+//    Semua `animate-in` / `fade-in` / `zoom-in` / `slide-in-from-*` di repo ini
+//    dulu mati total karena `tailwindcss-animate` tidak pernah dipasang dan
+//    `plugins: []`. Di layar itu hanya terlihat seperti "modalnya muncul
+//    langsung", yang mudah disangka memang begitu rancangannya.
+//
+// Test di sini karena itu tidak memeriksa tampilan, tapi memeriksa bahwa
+// setiap kelas animasi yang ditulis di `src/` punya penghasilnya di
+// `tailwind.config.ts`. Kalau `plugins` dikosongkan lagi, atau seseorang
+// menulis `slide-in-from-left-3` yang tidak pernah didaftarkan, suite ini
+// gagal — bukan pengguna yang menemukannya.
+// ============================================================================
+describe('semantik dialog dan kelas animasi', () => {
+  const AKAR_SRC_MODAL = path.join(__dirname, '..', 'src');
+  const JALUR_MODAL = path.join(AKAR_SRC_MODAL, 'components', 'ui', 'Modal.tsx');
+  const JALUR_TW = path.join(__dirname, '..', 'tailwind.config.ts');
+
+  // Tiga pengecualian, masing-masing dengan alasan yang harus tetap benar:
+  //
+  // · `ui/Modal.tsx` — ia SENDIRI pembungkusnya; `fixed inset-0` di dalamnya
+  //   adalah latar dan wadah penengah milik `Dialog` headless UI.
+  // · `ui/Konfirmasi.tsx` — sudah memakai `Dialog` headless UI sejak awal, dan
+  //   justru dialah contoh yang diikuti `Modal`.
+  // · `AdminShell.tsx` — drawer navigasi, bukan modal alur; ia ikut menutup
+  //   saat rute berubah. Ia tidak lepas dari pemeriksaan, hanya dipindah: test
+  //   terpisah di bawah menuntut ia membawa sendiri `role="dialog"`,
+  //   `aria-modal`, Escape, dan pengembalian fokus.
+  const BUKAN_MODAL_BIASA = new Set([
+    'components/ui/Modal.tsx',
+    'components/ui/Konfirmasi.tsx',
+    'app/admin/_components/AdminShell.tsx',
+  ]);
+
+  function berkasSumber(dir, hasil = []) {
+    for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+      const penuh = path.join(dir, entri.name);
+      if (entri.isDirectory()) {
+        berkasSumber(penuh, hasil);
+        continue;
+      }
+      if (/\.tsx$/.test(entri.name)) hasil.push(penuh);
+    }
+    return hasil;
+  }
+
+  function relSumber(jalur) {
+    return path.relative(AKAR_SRC_MODAL, jalur).replace(/\\/g, '/');
+  }
+
+  // Alasan `/*` hanya dikenali di awal baris sama dengan di `barisKode`:
+  // `accept="image/*,.pdf"` di `BookingCard.tsx` membuat pemindai yang menyapu
+  // `/*` di mana pun membaca sisa berkas sebagai komentar.
+  function barisSumber(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/^[ \t]*\{?\/\*[\s\S]*?\*\/\}?/gm, '')
+      .split(/\r?\n/)
+      .map((teks, i) => ({ nomor: i + 1, teks }))
+      .filter(({ teks }) => !/^\s*(\/\/|\*)/.test(teks));
+  }
+
+  it('tidak ada satu pun overlay `fixed inset-0` yang ditulis tangan', () => {
+    const pelanggar = [];
+    for (const jalur of berkasSumber(AKAR_SRC_MODAL)) {
+      const rel = relSumber(jalur);
+      if (BUKAN_MODAL_BIASA.has(rel)) continue;
+      for (const { nomor, teks } of barisSumber(jalur)) {
+        if (/fixed\s+inset-0|inset-0\s+fixed/.test(teks)) {
+          pelanggar.push(`${rel}:${nomor}`);
+        }
+      }
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      `overlay ditulis tangan; pakai \`@/components/ui/Modal\`: ${pelanggar.join(', ')}`
+    );
+  });
+
+  it('kelima berkas yang dulu menulis overlay sendiri sekarang memakai `Modal`', () => {
+    // Daftarnya disebut satu per satu, bukan disapu: kalau salah satu berkas
+    // dikembalikan ke div biasa, test pertama di atas memang akan gagal — tapi
+    // kalau modalnya DIHAPUS diam-diam beserta fiturnya, hanya test inilah yang
+    // menangkapnya.
+    const pemakai = [
+      'components/TrafficReportModal.tsx',
+      'components/SearchFilter.tsx',
+      'components/BookingCard.tsx',
+      'components/admin/OrderActions.tsx',
+      'app/admin/(dashboard)/users/UserFormModal.tsx',
+    ];
+    for (const rel of pemakai) {
+      const isi = fs.readFileSync(path.join(AKAR_SRC_MODAL, rel), 'utf8');
+      assert.match(
+        isi,
+        /import Modal from '@\/components\/ui\/Modal'/,
+        `${rel} wajib mengimpor Modal bersama`
+      );
+      assert.match(isi, /<Modal\b/, `${rel} wajib merender <Modal>`);
+    }
+  });
+
+  it('jumlah `<Modal>` per berkas sesuai jumlah overlay yang dulu ada di sana', () => {
+    // Empat modal di `OrderActions.tsx` adalah bukti pemasangan, bukti transfer
+    // refund, catat pembayaran manual, dan lihat desain — dua di antaranya
+    // menyentuh uang. Empat di `BookingCard.tsx` adalah kirim materi, alasan
+    // batal, rekening refund, dan bukti transfer. Kalau salah satu hilang saat
+    // seseorang merapikan berkas ini, angkanya yang memberi tahu.
+    const jumlah = {
+      'components/TrafficReportModal.tsx': 1,
+      'components/SearchFilter.tsx': 1,
+      'components/BookingCard.tsx': 4,
+      'components/admin/OrderActions.tsx': 4,
+      'app/admin/(dashboard)/users/UserFormModal.tsx': 1,
+    };
+    for (const [rel, harus] of Object.entries(jumlah)) {
+      const isi = barisSumber(path.join(AKAR_SRC_MODAL, rel))
+        .map(({ teks }) => teks)
+        .join('\n');
+      const ada = (isi.match(/<Modal\b/g) || []).length;
+      assert.equal(ada, harus, `${rel} harus punya ${harus} <Modal>, ditemukan ${ada}`);
+    }
+  });
+
+  it('setiap `<Modal>` diberi `judul`', () => {
+    // `judul` menjadi `DialogTitle`, yaitu `aria-labelledby` dialognya — satu
+    // kalimat yang dibacakan pembaca layar saat modal terbuka. Tanpa itu yang
+    // ia dengar hanya "dialog". TypeScript sudah mewajibkan propnya ada, tapi
+    // `judul={undefined}` lolos compiler pada tipe `React.ReactNode`, jadi
+    // bentuk tertulisnya juga diperiksa.
+    for (const jalur of berkasSumber(AKAR_SRC_MODAL)) {
+      const rel = relSumber(jalur);
+      if (rel === 'components/ui/Modal.tsx') continue;
+      const isi = barisSumber(jalur)
+        .map(({ teks }) => teks)
+        .join('\n');
+      for (const cocok of isi.matchAll(/<Modal\b/g)) {
+        const tutupTag = isi.indexOf('\n    >', cocok.index);
+        const potong = isi.slice(cocok.index, tutupTag === -1 ? undefined : tutupTag);
+        assert.match(potong, /\bjudul=/, `<Modal> di ${rel} tanpa prop \`judul\``);
+        assert.doesNotMatch(
+          potong,
+          /judul=\{(undefined|null|''|"")\}/,
+          `<Modal> di ${rel} memberi \`judul\` kosong`
+        );
+      }
+    }
+  });
+
+  it('`Modal` memakai `Dialog` headless UI, bukan div dengan `role` ditempel', () => {
+    // Menempel `role="dialog"` pada div tidak memberi jebakan fokus, tidak
+    // memberi Escape, dan tidak memulihkan fokus ke pemicunya. Yang memberi
+    // ketiganya adalah `Dialog`-nya sendiri.
+    // `barisSumber`, bukan `readFileSync`: komentar kepala `Modal.tsx` MENYEBUT
+    // `role="dialog"` saat menjelaskan apa yang hilang dari div biasa. Memeriksa
+    // teks mentah membuat penjelasan itu sendiri terbaca sebagai pelanggaran.
+    const isi = barisSumber(JALUR_MODAL)
+      .map(({ teks }) => teks)
+      .join('\n');
+    assert.match(isi, /from '@headlessui\/react'/);
+    assert.match(isi, /\bDialogPanel\b/);
+    assert.match(isi, /\bDialogTitle\b/, 'DialogTitle wajib: itulah aria-labelledby-nya');
+    assert.doesNotMatch(isi, /role="dialog"/, 'role datang dari Dialog, bukan ditulis tangan');
+  });
+
+  it('`Modal` menutup lewat satu jalur yang menghormati `bolehTutup`', () => {
+    // `bolehTutup={false}` dipakai saat ada unggahan atau POST berjalan.
+    // Menutup modal di tengah permintaan TIDAK membatalkan permintaannya:
+    // berkasnya tetap terkirim atau akunnya tetap dibuat, sementara pengguna
+    // melihat modalnya hilang tanpa pesan dan menyangka prosesnya gagal.
+    const isi = fs.readFileSync(JALUR_MODAL, 'utf8');
+    assert.match(isi, /if \(bolehTutup\) tutup\(\);/);
+    assert.match(isi, /\{bolehTutup && \(/, 'tombol tutup ikut disembunyikan, bukan hanya Escape');
+  });
+
+  it('pemanggil yang punya pekerjaan berjalan memakai `bolehTutup`', () => {
+    // Tiga tempat: unggah desain pembeli, unggah bukti pemasangan admin, dan
+    // pembuatan akun pengguna. Ketiganya mengirim permintaan yang tidak bisa
+    // dibatalkan dari sisi browser.
+    const wajib = [
+      ['components/BookingCard.tsx', /bolehTutup=\{!loading\}/],
+      ['components/admin/OrderActions.tsx', /bolehTutup=\{!mengunggah\}/],
+      ['app/admin/(dashboard)/users/UserFormModal.tsx', /bolehTutup=\{!loading\}/],
+    ];
+    for (const [rel, pola] of wajib) {
+      const isi = fs.readFileSync(path.join(AKAR_SRC_MODAL, rel), 'utf8');
+      assert.match(isi, pola, `${rel} wajib menahan penutupan selagi permintaan berjalan`);
+    }
+  });
+
+  it('`UserFormModal` tidak mengembalikan `null` lebih dini', () => {
+    // `if (!isOpen) return null` melepas seluruh subtree SEBELUM `Dialog`
+    // sempat memulihkan fokus ke tombol pemicunya. Visibilitasnya sekarang
+    // urusan prop `terbuka`.
+    const isi = barisSumber(
+      path.join(AKAR_SRC_MODAL, 'app', 'admin', '(dashboard)', 'users', 'UserFormModal.tsx')
+    )
+      .map(({ teks }) => teks)
+      .join('\n');
+    assert.doesNotMatch(isi, /if \(!isOpen\) return null/);
+  });
+
+  it('lembar filter ponsel tetap dibatasi `md:hidden` di pembungkus terluar', () => {
+    // `showMobileFilter` tidak pernah direset saat lebar layar berubah, jadi
+    // memutar tablet dari tegak ke datar cukup untuk memunculkan lembar ini di
+    // atas bilah pencarian versi desktop.
+    const isi = fs.readFileSync(
+      path.join(AKAR_SRC_MODAL, 'components', 'SearchFilter.tsx'),
+      'utf8'
+    );
+    assert.match(isi, /kelasLuar="md:hidden"/);
+    assert.match(isi, /varian="bawah"/);
+  });
+
+  it('tautan laporan trafik ke tab baru memakai `rel="noopener noreferrer"`', () => {
+    // Tanpa `noopener`, halaman pihak ketiga yang dibuka menerima
+    // `window.opener` dan bisa menavigasi tab ini ke alamat lain.
+    const isi = fs.readFileSync(
+      path.join(AKAR_SRC_MODAL, 'components', 'TrafficReportModal.tsx'),
+      'utf8'
+    );
+    assert.match(isi, /target="_blank"[\s\S]{0,120}rel="noopener noreferrer"/);
+  });
+
+  it('drawer `AdminShell` tetap membawa semantik dialognya sendiri', () => {
+    // Ia sengaja TIDAK dipindah ke `Modal`: drawer-nya navigasi yang ikut
+    // menutup saat rute berubah, bukan modal alur. Karena itu ia harus tetap
+    // menyediakan sendiri apa yang `Dialog` sediakan untuk yang lain.
+    const isi = fs.readFileSync(
+      path.join(AKAR_SRC_MODAL, 'app', 'admin', '_components', 'AdminShell.tsx'),
+      'utf8'
+    );
+    assert.match(isi, /role="dialog"/);
+    assert.match(isi, /aria-modal=/);
+    assert.match(isi, /'Escape'|"Escape"/, 'Escape wajib menutup drawer');
+  });
+
+  // --------------------------------------------------------------------------
+  // Kelas animasi
+  // --------------------------------------------------------------------------
+
+  it('`tailwind.config.ts` mendaftarkan plugin animasi', () => {
+    // Regresi yang dijaga: `plugins: []`. Itu membuat seluruh kelas animasi di
+    // repo ini berhenti menghasilkan CSS tanpa satu pun galat build.
+    // `barisSumber` lagi, dan untuk alasan yang sama: komentar kepala
+    // `tailwind.config.ts` MENGUTIP `plugins: []` saat menjelaskan keadaan
+    // sebelumnya. Memeriksa teks mentah membuat catatan cacatnya sendiri
+    // terbaca sebagai cacat yang belum diperbaiki.
+    const isi = barisSumber(JALUR_TW)
+      .map(({ teks }) => teks)
+      .join('\n');
+    // Kedua gaya kutip diterima: berkas ini memakai `"..."` untuk impor dan
+    // `'...'` di dalam pluginnya, dan test yang hanya menerima satu gaya gagal
+    // karena formatnya, bukan karena pluginnya hilang.
+    assert.match(isi, /from ['"]tailwindcss\/plugin['"]/);
+    assert.doesNotMatch(isi, /plugins:\s*\[\s*\]/, 'plugins kosong mematikan semua kelas animasi');
+    assert.match(isi, /plugins:\s*\[[^\]]*animasiMasuk/);
+    assert.match(isi, /@keyframes utero-masuk/);
+  });
+
+  it('setiap kelas animasi yang dipakai di `src/` punya penghasilnya di config', () => {
+    // Inti suite ini. Kelas Tailwind yang tidak dikenal tidak pernah menjadi
+    // galat — ia hanya tidak menghasilkan CSS — jadi satu-satunya cara
+    // mengetahuinya adalah mencocokkan yang dipakai dengan yang didaftarkan.
+    const tw = fs.readFileSync(JALUR_TW, 'utf8');
+
+    // Nilai yang boleh dipakai di belakang setiap keluarga kelas.
+    // `slide-in-from-*` dibangkitkan dari `theme('spacing')`, jadi yang
+    // diperiksa adalah keanggotaan pada skala spacing Tailwind bawaan.
+    const SKALA_SPACING = new Set([
+      '0', '0.5', '1', '1.5', '2', '2.5', '3', '3.5', '4', '5', '6', '7', '8', '9',
+      '10', '11', '12', '14', '16', '20', '24', '28', '32', '36', '40', '44', '48',
+      '52', '56', '60', '64', '72', '80', '96', 'px',
+    ]);
+    const SKALA_DURASI = new Set(['0', '75', '100', '150', '200', '300', '500', '700', '1000']);
+    const FADE = new Set(['0', '5', '10', '20', '50']);
+    const ZOOM = new Set(['50', '75', '90', '95']);
+
+    const KELUARGA =
+      'animate-in|fade-in|zoom-in|slide-in-from-top|slide-in-from-bottom|slide-in-from-left|slide-in-from-right|durasi-masuk';
+
+    const dipakai = new Map();
+    for (const jalur of berkasSumber(AKAR_SRC_MODAL)) {
+      const rel = relSumber(jalur);
+      for (const { nomor, teks } of barisSumber(jalur)) {
+        const pola = new RegExp(`\\b(?:motion-safe:)?(?:${KELUARGA})(?:-[\\w.]+)?\\b`, 'g');
+        for (const cocok of teks.matchAll(pola)) {
+          const kelas = cocok[0].replace(/^motion-safe:/, '');
+          if (!dipakai.has(kelas)) dipakai.set(kelas, `${rel}:${nomor}`);
+        }
+      }
+    }
+
+    assert.ok(dipakai.size > 0, 'pemindai kelas animasi tidak menemukan apa pun — polanya rusak');
+
+    const tidakDikenal = [];
+    for (const [kelas, tempat] of dipakai) {
+      const cocok = kelas.match(new RegExp(`^(${KELUARGA})(?:-([\\w.]+))?$`));
+      if (!cocok) {
+        tidakDikenal.push(`${kelas} (${tempat})`);
+        continue;
+      }
+      const keluarga = cocok[1];
+      const nilai = cocok[2];
+
+      if (keluarga === 'animate-in') {
+        if (nilai !== undefined) tidakDikenal.push(`${kelas} (${tempat})`);
+        continue;
+      }
+      if (keluarga === 'durasi-masuk') {
+        // `durasi-masuk` tanpa angka tidak didaftarkan: `matchUtilities` hanya
+        // menghasilkan varian bernomor.
+        if (nilai === undefined || !SKALA_DURASI.has(nilai)) {
+          tidakDikenal.push(`${kelas} (${tempat})`);
+        }
+        continue;
+      }
+      if (nilai === undefined) {
+        // `fade-in`, `zoom-in`, `slide-in-from-bottom`, `slide-in-from-top`
+        // tanpa angka semuanya didaftarkan `addUtilities` sebagai bawaan.
+        // `slide-in-from-left`/`-right` TIDAK — dan itu disengaja, karena tidak
+        // ada pemakainya; kalau nanti ada, config-nya yang ditambah.
+        if (keluarga === 'slide-in-from-left' || keluarga === 'slide-in-from-right') {
+          tidakDikenal.push(`${kelas} (${tempat}) — varian tanpa angka tidak didaftarkan`);
+        }
+        continue;
+      }
+      if (keluarga === 'fade-in' && !FADE.has(nilai)) tidakDikenal.push(`${kelas} (${tempat})`);
+      else if (keluarga === 'zoom-in' && !ZOOM.has(nilai)) tidakDikenal.push(`${kelas} (${tempat})`);
+      else if (keluarga.startsWith('slide-in-from') && !SKALA_SPACING.has(nilai)) {
+        tidakDikenal.push(`${kelas} (${tempat})`);
+      }
+    }
+
+    assert.deepEqual(
+      tidakDikenal,
+      [],
+      `kelas animasi berikut tidak menghasilkan CSS apa pun — daftarkan di tailwind.config.ts atau ganti: ${tidakDikenal.join(', ')}`
+    );
+
+    // Dan kebalikannya: keluarga yang didaftarkan lewat `addUtilities` harus
+    // benar-benar tertulis di config, bukan hanya diasumsikan ada.
+    for (const bawaan of ['.animate-in', '.fade-in', '.zoom-in']) {
+      assert.ok(tw.includes(`'${bawaan}'`), `${bawaan} wajib didaftarkan di tailwind.config.ts`);
+    }
+  });
+
+  it('`duration-*` tidak dipakai bersama `animate-in`', () => {
+    // `duration-*` bawaan Tailwind menulis `transition-duration`, BUKAN
+    // `animation-duration`. Di elemen yang hanya punya `animate-in` ia tidak
+    // berpengaruh sama sekali: animasinya berjalan 150ms bawaan sementara angka
+    // di kelasnya mengatakan hal lain, dan tidak ada yang menandainya. Yang
+    // benar `durasi-masuk-*`.
+    const pelanggar = [];
+    for (const jalur of berkasSumber(AKAR_SRC_MODAL)) {
+      const rel = relSumber(jalur);
+      for (const { nomor, teks } of barisSumber(jalur)) {
+        if (!/\banimate-in\b/.test(teks)) continue;
+        if (/\b(?:motion-safe:)?duration-\d+\b/.test(teks)) pelanggar.push(`${rel}:${nomor}`);
+      }
+    }
+    assert.deepEqual(
+      pelanggar,
+      [],
+      `pakai \`durasi-masuk-*\`, bukan \`duration-*\`, untuk lama animasi: ${pelanggar.join(', ')}`
+    );
+  });
+
+  it('gerakan dihormati: `.animate-in` mematikan dirinya pada `prefers-reduced-motion`', () => {
+    // Sebagian besar pemanggil tidak pernah menulis `motion-safe:`, jadi
+    // penghormatannya dilipat ke dalam kelasnya sendiri. Pemanggil yang menulis
+    // `motion-safe:` tetap benar — keduanya menuju hasil yang sama.
+    const isi = fs.readFileSync(JALUR_TW, 'utf8');
+    assert.match(isi, /prefers-reduced-motion: reduce/);
+    assert.match(isi, /animation: 'none'/);
+  });
+});

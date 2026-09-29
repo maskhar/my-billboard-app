@@ -27,8 +27,14 @@ export default async function AdminLoginPage() {
           utama. Halaman ini tidak memakai `Navbar`, jadi tidak punya tautan
           lewati; landmark inilah satu-satunya pegangan navigasi di sini. */}
       <main className="flex flex-col items-center">
-      {/* LOGO EKSKLUSIF */}
-      <div className="mb-8 text-center animate-in fade-in zoom-in duration-500">
+      {/* LOGO EKSKLUSIF
+
+          `duration-500` DIGANTI `durasi-masuk-500`. `duration-*` bawaan
+          Tailwind menulis `transition-duration`, dan blok ini tidak punya
+          `transition` apa pun — jadi ia tidak berpengaruh sama sekali pada
+          `animate-in`. Animasinya berjalan di 150ms bawaan, bukan 500ms yang
+          tertulis di sini, dan tidak ada yang menandainya. */}
+      <div className="mb-8 text-center animate-in fade-in zoom-in durasi-masuk-500">
         <div className="bg-utero w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg shadow-utero/50">
           <Lock color="white" size={32} />
         </div>

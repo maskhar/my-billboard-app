@@ -1,8 +1,9 @@
 'use client';
 
-import { Search, MapPin, MonitorPlay, Calendar, SlidersHorizontal, X } from 'lucide-react';
+import { Search, MapPin, MonitorPlay, Calendar, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import Modal from '@/components/ui/Modal';
 
 // Empat isian di berkas ini memakai `outline-none` TANPA pengganti apa pun —
 // bukan `focus:ring-utero` yang lebarnya nol seperti di halaman login, tapi
@@ -74,15 +75,28 @@ const SearchFilter = () => {
             </div>
         </div>
 
-        {/* === MOBILE FILTER MODAL (Pop Up dari Bawah) === */}
-        {showMobileFilter && (
-            <div className="fixed inset-0 z-[9999] bg-black/60 backdrop-blur-sm flex items-end md:hidden animate-in fade-in">
-                <div className="bg-white w-full rounded-t-3xl p-6 pb-10 space-y-6 animate-in slide-in-from-bottom duration-300">
-                    <div className="flex justify-between items-center border-b border-gray-100 pb-4">
-                        <h3 className="font-bold text-lg text-gray-800">Filter Pencarian</h3>
-                        <button onClick={() => setShowMobileFilter(false)} className="bg-gray-100 p-2 rounded-full"><X size={20}/></button>
-                    </div>
+        {/* === MOBILE FILTER MODAL (Pop Up dari Bawah) ===
 
+            `md:hidden` DIPERTAHANKAN di pembungkus terluar lewat `kelasLuar`.
+            Tanpa itu lembar filter ini tetap terpasang di lebar desktop,
+            menutupi bilah pencarian versi desktop di bawahnya dengan latar
+            hitam — `showMobileFilter` tidak pernah direset saat lebar layar
+            berubah, jadi memutar tablet dari tegak ke datar cukup untuk
+            memunculkannya di tata letak yang salah.
+
+            Lembar ini dulu div biasa: Tab dari dalamnya berjalan terus ke
+            enam isian bilah pencarian desktop yang tersembunyi di belakang
+            latar — pengguna papan tombol mengetik ke kolom yang tidak ia
+            lihat, lalu menekan Enter dan halaman berpindah. */}
+        <Modal
+            terbuka={showMobileFilter}
+            tutup={() => setShowMobileFilter(false)}
+            judul="Filter Pencarian"
+            varian="bawah"
+            lebar="max-w-none"
+            kelasLuar="md:hidden"
+        >
+            <div className="space-y-6 p-6 pb-10">
                     <div>
                         <label htmlFor="filter-tipe-mobile" className="text-xs font-bold text-gray-500 uppercase mb-2 block">Tipe Media</label>
                         <select 
@@ -109,15 +123,14 @@ const SearchFilter = () => {
                         />
                     </div>
 
-                    <button 
+                    <button
                         onClick={handleSearch}
                         className="w-full bg-utero text-white py-4 rounded-xl font-bold shadow-lg shadow-red-200 active:scale-95 transition"
                     >
                         Terapkan Filter
                     </button>
-                </div>
             </div>
-        )}
+        </Modal>
 
 
         {/* === DESKTOP (LAPTOP) VIEW === */}

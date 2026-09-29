@@ -3,7 +3,8 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Loader2, X } from 'lucide-react';
+import { Loader2, UserPlus } from 'lucide-react';
+import Modal from '@/components/ui/Modal';
 import { InputField, SelectField } from '@/components/FormField';
 import { useToast } from '@/components/ui/Toast';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
@@ -42,7 +43,11 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
     }
   }, [isOpen]);
 
-  if (!isOpen) return null;
+  // `if (!isOpen) return null` DIHAPUS: `Modal` di bawah yang memutuskan
+  // visibilitas lewat prop `terbuka`, dan `Dialog` headless UI perlu tetap
+  // dipasang agar ia bisa memulihkan fokus ke tombol pemicunya saat ditutup.
+  // Pengembalian dini di sini melepas seluruh subtree sebelum pemulihan itu
+  // terjadi.
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { id, value } = e.target;
@@ -101,12 +106,20 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
   };
 
   return (
-    <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex justify-center items-center">
-      <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-2xl relative">
-        <button onClick={onClose} className="absolute top-4 right-4 text-gray-400 hover:text-gray-600">
-          <X size={24} />
-        </button>
-        <h2 className="text-xl font-bold text-gray-800 mb-1">Tambah Pengguna Baru</h2>
+    // `bolehTutup={!loading}`: Escape dan klik di luar dimatikan selagi
+    // permintaan berjalan. Menutup modal di tengah `POST` tidak membatalkan
+    // permintaannya — akunnya tetap dibuat — sementara admin melihat modalnya
+    // hilang tanpa pesan dan menyangka pembuatannya gagal, lalu mencobanya
+    // lagi. Email-nya unik di database, jadi percobaan kedua ditolak dan yang
+    // ia baca adalah galat untuk akun yang sebenarnya berhasil dibuat.
+    <Modal
+      terbuka={isOpen}
+      tutup={onClose}
+      bolehTutup={!loading}
+      judul={<><UserPlus size={18} className="text-red-600"/> Tambah Pengguna Baru</>}
+      lebar="max-w-2xl"
+    >
+      <div className="p-6">
         <p className="text-sm text-gray-500 mb-6">Buat akun baru dan tentukan hak aksesnya.</p>
 
         <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -146,7 +159,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
                 </SelectField>
             </div>
             <div className="md:col-span-2 text-right mt-4">
-            <button type="button" onClick={onClose} className="mr-2 py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50">
+            <button type="button" onClick={onClose} disabled={loading} className="mr-2 py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                 Batal
             </button>
             <button type="submit" disabled={loading} className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:bg-gray-400">
@@ -155,6 +168,6 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
             </div>
         </form>
       </div>
-    </div>
+    </Modal>
   );
 }
