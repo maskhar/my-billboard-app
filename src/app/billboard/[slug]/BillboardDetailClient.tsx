@@ -10,6 +10,7 @@ import AvailabilityCalendar from '@/components/AvailabilityCalendar';
 import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar, MessageCircle } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
 import { arrayDariJson } from '@/lib/safe-json';
+import { specsAman } from '@/lib/spesifikasi-billboard';
 import { rupiahSingkat } from '@/lib/money';
 import type { DetailBillboardPublik, PengaturanPublik } from '@/lib/tipe-billboard';
 import { kunciTanggal, tanggalPanjang } from '@/lib/tanggal';
@@ -72,7 +73,14 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
   // justru MENGHAPUS datanya — `JSON.parse(["a.jpg"])` melempar dan hasilnya
   // jatuh ke array kosong, jadi galerinya lenyap tanpa error yang terlihat.
   const gallery = arrayDariJson<string>(rawData.gallery, `Billboard.gallery id=${rawData.id}`);
-  const specs = arrayDariJson<{ label: string; value: string }>(rawData.specs, `Billboard.specs id=${rawData.id}`);
+  // `specsAman` di atas `arrayDariJson`, bukan menggantikannya: yang pertama
+  // menjamin ARRAY, yang kedua menjamin setiap barisnya punya `label` dan
+  // `value` bertipe teks. Tanpa yang kedua, castnya tidak diperiksa per baris —
+  // dan `{spec.value}` di bawah adalah tempat objek menjadi anak elemen React,
+  // yang melempar tanpa ada komponen di halaman ini yang menangkapnya. Itu
+  // persis kegagalan yang dijelaskan komentar di atas, dan satu-satunya kolom
+  // jsonb yang belum ikut ditutup. Lihat `src/lib/spesifikasi-billboard.ts`.
+  const specs = specsAman(arrayDariJson<unknown>(rawData.specs, `Billboard.specs id=${rawData.id}`));
   const includes = arrayDariJson<string>(rawData.includes, `Billboard.includes id=${rawData.id}`);
   const excludes = arrayDariJson<string>(rawData.excludes, `Billboard.excludes id=${rawData.id}`);
   // Dulu `(rawData.price / 1000000).toFixed(0)` — pembagian pada objek

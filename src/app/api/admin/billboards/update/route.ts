@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 import { idDariBody } from "@/lib/id-dari-body";
 import { keDecimal, lebihBesar } from "@/lib/money";
 import { pisahkanOpsi } from "@/lib/opsi-billboard";
+import { susunSpecs } from "@/lib/spesifikasi-billboard";
+import { koordinat, teksBillboard } from "@/lib/bidang-billboard";
 import {
   BillboardStatus,
   PublishStatus,
@@ -55,20 +57,19 @@ export async function POST(req: Request) {
       const oldData = await prisma.billboard.findUnique({ where: { id } });
       if (!oldData) return NextResponse.json({ message: "Data hilang" }, { status: 404 });
 
-      // --- LOGIC PACKING DATA BARU (SAMA SEPERTI CREATE) ---
+      // --- LOGIC PACKING DATA BARU ---
+      //
+      // Satu fungsi bersama dengan `create/route.ts`, bukan rumus kembar. Blok
+      // ini dulu diberi judul "SAMA SEPERTI CREATE" — dan itu justru
+      // masalahnya: sepakat hanya selama ada yang mengingat memperbarui
+      // keduanya. Tiga dari enam barisnya juga meneruskan nilai body apa adanya
+      // ke jsonb; lihat `src/lib/spesifikasi-billboard.ts`.
       //
       // TANPA `JSON.stringify`: keempat kolom tujuan bertipe jsonb. Membungkusnya
       // tidak akan ditolak compiler (tipe `InputJsonValue` memuat `string`) tapi
       // menyimpan teks JSON di dalam jsonb — ganda-encode, dan pembacanya
       // melihat teks alih-alih array.
-      const packedSpecs = [
-        { label: "Ukuran", value: `${body.sizeH || 0}m x ${body.sizeW || 0}m` },
-        { label: "Luas Area", value: `${(Number(body.sizeH) * Number(body.sizeW)).toFixed(1)} m²` },
-        { label: "Layout / Orientasi", value: body.orientation || "-" },
-        { label: "Tampilan", value: body.sides ? `${body.sides} Sisi` : "-" },
-        { label: "Jenis Penerangan", value: body.lighting || "-" },
-        { label: "Material", value: body.material || "-" },
-      ];
+      const packedSpecs = susunSpecs(body, 'billboards/update');
 
       // Satu fungsi bersama dengan `create/route.ts`, bukan rumus kembar: opsi
       // yang datang tanpa field `included` dulu di sini dihitung sebagai
@@ -119,6 +120,58 @@ export async function POST(req: Request) {
           );
       }
 
+      // KOORDINAT: DIPERIKSA, TIDAK DIBERI NILAI BAKU
+      //
+      // Baris ini dulu `lat: Number(body.lat)` — tanpa pemeriksaan berhingga dan
+      // tanpa fallback, sementara `create/route.ts` punya `|| -7.9`. Menyimpang
+      // di jalur yang justru lebih berbahaya: `{"lat":"utara"}` maupun `lat`
+      // yang tidak dikirim menghasilkan `NaN`, kolom Float menolaknya, dan
+      // karena penulisannya DI DALAM `$transaction` di bawah,
+      // `billboardHistory.create` ikut batal — jadi jejak auditnya pun hilang.
+      //
+      // Di sini ia 400, BUKAN nilai baku seperti di create. Perbedaannya
+      // disengaja: create menempatkan billboard baru yang koordinatnya belum
+      // diisi di pusat Malang, sedangkan update yang koordinatnya hilang berarti
+      // MEMINDAHKAN billboard yang sudah terpasang ke titik itu. Menyimpan
+      // -7.9/112.6 diam-diam di jalur ini berarti billboard yang sudah benar
+      // berpindah lokasi tanpa ada yang meminta.
+      const lat = koordinat(body.lat);
+      const lng = koordinat(body.lng);
+      if (lat === null || lng === null) {
+          return NextResponse.json(
+              { message: "Koordinat (Latitude/Longitude) harus berupa angka." },
+              { status: 400 }
+          );
+      }
+
+      // KOLOM TEKS
+      //
+      // Sebelumnya `body.sku`, `body.address`, `body.type`, `body.mainImage`,
+      // dan `body.title` diteruskan apa adanya. Nilai bukan teks ditolak Prisma
+      // di lapisan paling dalam, jadi jawabannya 500 "Gagal Update" tanpa
+      // menyebut bidang mana — dan seperti koordinat di atas, ia membatalkan
+      // riwayat perubahan sekaligus.
+      //
+      // Keduanya wajib karena kolomnya non-null dan ini penyuntingan billboard
+      // yang sudah ada: tidak ada nilai baku yang benar untuk menggantikan judul
+      // atau alamat yang sudah tersimpan.
+      const title = teksBillboard(body.title);
+      if (title === null) {
+          return NextResponse.json({ message: "Judul billboard wajib diisi." }, { status: 400 });
+      }
+
+      const address = teksBillboard(body.address);
+      if (address === null) {
+          return NextResponse.json({ message: "Alamat billboard wajib diisi." }, { status: 400 });
+      }
+
+      const sku = teksBillboard(body.sku) ?? "NO-SKU";
+      const type = teksBillboard(body.type) ?? "Baliho";
+      const mainImage = teksBillboard(body.mainImage) ?? "";
+      // Kolomnya opsional: billboard tanpa tautan trafik itu hal biasa, dan
+      // `null` di sini artinya "kosongkan", bukan "tidak sah".
+      const smartsucoUrl = teksBillboard(body.smartsucoUrl);
+
       // TRANSAKSI DATABASE (Simpan History -> Update Data)
       await prisma.$transaction([
           // 1. Simpan History
@@ -149,15 +202,15 @@ export async function POST(req: Request) {
           prisma.billboard.update({
               where: { id },
               data: {
-                  title: body.title,
+                  title,
                   slug,
-                  sku: body.sku,
-                  address: body.address,
-                  type: body.type,
+                  sku,
+                  address,
+                  type,
                   price: harga,
-                  lat: Number(body.lat),
-                  lng: Number(body.lng),
-                  mainImage: body.mainImage,
+                  lat,
+                  lng,
+                  mainImage,
                   status: body.status,
                   publishStatus: body.publishStatus,
                   
@@ -167,8 +220,8 @@ export async function POST(req: Request) {
                   includes: includesList,
                   excludes: excludesList,
                   gallery: galeri,
-                  smartsucoUrl: body.smartsucoUrl,
-                  
+                  smartsucoUrl,
+
                   updatedById: session.user.id
               }
           })

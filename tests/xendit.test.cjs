@@ -105,6 +105,8 @@ const JALUR_MAIL = path.join(__dirname, '..', 'src', 'lib', 'mail.ts');
 const JALUR_NOMOR_PESANAN = path.join(__dirname, '..', 'src', 'lib', 'nomor-pesanan.ts');
 const JALUR_LOG_AMAN = path.join(__dirname, '..', 'src', 'lib', 'log-aman.ts');
 const JALUR_OPSI_BILLBOARD = path.join(__dirname, '..', 'src', 'lib', 'opsi-billboard.ts');
+const JALUR_SPEC_BILLBOARD = path.join(__dirname, '..', 'src', 'lib', 'spesifikasi-billboard.ts');
+const JALUR_BIDANG_BILLBOARD = path.join(__dirname, '..', 'src', 'lib', 'bidang-billboard.ts');
 const jalurBillboardRoute = (nama) =>
   path.join(__dirname, '..', 'src', 'app', 'api', 'admin', 'billboards', nama, 'route.ts');
 const JALUR_ROUTE_ROLLBACK = jalurBillboardRoute('rollback');
@@ -13181,8 +13183,23 @@ describe('form billboard admin bertipe dan status tidak lagi hilang', () => {
     // `{ label: "Ukuran" }` tanpa `value` membuat `.replace()` melempar dan
     // form-nya gagal terbuka — admin tidak bisa memperbaiki data yang cacat
     // justru karena data itu cacat.
-    assert.match(kode, /typeof s\.value === 'string'/);
-    assert.match(kode, /arrayDariJson<BarisSpesifikasi>/);
+    //
+    // Penjagaannya dulu ditulis inline di berkas ini sebagai dua predikat
+    // `typeof`. Sekarang ia `specsAman` di `src/lib/spesifikasi-billboard.ts`,
+    // dipakai bersama halaman billboard publik dan panel transaksi admin yang
+    // membaca kolom yang sama. Gerbang ini menuntut penjaganya ADA, bukan
+    // menuntut ia ditulis di sini: bentuk inline-nya justru yang membuat dua
+    // pembaca lain tidak terlindungi.
+    assert.match(kode, /specsAman\(/);
+    assert.match(kode, /from '@\/lib\/spesifikasi-billboard'/);
+
+    // Dan `arrayDariJson` tetap yang membaca kolomnya — `JSON.parse` mentah
+    // pada nilai jsonb yang sudah diuraikan Prisma justru menghapus datanya.
+    assert.match(kode, /specsAman\(\s*arrayDariJson<unknown>\(data\.specs/);
+
+    // Bentuk inline-nya tidak boleh kembali: dua penjaga untuk satu invariant
+    // berarti salah satunya akan tertinggal saat yang lain diperbarui.
+    assert.doesNotMatch(kode, /typeof s\.value === 'string'/);
   });
 
   it('impor ikon yang tidak dirender sudah dibuang', () => {
@@ -20946,4 +20963,419 @@ describe('src/lib/tanggal.ts', () => {
         pelanggar.join(', ')
     );
   });
+});
+
+// ====================================================================
+// specs: nilai jsonb yang dirender sebagai anak elemen React
+// ====================================================================
+describe('susunSpecs() memastikan bentuk nilai specs', () => {
+  const {
+    susunSpecs,
+    specsAman,
+    NILAI_SPEC_KOSONG,
+    PANJANG_NILAI_SPEC_MAKS,
+  } = require(JALUR_SPEC_BILLBOARD);
+
+  // Sama seperti helper di suite `pisahkanOpsi()`: penolakan memang DICATAT,
+  // jadi tanpa ini keluaran test penuh baris log yang justru bukti test lulus.
+  function tanpaGalat(fn) {
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    try {
+      return { hasil: fn(), log: tercatat.join('\n') };
+    } finally {
+      console.error = asli;
+    }
+  }
+
+  const cari = (baris, label) => baris.find((b) => b.label === label)?.value;
+
+  it('nilai form yang wajar tersusun apa adanya', () => {
+    const { hasil } = tanpaGalat(() =>
+      susunSpecs({
+        sizeH: '4',
+        sizeW: '6',
+        orientation: 'Horizontal',
+        sides: '2',
+        lighting: 'Frontlight',
+        material: 'Vinyl Backlight',
+      })
+    );
+
+    assert.equal(hasil.length, 6);
+    assert.equal(cari(hasil, 'Ukuran'), '4m x 6m');
+    assert.equal(cari(hasil, 'Luas Area'), '24.0 m²');
+    assert.equal(cari(hasil, 'Layout / Orientasi'), 'Horizontal');
+    assert.equal(cari(hasil, 'Tampilan'), '2 Sisi');
+    assert.equal(cari(hasil, 'Jenis Penerangan'), 'Frontlight');
+    assert.equal(cari(hasil, 'Material'), 'Vinyl Backlight');
+  });
+
+  it('SETIAP value bertipe teks, apa pun yang dikirim', () => {
+    // Inilah invariantnya. `orientation`, `lighting`, dan `material` dulu
+    // diteruskan APA ADANYA dari `req.json()` ke kolom jsonb. jsonb menerima
+    // objek dan angka tanpa galat dan tanpa log, lalu `BillboardDetailClient`
+    // merendernya `{spec.value}` — React melempar "Objects are not valid as a
+    // React child", tidak ada komponen yang menangkapnya, dan SELURUH halaman
+    // billboard publik mati untuk setiap pengunjung sampai barisnya diperbaiki
+    // lewat database.
+    const jahat = [{ jahat: true }, 42, null, ['a'], true, { toString: 'bukan fungsi' }];
+
+    for (const nilai of jahat) {
+      const { hasil } = tanpaGalat(() =>
+        susunSpecs({
+          sizeH: nilai,
+          sizeW: nilai,
+          orientation: nilai,
+          sides: nilai,
+          lighting: nilai,
+          material: nilai,
+        })
+      );
+
+      assert.equal(hasil.length, 6);
+      for (const baris of hasil) {
+        assert.equal(
+          typeof baris.value,
+          'string',
+          `value harus teks untuk masukan ${JSON.stringify(nilai)}, dapat ${typeof baris.value}`
+        );
+        assert.equal(typeof baris.label, 'string');
+      }
+    }
+  });
+
+  it('nilai bukan teks menjadi penanda kosong, bukan "[object Object]"', () => {
+    const { hasil } = tanpaGalat(() =>
+      susunSpecs({ orientation: { a: 1 }, lighting: 7, material: ['x'] })
+    );
+
+    assert.equal(cari(hasil, 'Layout / Orientasi'), NILAI_SPEC_KOSONG);
+    assert.equal(cari(hasil, 'Jenis Penerangan'), NILAI_SPEC_KOSONG);
+    assert.equal(cari(hasil, 'Material'), NILAI_SPEC_KOSONG);
+
+    // `String({a:1})` adalah "[object Object]" — bertipe teks, jadi tidak ada
+    // yang melempar; ia hanya tampil di tabel spesifikasi halaman pembeli
+    // sebagai teks itu. Ditolak, bukan dipaksa jadi teks.
+    for (const baris of hasil) {
+      assert.doesNotMatch(baris.value, /\[object/);
+    }
+  });
+
+  it('ukuran yang bukan angka tidak menghasilkan "NaN m2"', () => {
+    // `Number({}) * Number({})` adalah `NaN`, dan `NaN.toFixed(1)` adalah teks
+    // `"NaN"` — tersimpan tanpa keluhan, lalu tampil sebagai "NaN m2".
+    for (const nilai of [{}, 'empat', ['4'], null, Infinity, NaN]) {
+      const { hasil } = tanpaGalat(() => susunSpecs({ sizeH: nilai, sizeW: nilai }));
+      assert.doesNotMatch(cari(hasil, 'Luas Area'), /NaN|Infinity/);
+      assert.doesNotMatch(cari(hasil, 'Ukuran'), /NaN|Infinity/);
+    }
+  });
+
+  it('teks yang terlalu panjang ditolak, yang pas batas diterima', () => {
+    const panjang = 'x'.repeat(PANJANG_NILAI_SPEC_MAKS + 1);
+    const { hasil } = tanpaGalat(() => susunSpecs({ material: panjang }));
+    assert.equal(cari(hasil, 'Material'), NILAI_SPEC_KOSONG);
+
+    const pas = 'y'.repeat(PANJANG_NILAI_SPEC_MAKS);
+    const { hasil: hasil2 } = tanpaGalat(() => susunSpecs({ material: pas }));
+    assert.equal(cari(hasil2, 'Material'), pas);
+  });
+
+  it('teks dirapikan, dan yang hanya spasi ditolak', () => {
+    const { hasil } = tanpaGalat(() =>
+      susunSpecs({ material: '  Vinyl  ', lighting: '   ' })
+    );
+    assert.equal(cari(hasil, 'Material'), 'Vinyl');
+    assert.equal(cari(hasil, 'Jenis Penerangan'), NILAI_SPEC_KOSONG);
+  });
+
+  it('body kosong, null, atau undefined tidak melempar', () => {
+    for (const body of [undefined, null, {}]) {
+      const { hasil } = tanpaGalat(() => susunSpecs(body));
+      assert.equal(hasil.length, 6);
+      for (const baris of hasil) {
+        assert.equal(typeof baris.value, 'string');
+      }
+    }
+  });
+
+  it('bidang yang tidak dikirim TIDAK dicatat sebagai penolakan', () => {
+    // Mencatat setiap bidang kosong sebagai penolakan membuat log penuh baris
+    // yang bukan masalah, dan penolakan yang sungguhan tenggelam di dalamnya.
+    const { log } = tanpaGalat(() => susunSpecs({ material: 'Vinyl' }));
+    assert.equal(log, '');
+  });
+
+  it('nilai yang ditolak dicatat, TANPA menuliskan nilainya', () => {
+    const { log } = tanpaGalat(() =>
+      susunSpecs({ orientation: { rahasia: 'jangan-masuk-log' } }, 'uji')
+    );
+
+    assert.match(log, /orientation/);
+    assert.match(log, /uji/);
+    // Yang ditolak justru nilai berbentuk asing dari permintaan orang lain;
+    // menuliskannya ke log adalah cara paling mudah memasukkan isi permintaan
+    // itu ke berkas log.
+    assert.doesNotMatch(log, /jangan-masuk-log/);
+    assert.doesNotMatch(log, /rahasia/);
+  });
+
+  it('"Tampilan" tidak menjadi "- Sisi" saat sides kosong', () => {
+    const { hasil } = tanpaGalat(() => susunSpecs({ sides: {} }));
+    assert.equal(cari(hasil, 'Tampilan'), NILAI_SPEC_KOSONG);
+  });
+
+  it('specsAman menyaring baris yang label atau value-nya bukan teks', () => {
+    // Penjaga di sisi BACA, dan ia tetap dibutuhkan walaupun sisi tulis sudah
+    // dijaga: baris yang tersimpan SEBELUM penjaga itu ada tidak berubah
+    // sendiri.
+    const hasil = specsAman([
+      { label: 'Ukuran', value: '4m x 6m' },
+      { label: 'Material', value: { jahat: true } },
+      { label: 42, value: 'Vinyl' },
+      { label: 'Tanpa value' },
+      null,
+      undefined,
+      'bukan objek',
+      7,
+      ['a'],
+      { label: 'Penerangan', value: 'Frontlight' },
+    ]);
+
+    assert.deepEqual(hasil, [
+      { label: 'Ukuran', value: '4m x 6m' },
+      { label: 'Penerangan', value: 'Frontlight' },
+    ]);
+  });
+
+  it('specsAman pada array kosong mengembalikan array kosong', () => {
+    assert.deepEqual(specsAman([]), []);
+  });
+
+  it('hasil susunSpecs selalu lolos specsAman utuh', () => {
+    // Kedua penjaga harus sepakat: nilai yang baru ditulis tidak boleh
+    // tersaring saat dibaca kembali, karena itu berarti spesifikasi hilang dari
+    // halaman setelah berhasil disimpan.
+    const { hasil } = tanpaGalat(() =>
+      susunSpecs({ sizeH: 4, sizeW: 6, orientation: { a: 1 }, sides: 'x'.repeat(999) })
+    );
+    assert.equal(specsAman(hasil).length, 6);
+  });
+
+  it('modul ini tidak mengimpor nilai apa pun', () => {
+    // Ia dipakai dari Client Component (`BillboardDetailClient`,
+    // `TransactionClient`, form admin). Mengimpor `@prisma/client` — langsung
+    // atau lewat modul lain — menarik runtime Prisma ke bundel browser.
+    const isi = fs.readFileSync(JALUR_SPEC_BILLBOARD, 'utf8');
+    const impor = isi.match(/^import .*$/gm) || [];
+
+    assert.ok(impor.length > 0, 'penjaga ini sia-sia kalau polanya berhenti cocok');
+    for (const baris of impor) {
+      assert.match(baris, /^import type /, `hanya impor type yang boleh, dapat: ${baris}`);
+    }
+    assert.doesNotMatch(isi, /@prisma\/client/);
+  });
+});
+
+// ====================================================================
+// bidang skalar billboard: title tanpa fallback, lat/lng tanpa Number.isFinite
+// ====================================================================
+describe('teksBillboard() dan koordinat()', () => {
+  const {
+    teksBillboard,
+    koordinat,
+    PANJANG_TEKS_MAKS,
+    LAT_DEFAULT,
+    LNG_DEFAULT,
+  } = require(JALUR_BIDANG_BILLBOARD);
+
+  it('teks wajar diterima dan dirapikan', () => {
+    assert.equal(teksBillboard('Baliho Soekarno Hatta'), 'Baliho Soekarno Hatta');
+    assert.equal(teksBillboard('  Jl. Veteran 12  '), 'Jl. Veteran 12');
+  });
+
+  it('nilai bukan teks, kosong, dan terlalu panjang ditolak', () => {
+    for (const nilai of [undefined, null, 42, {}, ['a'], true, '', '   ']) {
+      assert.equal(teksBillboard(nilai), null, `harus ditolak: ${JSON.stringify(nilai)}`);
+    }
+    assert.equal(teksBillboard('x'.repeat(PANJANG_TEKS_MAKS + 1)), null);
+    assert.equal(teksBillboard('x'.repeat(PANJANG_TEKS_MAKS)), 'x'.repeat(PANJANG_TEKS_MAKS));
+  });
+
+  it('koordinat menerima angka maupun teks angka', () => {
+    assert.equal(koordinat(-7.9), -7.9);
+    assert.equal(koordinat('112.6'), 112.6);
+    assert.equal(koordinat('  -7.98  '), -7.98);
+    // Nol adalah koordinat yang sah, jadi ia harus lolos sebagai nol — bukan
+    // jatuh ke nilai baku seperti yang dilakukan `|| LAT_DEFAULT`.
+    assert.equal(koordinat(0), 0);
+    assert.equal(koordinat('0'), 0);
+  });
+
+  it('NaN dan Infinity ditolak walaupun keduanya bertipe number', () => {
+    // `typeof NaN === 'number'` dan `typeof Infinity === 'number'`, jadi
+    // penjaga berbasis `typeof` saja meloloskan keduanya — lalu kolom Float
+    // menolaknya dan admin melihat 500 tanpa keterangan.
+    for (const nilai of [NaN, Infinity, -Infinity, 'utara', '', '  ', {}, [], null, undefined, true]) {
+      assert.equal(koordinat(nilai), null, `harus ditolak: ${String(nilai)}`);
+    }
+  });
+
+  it('nilai baku koordinat masih menunjuk Malang', () => {
+    assert.equal(LAT_DEFAULT, -7.9);
+    assert.equal(LNG_DEFAULT, 112.6);
+  });
+
+  it('modul ini tidak mengimpor apa pun', () => {
+    const isi = fs.readFileSync(JALUR_BIDANG_BILLBOARD, 'utf8');
+    assert.equal((isi.match(/^import /gm) || []).length, 0);
+  });
+});
+
+// ====================================================================
+// kedua route billboard memakai penjaga bersama, bukan nilai body mentah
+// ====================================================================
+describe('route billboard create/update: nilai body tidak lagi mentah', () => {
+  function kodeRoute(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .join('\n');
+  }
+
+  const ROUTE = [
+    ['create', JALUR_ROUTE_BILLBOARD_CREATE],
+    ['update', JALUR_ROUTE_BILLBOARD_UPDATE],
+  ];
+
+  for (const [nama, jalur] of ROUTE) {
+    it(`${nama}: packedSpecs lewat susunSpecs, bukan disusun di tempat`, () => {
+      const kode = kodeRoute(jalur);
+
+      assert.match(kode, /susunSpecs\(body, ['"]billboards\/(create|update)['"]\)/);
+      assert.match(kode, /spesifikasi-billboard/);
+
+      // Bentuk lamanya tidak boleh kembali: keempat baris ini yang dulu
+      // meneruskan nilai body apa adanya ke kolom jsonb.
+      assert.doesNotMatch(kode, /value:\s*body\.orientation/);
+      assert.doesNotMatch(kode, /value:\s*body\.lighting/);
+      assert.doesNotMatch(kode, /value:\s*body\.material/);
+      assert.doesNotMatch(kode, /body\.sides\s*\?/);
+    });
+
+    it(`${nama}: title diperiksa, tidak diteruskan mentah`, () => {
+      const kode = kodeRoute(jalur);
+
+      assert.match(kode, /const title = teksBillboard\(body\.title\)/);
+      assert.match(kode, /title === null/);
+      // Di create, `title: body.title` dulu SATU-SATUNYA kolom teks tanpa
+      // fallback sama sekali — permintaan tanpa `title` menulis `undefined` ke
+      // kolom String non-null dan jatuh sebagai 500 tanpa keterangan.
+      assert.doesNotMatch(kode, /title:\s*body\.title/);
+    });
+
+    it(`${nama}: kolom teks lain juga lewat penjaga`, () => {
+      const kode = kodeRoute(jalur);
+
+      for (const bidang of ['sku', 'address', 'type', 'mainImage', 'smartsucoUrl']) {
+        assert.doesNotMatch(
+          kode,
+          new RegExp(`${bidang}:\\s*body\\.${bidang}`),
+          `${bidang} tidak boleh diteruskan mentah ke Prisma`
+        );
+        assert.match(
+          kode,
+          new RegExp(`teksBillboard\\(body\\.${bidang}\\)`),
+          `${bidang} harus lewat teksBillboard`
+        );
+      }
+    });
+
+    it(`${nama}: lat/lng lewat koordinat(), bukan Number() mentah`, () => {
+      const kode = kodeRoute(jalur);
+
+      // `Number(body.lat)` pada `"utara"` maupun bidang yang tidak dikirim
+      // menghasilkan `NaN`. Kolom Float menolaknya — dan di `update` itu
+      // membatalkan `billboardHistory.create` di transaksi yang sama, jadi
+      // jejak auditnya ikut hilang bersamanya.
+      assert.doesNotMatch(kode, /Number\(body\.lat\)/);
+      assert.doesNotMatch(kode, /Number\(body\.lng\)/);
+      assert.match(kode, /koordinat\(body\.lat\)/);
+      assert.match(kode, /koordinat\(body\.lng\)/);
+      assert.match(kode, /bidang-billboard/);
+    });
+  }
+
+  it('create memberi nilai baku koordinat, update MENOLAK', () => {
+    const create = kodeRoute(JALUR_ROUTE_BILLBOARD_CREATE);
+    const update = kodeRoute(JALUR_ROUTE_BILLBOARD_UPDATE);
+
+    // Perbedaan yang disengaja: billboard BARU yang koordinatnya belum diisi
+    // wajar ditempatkan di pusat Malang. Billboard yang SUDAH terpasang dan
+    // koordinatnya hilang dari body berarti memindahkannya ke titik itu —
+    // billboard yang sudah benar berpindah lokasi tanpa ada yang meminta.
+    assert.match(create, /koordinat\(body\.lat\) \?\? LAT_DEFAULT/);
+    assert.match(create, /koordinat\(body\.lng\) \?\? LNG_DEFAULT/);
+
+    assert.doesNotMatch(update, /LAT_DEFAULT|LNG_DEFAULT/);
+    assert.match(update, /lat === null \|\| lng === null/);
+  });
+
+  it('kedua route tidak lagi menyusun specs dengan rumus kembar', () => {
+    // Blok itu dulu ditulis dua kali, salah satunya berjudul "SAMA SEPERTI
+    // CREATE" — pengakuan bahwa keduanya hanya sepakat selama ada yang ingat
+    // memperbarui keduanya.
+    for (const [nama, jalur] of ROUTE) {
+      const kode = kodeRoute(jalur);
+      assert.doesNotMatch(kode, /label: "Luas Area"/, `${nama} masih menyusun specs sendiri`);
+      assert.doesNotMatch(kode, /toFixed\(1\)/, `${nama} masih menghitung luas sendiri`);
+    }
+  });
+});
+
+// ====================================================================
+// pembaca specs: satu baris cacat tidak boleh menjatuhkan halaman
+// ====================================================================
+describe('pembaca specs memakai specsAman', () => {
+  const PEMBACA = [
+    [
+      'halaman billboard publik',
+      path.join(__dirname, '..', 'src', 'app', 'billboard', '[slug]', 'BillboardDetailClient.tsx'),
+    ],
+    [
+      'panel transaksi admin',
+      path.join(
+        __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'orders', 'TransactionClient.tsx'
+      ),
+    ],
+    [
+      'form billboard admin',
+      path.join(
+        __dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'billboards', 'form', 'page.tsx'
+      ),
+    ],
+  ];
+
+  for (const [nama, jalur] of PEMBACA) {
+    it(`${nama} menyaring baris specs sebelum merendernya`, () => {
+      const isi = fs.readFileSync(jalur, 'utf8');
+
+      assert.match(isi, /specsAman\(/, `${nama} harus memakai specsAman`);
+      assert.match(isi, /spesifikasi-billboard/);
+
+      // Cast bertipe pada `arrayDariJson` MEMBOHONGI pembacanya: ia menjamin
+      // ARRAY, bukan bentuk tiap elemennya. `<unknown>` membuat kebohongan itu
+      // tidak bisa ditulis lagi tanpa `tsc` berbunyi.
+      assert.doesNotMatch(
+        isi,
+        /arrayDariJson<\s*\{[^}]*label/,
+        `${nama} tidak boleh meng-cast elemen specs tanpa memeriksanya`
+      );
+      assert.doesNotMatch(isi, /arrayDariJson<BarisSpesifikasi>/);
+    });
+  }
 });

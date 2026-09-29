@@ -8,6 +8,7 @@ import type { PaymentStatus, PaymentTujuan } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
 import { arrayDariJson } from '@/lib/safe-json';
+import { specsAman } from '@/lib/spesifikasi-billboard';
 import { rupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { ALAMAT_PENJUAL, NAMA_PENJUAL } from '@/lib/penjual';
@@ -343,12 +344,19 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
   //
   // `arrayDariJson`, BUKAN `safeJsonArray`: kolom `specs` bertipe jsonb dan
   // Prisma sudah menguraikannya (lihat catatan di `src/lib/safe-json.ts`).
-  const specsBillboard = arrayDariJson<{ label: string; value: string }>(
-    selected?.billboard?.specs,
-    `Billboard.specs order=${selected?.id ?? '-'}`
+  //
+  // `specsAman` dipasang DI ATAS `arrayDariJson`, bukan menggantikannya:
+  // `arrayDariJson` menjamin hasilnya ARRAY, tapi tidak menjamin bentuk tiap
+  // elemennya — castnya tidak diperiksa per baris. `cariSpec` di bawah dulu
+  // memeriksa `label` bertipe teks dan TIDAK memeriksa `value`, padahal yang
+  // dirender di panel detail adalah `value`-nya. Satu baris `specs` warisan
+  // yang `value`-nya objek karena itu menjatuhkan seluruh halaman transaksi
+  // admin, bukan hanya satu selnya. Lihat `src/lib/spesifikasi-billboard.ts`.
+  const specsBillboard = specsAman(
+    arrayDariJson<unknown>(selected?.billboard?.specs, `Billboard.specs order=${selected?.id ?? '-'}`)
   );
   const cariSpec = (kataKunci: string) =>
-    specsBillboard.find((s) => typeof s?.label === 'string' && s.label.includes(kataKunci))?.value;
+    specsBillboard.find((s) => s.label.includes(kataKunci))?.value;
 
   return (
     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 h-[calc(100vh-200px)]">

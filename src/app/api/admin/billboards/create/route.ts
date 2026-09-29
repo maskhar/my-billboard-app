@@ -5,6 +5,13 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { keDecimal, lebihBesar } from "@/lib/money";
 import { pisahkanOpsi } from "@/lib/opsi-billboard";
+import { susunSpecs } from "@/lib/spesifikasi-billboard";
+import {
+  LAT_DEFAULT,
+  LNG_DEFAULT,
+  koordinat,
+  teksBillboard,
+} from "@/lib/bidang-billboard";
 import {
   BillboardStatus,
   PublishStatus,
@@ -30,21 +37,25 @@ export async function POST(req: Request) {
     const body = await req.json();
 
     // 2. MENYUSUN SPESIFIKASI JADI SATU PAKET
-    // Data dari Form (sizeH, sizeW, lighting) kita bungkus jadi satu paket 'specs'
+    //
+    // Satu fungsi bersama dengan `update/route.ts`, dengan alasan yang sama
+    // seperti `pisahkanOpsi` di bawah: keenam barisnya dulu ditulis dua kali,
+    // dan salah satunya diberi komentar "SAMA SEPERTI CREATE" — pengakuan bahwa
+    // keduanya rumus kembar yang harus dijaga sepakat dengan tangan.
+    //
+    // Tiga dari enam baris itu dulu meneruskan `body.orientation`,
+    // `body.lighting`, dan `body.material` APA ADANYA. Nilai bukan teks
+    // tersimpan ke jsonb tanpa keluhan, lalu dirender sebagai `{spec.value}` di
+    // halaman billboard publik — dan objek sebagai anak elemen React melempar
+    // tanpa ada komponen yang menangkapnya. Lihat
+    // `src/lib/spesifikasi-billboard.ts`.
     //
     // TANPA `JSON.stringify`: kolomnya bertipe jsonb, jadi array ini masuk apa
     // adanya. Membungkusnya dengan `JSON.stringify` TIDAK akan ditolak compiler
     // — tipe `InputJsonValue` milik Prisma memuat `string` — dan yang tersimpan
     // jadi sebuah teks JSON di dalam jsonb (ganda-encode). Database menerimanya,
     // tidak ada error, tapi pembacanya melihat teks alih-alih array.
-    const packedSpecs = [
-        { label: "Ukuran", value: `${body.sizeH || 0}m x ${body.sizeW || 0}m` },
-        { label: "Luas Area", value: `${(Number(body.sizeH) * Number(body.sizeW)).toFixed(1)} m²` },
-        { label: "Layout / Orientasi", value: body.orientation || "-" },
-        { label: "Tampilan", value: body.sides ? `${body.sides} Sisi` : "-" },
-        { label: "Jenis Penerangan", value: body.lighting || "-" },
-        { label: "Material", value: body.material || "-" },
-    ];
+    const packedSpecs = susunSpecs(body, 'billboards/create');
 
     // 3. MEMISAHKAN INCLUDE & EXCLUDE
     //
@@ -103,33 +114,61 @@ export async function POST(req: Request) {
         );
     }
 
+    // 4c. KOLOM TEKS DAN KOORDINAT
+    //
+    // `title` dulu ditulis `body.title` TANPA fallback, sementara sembilan
+    // tetangganya punya. Permintaan tanpa `title` karena itu menulis `undefined`
+    // ke kolom String non-null, Prisma menolaknya, dan admin melihat "Gagal
+    // menyimpan data" tanpa keterangan setelah seluruh form diisi. Di sini ia
+    // menjadi 400 yang menyebut bidangnya — satu-satunya bidang teks yang tidak
+    // punya nilai baku yang masuk akal.
+    const title = teksBillboard(body.title);
+    if (title === null) {
+        return NextResponse.json({ message: "Judul billboard wajib diisi." }, { status: 400 });
+    }
+
+    // Sisanya memakai nilai baku yang sudah ada sebelumnya, hanya lewat penjaga
+    // tipe: `body.sku` yang berisi objek dulu lolos `||` (objek itu truthy) lalu
+    // ditolak Prisma sebagai 500. `smartsucoUrl` boleh `null` — kolomnya
+    // opsional, dan billboard tanpa tautan trafik itu hal biasa.
+    const sku = teksBillboard(body.sku) ?? "NO-SKU";
+    const address = teksBillboard(body.address) ?? "Alamat belum diisi";
+    const type = teksBillboard(body.type) ?? "Baliho";
+    const mainImage = teksBillboard(body.mainImage) ?? "";
+    const smartsucoUrl = teksBillboard(body.smartsucoUrl);
+    const slug = teksBillboard(body.slug) ?? `billboard-${Date.now()}`;
+
     // 5. SIMPAN KE DATABASE
     const newBillboard = await prisma.billboard.create({
         data: {
-            title: body.title,
-            slug: body.slug || `billboard-${Date.now()}`, // Fallback slug jika kosong
-            sku: body.sku || "NO-SKU",
-            address: body.address || "Alamat belum diisi",
-            type: body.type || "Baliho",
-            
+            title,
+            slug,
+            sku,
+            address,
+            type,
+
             // Koordinat memang Float; harga tidak (lihat 4b di atas).
+            //
+            // `koordinat()` menolak `NaN` dan `Infinity` — keduanya bertipe
+            // number dan keduanya ditolak kolom Float. `?? DEFAULT` menjaga
+            // perilaku `|| -7.9` yang sudah ada, tanpa ikut menolak nol.
             price: harga,
-            lat: Number(body.lat) || -7.9,
-            lng: Number(body.lng) || 112.6,
+            lat: koordinat(body.lat) ?? LAT_DEFAULT,
+            lng: koordinat(body.lng) ?? LNG_DEFAULT,
 
             status,
             publishStatus,
-            mainImage: body.mainImage || "",
-            
+            mainImage,
+
             // Keempat kolom di bawah bertipe jsonb — array masuk apa adanya,
             // tanpa `JSON.stringify` (lihat catatan di bagian 2).
             specs: packedSpecs,
             includes: includesList,
             excludes: excludesList,
             gallery: galeri,
-            
-            smartsucoUrl: body.smartsucoUrl, // Link Trafik
-            
+
+            smartsucoUrl, // Link Trafik
+
             // Jejak Audit
             createdById: session.user.id,
             updatedById: session.user.id

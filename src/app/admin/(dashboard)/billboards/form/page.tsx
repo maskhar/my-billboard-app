@@ -12,6 +12,7 @@ import ImageUpload from '@/components/ImageUpload';
 import { useToast } from '@/components/ui/Toast';
 import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 import { arrayDariJson } from '@/lib/safe-json';
+import { specsAman } from '@/lib/spesifikasi-billboard';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { angkaRupiah } from '@/lib/money';
 import { tanggalJam, tanggalRingkas } from '@/lib/tanggal';
@@ -19,7 +20,6 @@ import {
   sahStatusBillboard,
   sahStatusPublikasi,
   type BarisRiwayatBillboard,
-  type BarisSpesifikasi,
   type DetailBillboardDariApi,
   type FormBillboard,
   type OpsiFasilitas,
@@ -130,32 +130,29 @@ export default function BillboardFormPage() {
                     // tanpa satu pun pesan galat ke admin.
                     const parsedGallery = arrayDariJson<string>(data.gallery, `Billboard.gallery id=${billboardId}`);
                     const dbIncludes = arrayDariJson<string>(data.includes, `Billboard.includes id=${billboardId}`);
-                    const parsedSpecs = arrayDariJson<BarisSpesifikasi>(data.specs, `Billboard.specs id=${billboardId}`);
+                    // `specsAman` menyaring baris yang `label` atau `value`-nya
+                    // bukan teks. Penjagaan itu dulu ditulis inline di sini —
+                    // dua predikat `typeof` yang benar, tapi hanya ada di berkas
+                    // ini. Halaman billboard publik dan panel transaksi admin
+                    // membaca kolom yang sama tanpa penjagaan itu, dan keduanya
+                    // mati pada baris yang form ini justru bertahan menghadapinya.
+                    // Sekarang ketiganya memakai satu fungsi.
+                    //
+                    // Alasan penjagaannya tetap sama: `arrayDariJson` menjamin
+                    // hasilnya ARRAY, tidak menjamin isi tiap elemennya. Satu
+                    // entri `{ label: "Ukuran" }` tanpa `value` membuat
+                    // `.replace()` di bawah melempar, dan form-nya gagal terbuka.
+                    const parsedSpecs = specsAman(
+                        arrayDariJson<unknown>(data.specs, `Billboard.specs id=${billboardId}`)
+                    );
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
 
-                    // `s.value` juga diperiksa, bukan hanya `s.label`. `specs`
-                    // adalah jsonb: `arrayDariJson` menjamin ia ARRAY, tidak
-                    // menjamin isi tiap elemennya. Satu entri `{ label: "Ukuran" }`
-                    // tanpa `value` membuat `.replace()` di bawah melempar, dan
-                    // form-nya gagal terbuka.
-                    const sizeSpec =
-                        parsedSpecs.find((s) => s?.label === "Ukuran" && typeof s.value === 'string')
-                            ?.value || "";
+                    const sizeSpec = parsedSpecs.find((s) => s.label === "Ukuran")?.value || "";
                     if(sizeSpec) { const parts = sizeSpec.replace(/m/g, '').split('x'); if(parts.length===2) { h=parts[0].trim(); w=parts[1].trim(); }}
 
-                    // `s.label.includes(...)` melempar bila ada satu entri tanpa
-                    // `label` — array-nya sah tapi isinya tidak. Dijaga di satu
-                    // tempat lewat helper ini.
-                    // Nilainya juga harus teks: `cariSpec("Tampilan")?.replace(...)`
-                    // di bawah melempar pada entri yang `value`-nya angka.
                     const cariSpec = (kataKunci: string): string | undefined =>
-                        parsedSpecs.find(
-                            (s) =>
-                                typeof s?.label === 'string' &&
-                                s.label.includes(kataKunci) &&
-                                typeof s.value === 'string'
-                        )?.value;
+                        parsedSpecs.find((s) => s.label.includes(kataKunci))?.value;
 
                     const sOrient = cariSpec("Layout");
                     if(sOrient) orient = sOrient;
