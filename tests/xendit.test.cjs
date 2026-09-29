@@ -17855,7 +17855,10 @@ describe('alur "Sewakan Tempat" dari pengaju sampai admin', () => {
     it('daftarnya dibatasi per halaman, bukan mengambil seluruh tabel', () => {
       const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
       assert.match(kode, /take: PER_HALAMAN/);
-      assert.match(kode, /skip: \(halaman - 1\) \* PER_HALAMAN/);
+      // `halamanDiminta`, bukan `halaman`. Sejak nomor halaman dijepit ke atas
+      // (butir 5.18) ada dua angka: yang diminta URL, dan yang dijepit setelah
+      // `count` diketahui. Yang dijepit belum ada saat query ini disusun.
+      assert.match(kode, /skip: \(halamanDiminta - 1\) \* PER_HALAMAN/);
     });
 
     it('searchParams di-await — Next 16 menjadikannya Promise', () => {
@@ -17876,8 +17879,15 @@ describe('alur "Sewakan Tempat" dari pengaju sampai admin', () => {
     it('saringan status ikut terbawa ke halaman berikutnya', () => {
       // Tanpa itu, "Berikutnya" melompat ke seluruh pengajuan dan admin
       // kehilangan tab yang sedang ia buka.
+      //
+      // URL-nya tidak lagi dirangkai di sini: `NavigasiHalaman` menyusunnya
+      // lewat `urlHalaman()`, yang meng-encode nilainya. Perangkaian dengan
+      // tangan (`&status=${statusAktif}`) adalah bentuk yang sengaja
+      // ditinggalkan — di situlah `&` lolos tanpa encode. Yang dijaga sekarang
+      // adalah saringannya benar-benar DISERAHKAN ke komponen itu.
       const kode = kodeSajaIdentitas(JALUR_HALAMAN_ADMIN_PENGAJUAN);
-      assert.match(kode, /&status=\$\{statusAktif\}/);
+      assert.doesNotMatch(kode, /&status=\$\{statusAktif\}/);
+      assert.match(kode, /parameter=\{\{ status: statusAktif === 'SEMUA' \? undefined : statusAktif \}\}/);
     });
 
     it('lencana "BARU" dihitung tanpa saringan tab supaya tetap jujur', () => {
@@ -24600,7 +24610,10 @@ describe('tabel dan panel tidak melebihi layar tanpa cara menggulungnya', () => 
     );
 
     const akhirTabel = isi.indexOf('</table>');
-    const awalPaginasi = isi.indexOf('totalHalaman > 1');
+    // Penandanya `<NavigasiHalaman`, bukan `totalHalaman > 1`: syarat itu kini
+    // hidup di dalam komponen bersama, dan yang perlu dijaga di halaman ini
+    // adalah POSISI blok paginasinya terhadap pembungkus gulungan.
+    const awalPaginasi = isi.indexOf('<NavigasiHalaman');
     assert.ok(akhirTabel !== -1 && awalPaginasi !== -1, 'tabel atau blok paginasi tidak ditemukan');
 
     // Di dalam pembungkus, "Berikutnya" ikut bergeser ke kiri layar saat
@@ -26596,5 +26609,365 @@ describe('audit dependency: terdaftar dipakai, dipakai terdaftar', () => {
       assert.ok(!akar.has(nama), `\`${nama}\` milik chat-server, bukan aplikasi Next.`);
     }
     assert.ok(akar.has('socket.io-client'), 'browser tetap butuh socket.io-client.');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Butir audit 5.18. Premis laporannya ("nol pagination di seluruh admin") sudah
+// basi: keempat daftar admin sudah punya `skip`/`take`, `count`, dan tombol
+// halaman. Yang benar-benar tersisa adalah bahwa keempatnya menulis aturannya
+// SENDIRI-SENDIRI, dan keempatnya salah dengan cara yang sama — nomor halaman
+// dijepit ke bawah, tidak ke atas.
+//
+// Yang dijaga suite ini bukan "ada paginasinya", tapi bahwa nomor yang di luar
+// jangkauan TIDAK menghasilkan halaman terkurung: tabel kosong yang menulis
+// "Halaman 999 dari 2" dengan satu-satunya tombol membawa ke 998.
+// ---------------------------------------------------------------------------
+describe('paginasi daftar admin: satu aturan, dan tidak ada halaman yang terkurung', () => {
+  const JALUR_PAGINASI = path.join(__dirname, '..', 'src', 'lib', 'paginasi.ts');
+  const JALUR_NAVIGASI = path.join(
+    __dirname, '..', 'src', 'components', 'admin', 'NavigasiHalaman.tsx');
+
+  const { bacaHalaman, hitungPaginasi, urlHalaman, PER_HALAMAN } = require(JALUR_PAGINASI);
+
+  // Keempat halaman daftar. `satuan` dan `basis` ikut dicek supaya tidak ada
+  // halaman yang menautkan ke jalur halaman lain — kesalahan yang paling mudah
+  // terjadi saat blok ini disalin.
+  const HALAMAN_DAFTAR = [
+    { nama: 'billboards', basis: '/admin/billboards', satuan: 'titik', saringan: false },
+    { nama: 'orders', basis: '/admin/orders', satuan: 'transaksi', saringan: true },
+    { nama: 'users', basis: '/admin/users', satuan: 'pengguna', saringan: false },
+    { nama: 'pengajuan', basis: '/admin/pengajuan', satuan: 'pengajuan', saringan: true },
+  ];
+
+  const jalurHalaman = (nama) =>
+    path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', nama, 'page.tsx');
+
+  describe('bacaHalaman()', () => {
+    it('parameter yang tidak ada jatuh ke halaman 1', () => {
+      assert.equal(bacaHalaman(undefined), 1);
+      assert.equal(bacaHalaman(null), 1);
+      assert.equal(bacaHalaman(''), 1);
+      assert.equal(bacaHalaman('   '), 1);
+    });
+
+    it('teks yang bukan angka jatuh ke 1, bukan NaN', () => {
+      // `skip: NaN` dilempar Prisma sebagai galat runtime, dan admin
+      // membacanya sebagai "halaman rusak", bukan "URL saya salah".
+      for (const jelek of ['abc', '1abc', 'null', '{}', 'halaman']) {
+        const hasil = bacaHalaman(jelek);
+        assert.equal(hasil, 1, `${jelek} menghasilkan ${hasil}`);
+        assert.ok(Number.isFinite(hasil));
+      }
+    });
+
+    it('angka negatif dan nol jatuh ke 1 — `skip` negatif adalah galat Prisma', () => {
+      assert.equal(bacaHalaman('-5'), 1);
+      assert.equal(bacaHalaman('0'), 1);
+      assert.equal(bacaHalaman('-0.5'), 1);
+    });
+
+    it('`Infinity` ditahan — ia lolos seluruh saringan tanda', () => {
+      // Ini yang dilewatkan penjaga yang hanya menulis `>= 1`: `Infinity >= 1`
+      // bernilai benar, dan `skip: Infinity` sampai ke database.
+      assert.equal(bacaHalaman('Infinity'), 1);
+      assert.equal(bacaHalaman('-Infinity'), 1);
+      assert.equal(bacaHalaman('1e999'), 1);
+    });
+
+    it('pecahan dibulatkan ke bawah, tidak ditolak', () => {
+      // Tautan yang tercemar satu karakter tetap membawa ke halaman yang
+      // dimaksud, alih-alih melempar admin ke halaman 1.
+      assert.equal(bacaHalaman('2.7'), 2);
+      assert.equal(bacaHalaman('3.0'), 3);
+    });
+
+    it('parameter GANDA memakai nilai pertama, bukan NaN', () => {
+      // Next menyerahkan array untuk `?halaman=2&halaman=5`, dan
+      // `Number(['2','5'])` adalah NaN. Tanpa penanganan ini satu parameter
+      // ganda melempar admin kembali ke halaman 1.
+      assert.equal(bacaHalaman(['2', '5']), 2);
+      assert.equal(bacaHalaman(['abc', '5']), 1);
+    });
+  });
+
+  describe('hitungPaginasi()', () => {
+    it('daftar kosong tetap 1 halaman, dan skip-nya nol', () => {
+      const h = hitungPaginasi(1, 0);
+      assert.equal(h.totalHalaman, 1);
+      assert.equal(h.skip, 0);
+      assert.equal(h.halaman, 1);
+    });
+
+    it('daftar kosong TIDAK dianggap terlalu jauh — kalau tidak, pengalihannya berputar', () => {
+      // `?halaman=1` pada nol baris juga "melewati halaman terakhir" secara
+      // aritmetika. Mengalihkannya akan mengalihkan ke dirinya sendiri, dan
+      // Next membalasnya sebagai galat redirect tanpa akhir.
+      assert.equal(hitungPaginasi(1, 0).terlaluJauh, false);
+      assert.equal(hitungPaginasi(9, 0).terlaluJauh, false);
+    });
+
+    it('nomor di luar jangkauan DITANDAI, dan nomornya dijepit ke halaman terakhir', () => {
+      // Inti butir 5.18. Sebelumnya `?halaman=999` pada 30 baris menghasilkan
+      // `skip: 24950`: tabel kosong dengan tulisan "Halaman 999 dari 2" dan
+      // hanya tombol "Sebelumnya" yang membawa ke 998, juga kosong.
+      const h = hitungPaginasi(999, 30);
+      assert.equal(h.terlaluJauh, true);
+      assert.equal(h.totalHalaman, 2);
+      assert.equal(h.halaman, 2, 'nomornya dijepit, bukan diteruskan');
+      assert.equal(h.skip, 25);
+    });
+
+    it('halaman terakhir yang PAS tidak ditandai terlalu jauh', () => {
+      // Batas yang paling mudah salah: 50 baris / 25 = tepat 2 halaman.
+      const h = hitungPaginasi(2, 50);
+      assert.equal(h.terlaluJauh, false);
+      assert.equal(h.totalHalaman, 2);
+      assert.equal(h.skip, 25);
+    });
+
+    it('satu baris lewat batas menambah satu halaman', () => {
+      assert.equal(hitungPaginasi(1, 25).totalHalaman, 1);
+      assert.equal(hitungPaginasi(1, 26).totalHalaman, 2);
+    });
+
+    it('`skip` tidak pernah negatif dan tidak pernah NaN, apa pun masukannya', () => {
+      const kasus = [[1, 0], [0, 0], [-3, 10], [NaN, 10], [Infinity, 10], [2.9, 100]];
+      for (const [minta, total] of kasus) {
+        const h = hitungPaginasi(minta, total);
+        assert.ok(
+          Number.isInteger(h.skip) && h.skip >= 0,
+          `skip=${h.skip} dari (${minta},${total})`,
+        );
+        assert.ok(Number.isInteger(h.take) && h.take >= 1, `take=${h.take}`);
+      }
+    });
+
+    it('`total` rusak ditahan di nol, tidak diteruskan ke `skip`', () => {
+      // `count` seharusnya selalu bilangan bulat, tapi nilai ini ikut
+      // menentukan apa yang dikirim ke database.
+      for (const rusak of [NaN, -5, Infinity, undefined, null]) {
+        const h = hitungPaginasi(1, rusak);
+        assert.equal(h.total, 0, `total=${rusak}`);
+        assert.equal(h.totalHalaman, 1);
+        assert.equal(h.terlaluJauh, false);
+      }
+    });
+
+    it('`perHalaman` nol atau rusak jatuh ke PER_HALAMAN — `take: 0` mengosongkan tabel yang berisi', () => {
+      for (const rusak of [0, -10, NaN, Infinity, 0.5]) {
+        const h = hitungPaginasi(1, 100, rusak);
+        assert.equal(h.take, PER_HALAMAN, `perHalaman=${rusak}`);
+      }
+      // Pembagian dengan nol menghasilkan `Infinity` halaman.
+      assert.ok(Number.isFinite(hitungPaginasi(1, 100, 0).totalHalaman));
+    });
+
+    it('PER_HALAMAN adalah bilangan bulat positif', () => {
+      assert.ok(Number.isInteger(PER_HALAMAN) && PER_HALAMAN >= 1);
+    });
+  });
+
+  describe('urlHalaman()', () => {
+    it('menulis nomor halaman pada jalur yang diberikan', () => {
+      assert.equal(urlHalaman('/admin/users', 3), '/admin/users?halaman=3');
+    });
+
+    it('MEMBAWA saringan yang sedang aktif', () => {
+      // Tanpa ini, tombol "Berikutnya" pada tab "Perlu Refund" mendarat di
+      // seluruh transaksi — tabnya berganti tanpa satu pun petunjuk.
+      const url = urlHalaman('/admin/orders', 2, { status: 'NEED_REFUND' });
+      assert.match(url, /status=NEED_REFUND/);
+      assert.match(url, /halaman=2/);
+    });
+
+    it('saringan yang kosong dibuang, bukan ditulis sebagai `status=`', () => {
+      for (const kosong of [undefined, null, '']) {
+        const url = urlHalaman('/admin/orders', 2, { status: kosong });
+        assert.equal(url, '/admin/orders?halaman=2', `status=${String(kosong)}`);
+      }
+    });
+
+    it('nilai saringan di-encode — `&` tidak bisa menyuntikkan parameter kedua', () => {
+      const url = urlHalaman('/admin/orders', 1, { status: 'A&halaman=99' });
+      assert.doesNotMatch(url, /[?&]halaman=99/, 'parameter kedua tersuntik');
+      assert.match(url, /halaman=1$/);
+    });
+
+    it('`halaman` di dalam `lain` TIDAK bisa menimpa nomor halaman', () => {
+      // Pemanggil yang meneruskan seluruh `searchParams` apa adanya akan
+      // menyertakan `halaman` lama; tanpa urutan penulisan yang benar, tombol
+      // "Berikutnya" menunjuk ke halaman yang sedang dibuka.
+      const url = urlHalaman('/admin/users', 4, { halaman: '1' });
+      assert.match(url, /halaman=4/);
+      assert.doesNotMatch(url, /halaman=1/);
+    });
+  });
+
+  describe('keempat halaman daftar memakai aturan bersama', () => {
+    for (const { nama, basis, satuan, saringan } of HALAMAN_DAFTAR) {
+      it(`${nama}: tidak lagi menghitung nomor halaman sendiri`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+
+        // Bentuk lama yang salah, persis. Ia dijepit ke bawah (`>= 1`) dan
+        // tidak ke atas, jadi nomor apa pun di atas halaman terakhir lolos.
+        assert.doesNotMatch(
+          kode,
+          /Number\.isFinite\(halamanMentah\)/,
+          'penjaga halaman lokal masih ada — ia tidak menjepit ke atas',
+        );
+        assert.doesNotMatch(
+          kode,
+          /Math\.ceil\([^)]*\/\s*PER_HALAMAN\)/,
+          'totalHalaman masih dihitung sendiri',
+        );
+        assert.match(kode, /bacaHalaman\(/, 'tidak memakai bacaHalaman()');
+        assert.match(kode, /hitungPaginasi\(/, 'tidak memakai hitungPaginasi()');
+        assert.match(kode, /from ['"]@\/lib\/paginasi['"]/);
+      });
+
+      it(`${nama}: PER_HALAMAN diimpor, tidak dideklarasikan ulang`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+        // Empat nilai yang kebetulan sama adalah empat nilai yang akan
+        // menyimpang: siapa pun yang menaikkannya di satu halaman tidak punya
+        // cara mengetahui tiga lainnya ada.
+        assert.doesNotMatch(kode, /const\s+PER_HALAMAN\s*=/, 'masih dideklarasikan lokal');
+        assert.match(kode, /\bPER_HALAMAN\b/);
+      });
+
+      it(`${nama}: nomor di luar jangkauan DIALIHKAN, bukan dirender`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+        assert.match(kode, /terlaluJauh/, 'tidak memeriksa terlaluJauh');
+        assert.match(
+          kode,
+          /redirect\(\s*urlHalaman\(/,
+          'terlaluJauh diperiksa tapi tidak mengalihkan',
+        );
+        assert.match(kode, /from ['"]next\/navigation['"]/);
+      });
+
+      it(`${nama}: memakai NavigasiHalaman, bukan tombol yang disalin`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+        assert.match(kode, /<NavigasiHalaman\b/);
+        assert.match(kode, /from ['"]@\/components\/admin\/NavigasiHalaman['"]/);
+        // Kelas tombol yang disalin di empat tempat: kalau satu di antaranya
+        // tertinggal, gayanya menyimpang tanpa ada yang tahu.
+        assert.doesNotMatch(
+          kode,
+          />\s*Sebelumnya\s*</,
+          'tombol halaman masih ditulis di halaman ini',
+        );
+        assert.doesNotMatch(kode, />\s*Berikutnya\s*</);
+      });
+
+      it(`${nama}: menautkan ke jalurnya sendiri dengan satuan yang benar`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+        // Blok ini paling mudah salah lewat penyalinan: `basis` halaman lain
+        // membuat tombol "Berikutnya" melompat ke daftar yang berbeda.
+        assert.match(kode, new RegExp(`basis=["']${basis}["']`), `basis bukan ${basis}`);
+        assert.match(kode, new RegExp(`satuan=["']${satuan}["']`), `satuan bukan ${satuan}`);
+      });
+
+      if (saringan) {
+        it(`${nama}: saringan ikut dibawa tombol halaman DAN pengalihannya`, () => {
+          const kode = kodeSajaAny(jalurHalaman(nama));
+          assert.match(kode, /parameter=\{\{[\s\S]*?status/, 'saringan tidak dibawa tombol');
+
+          // Pengalihannya juga. Pengalihan yang membuang saringan memindahkan
+          // admin keluar dari tab yang sedang ia buka — dan pada halaman
+          // transaksi itu tab yang paling mendesak.
+          const mulai = kode.indexOf('if (paginasi.terlaluJauh)');
+          assert.ok(mulai > 0, 'blok pengalihan tidak ditemukan');
+          const blok = kode.slice(mulai, kode.indexOf('\n  }', mulai) + 4);
+          assert.match(blok, /status/, 'pengalihan membuang saringan');
+        });
+      }
+
+      it(`${nama}: query memakai halamanDiminta, bukan nomor yang sudah dijepit`, () => {
+        const kode = kodeSajaAny(jalurHalaman(nama));
+        // Yang dijepit hanya bisa dihitung SETELAH `count` diketahui, dan
+        // `count` berjalan di transaksi yang sama dengan `findMany`. Memakai
+        // nomor jepitan di `skip` karena itu tidak mungkin — dan menuliskannya
+        // berarti ada dua nomor yang beredar.
+        assert.match(kode, /skip:\s*\(halamanDiminta - 1\) \* PER_HALAMAN/);
+        assert.doesNotMatch(kode, /skip:\s*\(halaman - 1\)/);
+      });
+    }
+  });
+
+  describe('NavigasiHalaman', () => {
+    const kodeNav = kodeSajaAny(JALUR_NAVIGASI);
+
+    it('bukan Client Component — seluruh keadaannya ada di URL', () => {
+      // Tautannya `<Link>` biasa dan tidak ada satu pun hook, jadi menandainya
+      // `'use client'` hanya menambah bundel tanpa menambah apa pun.
+      assert.doesNotMatch(kodeNav, /['"]use client['"]/);
+      assert.doesNotMatch(kodeNav, /\buseState\b|\buseEffect\b|\buseRouter\b/);
+    });
+
+    it('kedua tombol SELALU dirender; yang tidak berlaku dinonaktifkan', () => {
+      // Sebelumnya tombolnya berpindah posisi setiap kali admin menekan salah
+      // satunya: di halaman 1 hanya ada satu tombol di kanan, di halaman 2 ada
+      // dua. Sasaran klik yang bergerak adalah sasaran yang salah ditekan.
+      assert.match(kodeNav, /aria-disabled="true"/);
+      const jumlahSebelumnya = (kodeNav.match(/>\s*Sebelumnya\s*</g) || []).length;
+      const jumlahBerikutnya = (kodeNav.match(/>\s*Berikutnya\s*</g) || []).length;
+      assert.equal(jumlahSebelumnya, 2, 'Sebelumnya: satu <Link> + satu <span> mati');
+      assert.equal(jumlahBerikutnya, 2, 'Berikutnya: satu <Link> + satu <span> mati');
+    });
+
+    it('yang dinonaktifkan adalah <span>, bukan <a> tanpa href', () => {
+      // `<a>` tanpa `href` tetap bisa difokus di sebagian peramban dan tidak
+      // punya arti bagi pembaca layar.
+      assert.match(kodeNav, /<span[\s\S]*?aria-disabled/);
+      assert.doesNotMatch(kodeNav, /<Link[^>]*aria-disabled/);
+    });
+
+    it('URL-nya disusun urlHalaman(), tidak dirangkai template string', () => {
+      // Perangkaian dengan tangan adalah tempat saringan hilang dan `&`
+      // lolos tanpa encode.
+      assert.match(kodeNav, /urlHalaman\(basis, halaman - 1, parameter\)/);
+      assert.match(kodeNav, /urlHalaman\(basis, halaman \+ 1, parameter\)/);
+      assert.doesNotMatch(kodeNav, /href=\{`/, 'URL masih dirangkai template string');
+    });
+
+    it('wilayahnya bernama, dan rel prev/next dipasang', () => {
+      assert.match(kodeNav, /<nav[\s\S]*?aria-label="Navigasi halaman"/);
+      assert.match(kodeNav, /rel="prev"/);
+      assert.match(kodeNav, /rel="next"/);
+    });
+
+    it('ringkasan jumlah tetap tampil walau hanya ada satu halaman', () => {
+      // Keempat salinan lama membungkus SELURUH barisnya dengan
+      // `totalHalaman > 1 &&`, jadi "12 titik" hilang pada daftar yang tidak
+      // perlu dipaginasi — padahal itu angka yang dicari admin.
+      const posRingkasan = kodeNav.indexOf('Halaman {halaman} dari');
+      const posSyarat = kodeNav.indexOf('totalHalaman > 1');
+      assert.ok(posRingkasan > 0, 'ringkasan jumlah tidak ada');
+      assert.ok(posSyarat > 0, 'tombol tidak disembunyikan saat satu halaman');
+      assert.ok(
+        posRingkasan < posSyarat,
+        'ringkasan jumlah ikut disembunyikan saat hanya ada satu halaman',
+      );
+    });
+
+    it('menulis satuannya, bukan hanya nomor halaman', () => {
+      assert.match(kodeNav, /\{total\}\s*\{satuan\}/);
+    });
+  });
+
+  describe('modul paginasi tetap bisa diuji tanpa satu pun mock', () => {
+    it('nol impor — tidak menarik Prisma maupun Next ke dalamnya', () => {
+      // Alasan yang sama seperti `tanggal.ts` dan `tarif.ts`: modul ini dipakai
+      // dari Server Component dan di-`require` langsung di test ini.
+      const kode = kodeSajaAny(JALUR_PAGINASI);
+      assert.doesNotMatch(kode, /^\s*import\s/m, 'modul paginasi mengimpor sesuatu');
+      assert.doesNotMatch(kode, /require\(/);
+    });
+
+    it('tidak ada aritmetika uang — ini modul hitung baris, bukan hitung nominal', () => {
+      const kode = kodeSajaAny(JALUR_PAGINASI);
+      assert.doesNotMatch(kode, /Decimal|angkaRupiah|uangUntukClient/);
+    });
   });
 });

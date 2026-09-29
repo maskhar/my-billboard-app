@@ -6,6 +6,9 @@ import StatusChanger from '@/components/admin/StatusChanger';
 import { Billboard } from '@prisma/client';
 import { angkaRupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
+import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
 
@@ -23,9 +26,17 @@ type BillboardWithUsers = Billboard & {
 // dibuka — beserta gambar, spesifikasi, dan dua relasi User per baris. Dengan
 // 30 billboard itu tidak terasa; dengan 3.000 halaman ini berhenti terbuka
 // sama sekali, dan tidak ada satu pun pesan yang menjelaskan kenapa.
-const PER_HALAMAN = 25;
+//
+// `PER_HALAMAN` sekarang datang dari `@/lib/paginasi` — empat halaman daftar
+// admin mendeklarasikannya sendiri-sendiri dengan nilai yang kebetulan sama,
+// dan nilai yang kebetulan sama adalah nilai yang akan menyimpang.
 
-async function getAdminBillboards(halaman: number): Promise<{ data: BillboardWithUsers[]; total: number }> {
+// Parameternya `halamanDiminta`, bukan `halaman`. Sejak nomor halaman dijepit
+// ke atas, ada DUA angka yang beredar: yang diminta URL, dan yang dijepit
+// setelah `count` diketahui. Yang dijepit tidak bisa dipakai di sini — ia baru
+// ada setelah query ini selesai — jadi nama `halaman` di posisi ini adalah nama
+// yang mengundang salah pakai.
+async function getAdminBillboards(halamanDiminta: number): Promise<{ data: BillboardWithUsers[]; total: number }> {
   try {
     const [data, total] = await prisma.$transaction([
       prisma.billboard.findMany({
@@ -34,7 +45,7 @@ async function getAdminBillboards(halaman: number): Promise<{ data: BillboardWit
           createdBy: { select: { id: true, name: true } },
           updatedBy: { select: { id: true, name: true } },
         },
-        skip: (halaman - 1) * PER_HALAMAN,
+        skip: (halamanDiminta - 1) * PER_HALAMAN,
         take: PER_HALAMAN,
       }),
       prisma.billboard.count(),
@@ -58,12 +69,24 @@ export default async function AdminBillboardsPage({
   const paramsQuery = await searchParams;
 
   // `Number("abc")` menghasilkan NaN dan `Number("-5")` menghasilkan skip
-  // negatif — keduanya membuat query gagal. Dinormalkan ke 1.
-  const halamanMentah = Number(paramsQuery?.halaman);
-  const halaman = Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
+  // negatif — keduanya membuat query gagal. `bacaHalaman()` menormalkan keduanya
+  // ke 1, beserta `Infinity` dan parameter ganda (`?halaman=2&halaman=5`).
+  const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
 
-  const { data: billboards, total } = await getAdminBillboards(halaman);
-  const totalHalaman = Math.max(1, Math.ceil(total / PER_HALAMAN));
+  const { data: billboards, total } = await getAdminBillboards(halamanDiminta);
+  const paginasi = hitungPaginasi(halamanDiminta, total);
+
+  // Nomor di luar jangkauan DIALIHKAN, tidak dibetulkan diam-diam: sebelumnya
+  // `?halaman=999` pada 30 baris merender tabel kosong dengan tulisan "Halaman
+  // 999 dari 2" dan hanya tombol "Sebelumnya" — yang membawa ke 998, juga
+  // kosong. Admin harus menyunting URL dengan tangan untuk keluar, dan URL
+  // halaman admin memang di-bookmark lalu dibuka lagi setelah barisnya
+  // berkurang.
+  if (paginasi.terlaluJauh) {
+    redirect(urlHalaman('/admin/billboards', paginasi.totalHalaman));
+  }
+
+  const { halaman, totalHalaman } = paginasi;
 
   return (
     <div className="space-y-6">
@@ -174,31 +197,15 @@ export default async function AdminBillboardsPage({
                 ikut bergeser bersama tabel — admin yang menggulung ke kanan
                 untuk melihat kolom Aksi kehilangan tombol "Berikutnya" di
                 sebelah kiri. */}
-            {totalHalaman > 1 && (
-              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4 text-sm">
-                <span className="text-gray-500">
-                  Halaman {halaman} dari {totalHalaman} · {total} titik
-                </span>
-                <div className="flex gap-2">
-                  {halaman > 1 && (
-                    <Link
-                      href={`/admin/billboards?halaman=${halaman - 1}`}
-                      className="rounded border border-gray-200 px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-                    >
-                      Sebelumnya
-                    </Link>
-                  )}
-                  {halaman < totalHalaman && (
-                    <Link
-                      href={`/admin/billboards?halaman=${halaman + 1}`}
-                      className="rounded border border-gray-200 px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-                    >
-                      Berikutnya
-                    </Link>
-                  )}
-                </div>
-              </div>
-            )}
+            <div className="border-t border-gray-100 px-6 py-4">
+              <NavigasiHalaman
+                basis="/admin/billboards"
+                halaman={halaman}
+                totalHalaman={totalHalaman}
+                total={total}
+                satuan="titik"
+              />
+            </div>
         </div>
     </div>
   );

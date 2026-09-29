@@ -18,10 +18,13 @@ import { prisma } from '@/lib/prisma';
 import { nilaiEnumSah } from '@/lib/enum-guard';
 import { keTautanWa } from '@/lib/telepon';
 import PengajuanClient from './PengajuanClient';
+import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import { redirect } from 'next/navigation';
 
 // Sama dengan halaman users. Tanpa `take`, halaman ini mengambil SELURUH
 // pengajuan yang pernah masuk setiap kali dibuka dan menanamkannya ke HTML.
-const PER_HALAMAN = 25;
+// `PER_HALAMAN` dipakai bersama tiga daftar admin lainnya lewat `@/lib/paginasi`.
 
 // Saringan status yang boleh muncul di tab. `SEMUA` bukan anggota enum, jadi ia
 // ditangani terpisah di bawah.
@@ -43,9 +46,7 @@ export default async function PengajuanTitikPage({
   // cacat yang sudah pernah terjadi di `users/page.tsx`.
   const paramsQuery = await searchParams;
 
-  const halamanMentah = Number(paramsQuery?.halaman);
-  const halaman =
-    Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
+  const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
 
   // Nilai dari URL diperiksa terhadap enum, tidak diteruskan apa adanya:
   // `?status=DROP` yang lolos ke `where` membuat Prisma melempar, dan galatnya
@@ -82,7 +83,7 @@ export default async function PengajuanTitikPage({
       },
       // `status, createdAt` punya indeksnya sendiri di migrasi tabel ini.
       orderBy: { createdAt: 'desc' },
-      skip: (halaman - 1) * PER_HALAMAN,
+      skip: (halamanDiminta - 1) * PER_HALAMAN,
       take: PER_HALAMAN,
     }),
     prisma.pengajuanTitik.count({ where }),
@@ -92,7 +93,20 @@ export default async function PengajuanTitikPage({
     prisma.pengajuanTitik.count({ where: { status: StatusPengajuanTitik.BARU } }),
   ]);
 
-  const totalHalaman = Math.max(1, Math.ceil(total / PER_HALAMAN));
+  const paginasi = hitungPaginasi(halamanDiminta, total);
+
+  // Tab yang sedang dibuka ikut dibawa ke pengalihan, sama seperti ia dibawa
+  // tombol "Berikutnya". Pengalihan yang membuangnya akan memindahkan admin dari
+  // tab "Baru" ke seluruh pengajuan tanpa satu pun petunjuk.
+  if (paginasi.terlaluJauh) {
+    redirect(
+      urlHalaman('/admin/pengajuan', paginasi.totalHalaman, {
+        status: statusAktif === 'SEMUA' ? undefined : statusAktif,
+      }),
+    );
+  }
+
+  const { halaman, totalHalaman } = paginasi;
 
   const daftar = pengajuan.map((p) => ({
     id: p.id,
@@ -180,38 +194,17 @@ export default async function PengajuanTitikPage({
         <PengajuanClient daftar={daftar} />
       )}
 
-      {totalHalaman > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-500">
-            Halaman {halaman} dari {totalHalaman} · {total} pengajuan
-          </span>
-          <div className="flex gap-2">
-            {/* Saringan status ikut dibawa ke halaman berikutnya. Tanpa itu,
-                tombol "Berikutnya" melompat ke seluruh pengajuan dan admin
-                kehilangan tab yang sedang ia buka. */}
-            {halaman > 1 && (
-              <Link
-                href={`/admin/pengajuan?halaman=${halaman - 1}${
-                  statusAktif === 'SEMUA' ? '' : `&status=${statusAktif}`
-                }`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Sebelumnya
-              </Link>
-            )}
-            {halaman < totalHalaman && (
-              <Link
-                href={`/admin/pengajuan?halaman=${halaman + 1}${
-                  statusAktif === 'SEMUA' ? '' : `&status=${statusAktif}`
-                }`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Berikutnya
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Saringan status ikut dibawa ke halaman berikutnya lewat `parameter`.
+          Tanpa itu, tombol "Berikutnya" melompat ke seluruh pengajuan dan admin
+          kehilangan tab yang sedang ia buka. */}
+      <NavigasiHalaman
+        basis="/admin/pengajuan"
+        halaman={halaman}
+        totalHalaman={totalHalaman}
+        total={total}
+        satuan="pengajuan"
+        parameter={{ status: statusAktif === 'SEMUA' ? undefined : statusAktif }}
+      />
     </div>
   );
 }

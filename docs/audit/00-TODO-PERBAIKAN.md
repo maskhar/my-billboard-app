@@ -67,7 +67,7 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | — (4.26, 4.28, 4.29, 4.31 semua tuntas; 4.31 ternyata sudah divalidasi di kode — yang kurang adalah testnya, dan penulisannya menemukan `db-error.ts` tidak membaca `error.code`) |
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.18–5.29 (5.7, 5.9, 5.12, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`) |
+| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.20–5.29 (5.7, 5.9, 5.12, 5.18, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas) |
 | 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | ✅ selesai | — (8.9 tuntas: nol dependency mati DAN nol paket diimpor tanpa terdaftar, kedua arah kini dijaga test; 8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
@@ -491,7 +491,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | **K** | 5.2, 5.4, 5.9, 5.12 | `admin/(dashboard)/layout.tsx`, `page.tsx` |
 | **L** | 5.5, 5.6, 5.10, 5.13, 5.16, 5.19 | `UserClientPage.tsx`, `billboards/page.tsx`, `TransactionClient.tsx` |
 | **M** | 5.7, 5.11, 5.31, 5.32 | `CS_InboxLayout.tsx` |
-| **N** | 5.18, 5.20–5.29 | Komponen bersama baru (`Pagination`, `DataTable`, `ExportButton`) |
+| **N** | 5.20–5.29 | Komponen bersama baru (`DataTable`, `ExportButton`). 5.18 selesai sebagai `src/lib/paginasi.ts` + `NavigasiHalaman.tsx` — bukan `Pagination` dari nol seperti rencana laporan, karena paginasinya sudah ada di keempat halaman |
 
 ## 5A. Fitur mati (CRITICAL)
 
@@ -529,7 +529,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 
 | # | Task | Ref | Status |
 |---|---|---|---|
-| 5.18 | Komponen paginasi bersama (nol pagination di seluruh admin) | `[05]F-24` | [ ] |
+| 5.18 | ⚠️ Komponen paginasi bersama. **Premis laporan sudah basi** (lihat catatan di bawah): bukan "nol pagination" — keempat daftar admin sudah punya `skip`/`take`/`count` dan tombol halaman. Yang benar-benar ada adalah duplikasi berempat, dan **keempatnya salah dengan cara yang sama: nomor halaman dijepit ke bawah, tidak ke atas** | `[05]F-24` | [x] |
 | 5.19 | Hubungkan search box yang mati — tanpa `value`/`onChange`, user mengetik dan tidak terjadi apa-apa | `[05]F-25` | [x] |
 | 5.20 | Filter & sort pada tabel admin | `[05]` | [ ] |
 | 5.21 | Export CSV/Excel | `[05]` | [ ] |
@@ -594,6 +594,74 @@ Yang dikerjakan:
 
 30 test baru (`pratinjau rollback billboard: diff sebelum menimpa`), 9/9 mutasi
 tertangkap, `1833 lulus / 0 gagal`, `tsc` bersih.
+
+### Catatan 5.18 — premis laporan salah, dan cacat yang sebenarnya ada
+
+Laporan menulis "nol pagination di seluruh admin" dan meminta komponen paginasi
+dibangun dari nol. Diperiksa lebih dulu, dan premisnya tidak benar: **keempat
+daftar admin sudah paginasi** — `billboards`, `orders`, `users`, dan `pengajuan`
+semuanya sudah punya `skip`/`take`, `count()` di transaksi yang sama, dan tombol
+"Sebelumnya"/"Berikutnya". Membangunnya dari nol akan menulis ulang yang sudah
+ada, jadi cacat yang tersisa harus dicari dengan membaca keempat implementasinya.
+
+**Yang ditemukan: keempatnya menjepit nomor halaman ke bawah, tidak ke atas.**
+
+`?halaman=999` pada 30 baris menghasilkan `skip: 24950`. Tabelnya kosong,
+navigasinya menulis "Halaman 999 dari 2", dan karena syaratnya
+`halaman < totalHalaman` tidak terpenuhi, **hanya tombol "Sebelumnya" yang
+dirender** — yang membawa ke 998, juga kosong. Admin terkurung dan harus
+menyunting URL dengan tangan untuk keluar.
+
+Ini bukan hipotesis: URL halaman admin di-bookmark dan dibagikan, dan jumlah
+halaman **menyusut** seiring baris dihapus. Setiap tautan lama karena itu adalah
+calon halaman terkurung.
+
+**Kenapa dialihkan, bukan dibetulkan diam-diam.** Jepitan ke atas hanya bisa
+dihitung setelah `count` diketahui, dan `count` berjalan di `$transaction` yang
+sama dengan `findMany` — jadi `skip` sudah terkirim saat totalnya diketahui.
+Membetulkan hanya angka yang ditampilkan menghasilkan "Halaman 2 dari 2" di atas
+tabel kosong: dusta yang lebih sulit dilacak daripada gejala aslinya. Biayanya
+satu render tambahan, dan hanya pada URL yang di luar jangkauan.
+
+`terlaluJauh` bernilai `false` saat `total === 0`. Tanpa itu, `?halaman=1` pada
+nol baris juga "melewati halaman terakhir" secara aritmetika, dan pengalihannya
+mengalihkan ke dirinya sendiri.
+
+Yang dikerjakan:
+
+- `src/lib/paginasi.ts` — `PER_HALAMAN`, `bacaHalaman()`, `hitungPaginasi()`,
+  `urlHalaman()`. **Nol impor**, alasan yang sama seperti `tanggal.ts`/`tarif.ts`:
+  dipakai dari Server Component dan bisa di-`require` langsung di test tanpa satu
+  pun mock. `bacaHalaman()` menahan `NaN`, negatif, nol, `Infinity`
+  (`Number.isFinite`, bukan sekadar `>= 1` — `Infinity >= 1` bernilai benar dan
+  `skip: Infinity` sampai ke database), pecahan (dibulatkan, tidak ditolak), dan
+  parameter ganda (Next menyerahkan array; `Number(['2','5'])` adalah `NaN`).
+- `src/components/admin/NavigasiHalaman.tsx` — Server Component, nol hook, nol
+  biaya bundel. Tiga cacat yang dibagi keempat salinan lama ikut diperbaiki:
+  tombolnya tidak lagi berpindah posisi (yang tidak berlaku dirender sebagai
+  `<span aria-disabled>`, bukan hilang); `<a>` tanpa `href` diganti `<span>`
+  (yang pertama masih bisa difokus dan tidak berarti bagi pembaca layar); dan
+  ringkasan jumlah baris **di luar** syarat `totalHalaman > 1`, karena keempat
+  salinan lama menyembunyikan seluruh barisnya dan ikut menghilangkan "12 titik"
+  pada daftar yang terlalu pendek untuk dipaginasi. Halaman `orders` sebelumnya
+  satu-satunya yang tidak menulis jumlah baris sama sekali, tanpa alasan.
+- Keempat halaman daftar: `PER_HALAMAN` lokal dan hitungan nomor halaman lokal
+  dihapus, `if (paginasi.terlaluJauh) redirect(urlHalaman(...))`. Pada `orders`
+  dan `pengajuan`, **saringan status ikut dibawa ke pengalihannya**, bukan hanya
+  ke tombolnya: pengalihan yang membuangnya memindahkan admin keluar dari tab yang
+  sedang ia buka — pada halaman transaksi itu justru tab yang paling mendesak.
+- `getAdminBillboards(halamanDiminta)` — parameternya diganti nama dari `halaman`.
+  Sejak ada jepitan ke atas, ada **dua** angka yang beredar, dan yang dijepit
+  belum ada saat query disusun; nama `halaman` di posisi itu mengundang salah pakai.
+
+3 test lama ikut disesuaikan, dengan alasan tertulis di masing-masing: dua
+menuntut URL yang dirangkai tangan (`&status=${statusAktif}`) yang sengaja
+ditinggalkan karena di situlah `&` lolos tanpa encode, dan satu memakai
+`totalHalaman > 1` sebagai penanda posisi blok paginasi — syarat yang sekarang
+hidup di dalam komponen bersama.
+
+40 test baru (`paginasi daftar admin: satu aturan, dan tidak ada halaman yang
+terkurung`), **8/8 mutasi tertangkap**, `1888 lulus / 0 gagal`, `tsc` bersih.
 
 ---
 

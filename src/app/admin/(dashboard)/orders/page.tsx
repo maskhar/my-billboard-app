@@ -13,8 +13,9 @@ import TransactionClient, { type TransaksiUntukClient } from './TransactionClien
 import Link from 'next/link';
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
-
-const PER_HALAMAN = 25;
+import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import { redirect } from 'next/navigation';
 
 /**
  * Kolom Payment yang boleh menyeberang ke komponen client.
@@ -94,8 +95,7 @@ export default async function AdminTransactionsPage({
   // tambahan per baris. Semuanya lalu diserialisasi dan ditanam ke dalam HTML.
   // Dengan 50 pesanan itu tidak terasa; setelah setahun beroperasi, halaman
   // yang paling sering dipakai admin justru yang paling lambat terbuka.
-  const halamanMentah = Number(paramsQuery.halaman);
-  const halaman = Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
+  const halamanDiminta = bacaHalaman(paramsQuery.halaman);
 
   const [transactions, totalTransaksi] = await prisma.$transaction([
     prisma.booking.findMany({
@@ -114,13 +114,26 @@ export default async function AdminTransactionsPage({
           additionalCharges: true, // <-- MENAMBAHKAN DATA BIAYA TAMBAHAN
           payments: { select: PILIH_PEMBAYARAN, orderBy: { createdAt: 'asc' } },
         },
-        skip: (halaman - 1) * PER_HALAMAN,
+        skip: (halamanDiminta - 1) * PER_HALAMAN,
         take: PER_HALAMAN,
     }),
     prisma.booking.count({ where: whereClause }),
   ]);
 
-  const totalHalaman = Math.max(1, Math.ceil(totalTransaksi / PER_HALAMAN));
+  const paginasi = hitungPaginasi(halamanDiminta, totalTransaksi);
+
+  // Saringan status IKUT dibawa ke pengalihan. Tanpa itu, admin yang membuka
+  // `?status=NEED_REFUND&halaman=99` mendarat di seluruh transaksi — tabnya
+  // berganti tanpa satu pun petunjuk, dan itu justru tab yang paling mendesak.
+  if (paginasi.terlaluJauh) {
+    redirect(
+      urlHalaman('/admin/orders', paginasi.totalHalaman, {
+        status: filterStatus === 'ALL' ? undefined : filterStatus,
+      }),
+    );
+  }
+
+  const { halaman, totalHalaman } = paginasi;
 
   // Semua nominal di bawah bertipe Decimal, dan objek Decimal tidak bisa
   // diubah menjadi JSON. Sebelumnya hasil query di atas diteruskan apa adanya
@@ -228,31 +241,19 @@ export default async function AdminTransactionsPage({
         currentUserRole={currentUserRole}
       />
 
-      {totalHalaman > 1 && (
-        <div className="mt-6 flex items-center justify-between text-sm">
-          <span className="text-gray-500">
-            Halaman {halaman} dari {totalHalaman}
-          </span>
-          <div className="flex gap-2">
-            {halaman > 1 && (
-              <Link
-                href={`/admin/orders?${new URLSearchParams({ ...(filterStatus !== 'ALL' ? { status: filterStatus } : {}), halaman: String(halaman - 1) })}`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Sebelumnya
-              </Link>
-            )}
-            {halaman < totalHalaman && (
-              <Link
-                href={`/admin/orders?${new URLSearchParams({ ...(filterStatus !== 'ALL' ? { status: filterStatus } : {}), halaman: String(halaman + 1) })}`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Berikutnya
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Jumlah barisnya sekarang ikut tertulis. Sebelumnya halaman ini
+          satu-satunya dari empat daftar admin yang hanya menulis "Halaman 2 dari
+          7" tanpa memberi tahu ada berapa transaksi — tanpa alasan. */}
+      <div className="mt-6">
+        <NavigasiHalaman
+          basis="/admin/orders"
+          halaman={halaman}
+          totalHalaman={totalHalaman}
+          total={totalTransaksi}
+          satuan="transaksi"
+          parameter={{ status: filterStatus === 'ALL' ? undefined : filterStatus }}
+        />
+      </div>
     </div>
   );
 }

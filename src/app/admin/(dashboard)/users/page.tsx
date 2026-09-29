@@ -1,11 +1,11 @@
 // src/app/admin/(dashboard)/users/page.tsx
-import Link from 'next/link';
 import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { jumlah, kurang, lebihBesar, uangUntukClient } from '@/lib/money';
 import UserClientPage from './UserClientPage';
-
-const PER_HALAMAN = 25;
+import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import { redirect } from 'next/navigation';
 
 // Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
 // dulu. Sebelumnya `searchParams?.halaman` dibaca langsung dari objek Promise
@@ -22,9 +22,7 @@ export default async function ManageUsersPage({
   // dalam HTML. Dengan 30 pelanggan itu tidak terasa; dengan 5.000 pelanggan
   // yang punya riwayat panjang, halaman ini yang paling lambat dibuka
   // sekaligus paling sering dipakai admin.
-  const halamanMentah = Number(paramsQuery?.halaman);
-  const halaman =
-    Number.isFinite(halamanMentah) && halamanMentah >= 1 ? Math.floor(halamanMentah) : 1;
+  const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
 
   // Sebelumnya query ini memakai `include: { bookings: true }` tanpa `select`,
   // sehingga SELURUH kolom User ikut terkirim ke komponen client — termasuk
@@ -43,13 +41,22 @@ export default async function ManageUsersPage({
         createdAt: true,
       },
       orderBy: { createdAt: 'desc' },
-      skip: (halaman - 1) * PER_HALAMAN,
+      skip: (halamanDiminta - 1) * PER_HALAMAN,
       take: PER_HALAMAN,
     }),
     prisma.user.count(),
   ]);
 
-  const totalHalaman = Math.max(1, Math.ceil(totalPengguna / PER_HALAMAN));
+  const paginasi = hitungPaginasi(halamanDiminta, totalPengguna);
+
+  // Nomor di luar jangkauan dialihkan ke halaman terakhir. Tanpa ini,
+  // `?halaman=999` merender daftar kosong dengan tulisan "Halaman 999 dari 2"
+  // dan hanya tombol "Sebelumnya" — yang membawa ke 998, juga kosong.
+  if (paginasi.terlaluJauh) {
+    redirect(urlHalaman('/admin/users', paginasi.totalHalaman));
+  }
+
+  const { halaman, totalHalaman } = paginasi;
   const idHalamanIni = users.map((u) => u.id);
 
   // "Total Spending" dulu dihitung di browser: SELURUH baris booking milik
@@ -136,31 +143,13 @@ export default async function ManageUsersPage({
     <div className="space-y-6">
       <UserClientPage users={usersUntukClient} />
 
-      {totalHalaman > 1 && (
-        <div className="flex items-center justify-between text-sm">
-          <span className="text-gray-500">
-            Halaman {halaman} dari {totalHalaman} · {totalPengguna} pengguna
-          </span>
-          <div className="flex gap-2">
-            {halaman > 1 && (
-              <Link
-                href={`/admin/users?halaman=${halaman - 1}`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Sebelumnya
-              </Link>
-            )}
-            {halaman < totalHalaman && (
-              <Link
-                href={`/admin/users?halaman=${halaman + 1}`}
-                className="rounded border border-gray-200 bg-white px-3 py-1.5 font-bold text-gray-600 transition hover:bg-gray-50"
-              >
-                Berikutnya
-              </Link>
-            )}
-          </div>
-        </div>
-      )}
+      <NavigasiHalaman
+        basis="/admin/users"
+        halaman={halaman}
+        totalHalaman={totalHalaman}
+        total={totalPengguna}
+        satuan="pengguna"
+      />
     </div>
   );
 }
