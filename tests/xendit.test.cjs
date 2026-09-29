@@ -25869,3 +25869,236 @@ describe('kolom angka yang bukan kuantitas, dan tanggal mulai tayang', () => {
     }
   });
 });
+
+
+/* ==========================================================================
+   Audit dependency: yang terdaftar dipakai, yang dipakai terdaftar (8.9)
+   ==========================================================================
+
+   Dua arah, dan arah kedua yang sungguh merusak build.
+
+   Arah pertama — dependency terdaftar tanpa pemakai — hanya membengkakkan
+   `npm ci` dan permukaan kerentanan. Arah kedua — paket yang DIIMPOR kode tapi
+   tidak terdaftar — jalan di mesin ini semata karena kebetulan terpasang
+   sebagai dependensi transitif milik paket lain. Saat paket perantaranya naik
+   versi dan berhenti membawanya, atau saat `npm ci` berjalan di runner yang
+   bersih, importnya gagal dan build runtuh — tanpa satu pun perubahan di kode
+   yang menyebabkannya.
+
+   Test ini dijalankan atas working tree, bukan atas daftar yang ditulis
+   tangan, supaya penambahan import berikutnya langsung diperiksa. */
+describe('audit dependency: terdaftar dipakai, dipakai terdaftar', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const AKAR = path.join(__dirname, '..');
+  const pkg = require(path.join(AKAR, 'package.json'));
+
+  /* `.claude` dikecualikan: worktrees di dalamnya adalah SALINAN seluruh repo,
+     jadi setiap pemakaian terhitung dua kali dan berkas yang sudah dihapus di
+     working tree akan tampak masih hidup. */
+  const LEWATI = new Set(['node_modules', '.next', '.git', '.claude', 'dist', 'build', '.codegraph', 'coverage']);
+  const EKST = new Set(['.ts', '.tsx', '.js', '.jsx', '.cjs', '.mjs', '.css', '.scss']);
+
+  /* `chat-server/` adalah paket npm TERPISAH dengan package.json dan
+     node_modules-nya sendiri (terverifikasi di test terakhir di bawah).
+     Importnya tidak dinilai terhadap package.json akar — kalau dinilai,
+     `express`/`socket.io`/`cors`/`dotenv` akan dilaporkan hilang dan
+     "diperbaiki" dengan menambahkannya ke bundel aplikasi Next, tempat
+     keempatnya tidak punya urusan. */
+  const PAKET_TERPISAH = ['chat-server/'];
+
+  const isiBerkas = (() => {
+    const peta = new Map();
+    (function jelajah(dir) {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (LEWATI.has(e.name)) continue;
+        const penuh = path.join(dir, e.name);
+        if (e.isDirectory()) { jelajah(penuh); continue; }
+        if (!EKST.has(path.extname(e.name))) continue;
+        const rel = path.relative(AKAR, penuh).split(path.sep).join('/');
+        try { peta.set(rel, fs.readFileSync(penuh, 'utf-8')); } catch (_) { /* biarkan */ }
+      }
+    })(AKAR);
+    return peta;
+  })();
+
+  /* `import\s+` di pilihan terakhir menangkap SIDE-EFFECT import
+     (`import 'server-only';`, `import 'react-calendar/dist/Calendar.css';`)
+     yang tidak punya `from` sama sekali. Tanpa cabang itu paket yang hanya
+     diimpor demi efek sampingnya dilaporkan mati — dan `server-only` yang
+     terhapus mematikan pagar server/klien tanpa satu pun galat compile. */
+  const SPEC = "(?:from\\s*|require\\(\\s*|import\\(\\s*|@import\\s+|import\\s+)['\"`]";
+
+  function pemakaiImport(nama) {
+    const esc = nama.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(SPEC + esc + "(?:/[^'\"`]*)?['\"`]");
+    const hasil = [];
+    for (const [f, s] of isiBerkas) if (re.test(s)) hasil.push(f);
+    return hasil;
+  }
+
+  it('setiap berkas sumber terbaca oleh pemindai', () => {
+    // Prasyarat. Pemindai yang memindai nol berkas membuat SELURUH assert di
+    // bawah lulus tanpa memeriksa apa pun — kegagalan paling berbahaya di
+    // test berbentuk negatif seperti ini.
+    assert.ok(isiBerkas.size > 100, `hanya ${isiBerkas.size} berkas terpindai; pemindainya tidak jalan.`);
+    assert.ok(isiBerkas.has('src/lib/xendit.ts'), 'berkas inti tidak ikut terpindai.');
+    assert.ok(isiBerkas.has('tests/xendit.test.cjs'), 'berkas test ini sendiri tidak ikut terpindai.');
+    for (const f of isiBerkas.keys()) {
+      assert.ok(!f.startsWith('.claude/'), `salinan worktree ikut terpindai: ${f}`);
+      assert.ok(!f.includes('node_modules'), `node_modules ikut terpindai: ${f}`);
+    }
+  });
+
+  it('pemindai import menangkap side-effect import, bukan hanya yang ber-from', () => {
+    // Test untuk pemindainya sendiri. `import 'server-only';` tidak punya
+    // `from`, jadi pemindai yang hanya mencari `from '...'` melaporkannya mati.
+    const re = new RegExp(SPEC + 'server-only' + "(?:/[^'\"`]*)?['\"`]");
+    assert.ok(re.test("import 'server-only';"), 'side-effect import harus tertangkap.');
+    assert.ok(re.test('require("server-only")'), 'require harus tertangkap.');
+    assert.ok(!re.test('// paket server-only menjaga pagar'), 'prosa tidak boleh tertangkap.');
+  });
+
+  /* Paket yang dipakai TANPA pernah di-`import`. Masing-masing punya jalur
+     pemakaian sendiri, dan jalur itu DIVERIFIKASI di sini terhadap berkas yang
+     sungguh ada — bukan didaftar sebagai pengecualian yang dipercaya. Kalau
+     jalurnya lenyap (postcss.config.mjs dihapus, misalnya), test ini gagal dan
+     paketnya memang jadi kandidat hapus. */
+  const JALUR_TANPA_IMPORT = {
+    'react-dom': () => {
+      const next = require(path.join(AKAR, 'node_modules', 'next', 'package.json'));
+      const peer = (next.peerDependencies || {})['react-dom'];
+      return peer ? `peerDependency wajib \`next\` (${peer})` : null;
+    },
+    typescript: () => (fs.existsSync(path.join(AKAR, 'tsconfig.json'))
+      ? 'compiler untuk tsconfig.json, `tsc --noEmit`, dan build Next' : null),
+    postcss: () => (fs.existsSync(path.join(AKAR, 'postcss.config.mjs'))
+      ? 'dijalankan lewat postcss.config.mjs' : null),
+    autoprefixer: () => {
+      const fp = path.join(AKAR, 'postcss.config.mjs');
+      if (!fs.existsSync(fp)) return null;
+      return fs.readFileSync(fp, 'utf-8').includes('autoprefixer')
+        ? 'plugin terdaftar di postcss.config.mjs' : null;
+    },
+    prisma: () => (fs.existsSync(path.join(AKAR, 'prisma', 'schema.prisma'))
+      ? 'CLI untuk prisma/schema.prisma (generate, migrate, validate)' : null),
+  };
+
+  function jalurPaketTipe(nama) {
+    if (!nama.startsWith('@types/')) return null;
+    const pokok = nama.slice('@types/'.length).replace(/__/g, '/');
+    if (pokok === 'node') {
+      const hit = [...isiBerkas].filter(([, s]) => /\brequire\(['"`](?:fs|path|crypto|http)['"`]\)|\bprocess\.env\b/.test(s));
+      return hit.length ? `tipe untuk \`process\`/\`fs\`/\`path\` di ${hit.length} berkas` : null;
+    }
+    const pakai = pemakaiImport(pokok);
+    if (pakai.length) return `tipe untuk \`${pokok}\` (${pakai.length} pemakai)`;
+    const lain = JALUR_TANPA_IMPORT[pokok] && JALUR_TANPA_IMPORT[pokok]();
+    return lain ? `tipe untuk \`${pokok}\` (${lain})` : null;
+  }
+
+  it('setiap dependency terdaftar punya pemakai atau jalur pemakaian yang terbukti', () => {
+    const mati = [];
+    for (const bagian of ['dependencies', 'devDependencies']) {
+      for (const nama of Object.keys(pkg[bagian] || {})) {
+        if (pemakaiImport(nama).length > 0) continue;
+        const alasan = jalurPaketTipe(nama) || (JALUR_TANPA_IMPORT[nama] && JALUR_TANPA_IMPORT[nama]());
+        if (!alasan) mati.push(`${bagian}:${nama}`);
+      }
+    }
+    assert.deepStrictEqual(mati, [], `dependency tanpa satu pun pemakai: ${mati.join(', ')}`);
+  });
+
+  it('setiap paket yang diimpor kode terdaftar di package.json', () => {
+    const terdaftar = new Set([
+      ...Object.keys(pkg.dependencies || {}),
+      ...Object.keys(pkg.devDependencies || {}),
+      ...Object.keys(pkg.peerDependencies || {}),
+      ...Object.keys(pkg.optionalDependencies || {}),
+    ]);
+    const bawaan = new Set(require('module').builtinModules);
+    // Nama paket npm yang sah. Tanpa saringan ini, string REGEX di dalam berkas
+    // test ini sendiri (`'@\\/components\\'`, `'next\\'`) terbaca sebagai nama
+    // paket dan dilaporkan hilang.
+    const NAMA_SAH = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+    const re = new RegExp(SPEC + "([^'\"`]+)['\"`]", 'g');
+
+    const hantu = new Map();
+    for (const [f, s] of isiBerkas) {
+      if (PAKET_TERPISAH.some((d) => f.startsWith(d))) continue;
+      /* Komentar blok dibuang. `postcss.config.mjs` menyebut
+         `import('postcss-load-config').Config` di dalam JSDoc — itu anotasi
+         tipe di komentar, bukan import yang dijalankan, dan menambahkannya ke
+         package.json karena laporan ini akan menambah dependency tanpa sebab. */
+      const bersih = s.replace(/\/\*[\s\S]*?\*\//g, '');
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(bersih)) !== null) {
+        const spec = m[1];
+        if (/^[.~/]/.test(spec) || spec.startsWith('@/') || spec.startsWith('node:')) continue;
+        const bagian = spec.split('/');
+        const nama = spec.startsWith('@') ? bagian.slice(0, 2).join('/') : bagian[0];
+        if (!NAMA_SAH.test(nama) || bawaan.has(nama) || terdaftar.has(nama)) continue;
+        if (!hantu.has(nama)) hantu.set(nama, new Set());
+        hantu.get(nama).add(f);
+      }
+    }
+    const daftar = [...hantu].map(([n, f]) => `${n} (${[...f].join(', ')})`);
+    assert.deepStrictEqual(daftar, [], `diimpor tapi tidak terdaftar: ${daftar.join('; ')}`);
+  });
+
+  it('chat-server punya manifest sendiri dan mendaftarkan seluruh importnya', () => {
+    // Inilah yang membenarkan pengecualian `PAKET_TERPISAH` di atas. Kalau
+    // manifestnya hilang, atau importnya tidak lagi terdaftar di situ,
+    // pengecualiannya berhenti sah dan test ini gagal alih-alih membiarkan
+    // seluruh direktori lolos tanpa diperiksa.
+    const fp = path.join(AKAR, 'chat-server', 'package.json');
+    assert.ok(fs.existsSync(fp), 'chat-server/package.json tidak ada — pengecualian PAKET_TERPISAH tidak lagi sah.');
+    const manifes = JSON.parse(fs.readFileSync(fp, 'utf-8'));
+    const terdaftar = new Set([
+      ...Object.keys(manifes.dependencies || {}),
+      ...Object.keys(manifes.devDependencies || {}),
+    ]);
+    const bawaan = new Set(require('module').builtinModules);
+    const NAMA_SAH = /^(?:@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+    const re = new RegExp(SPEC + "([^'\"`]+)['\"`]", 'g');
+
+    const hilang = new Map();
+    let jumlahBerkas = 0;
+    for (const [f, s] of isiBerkas) {
+      if (!f.startsWith('chat-server/')) continue;
+      jumlahBerkas += 1;
+      const bersih = s.replace(/\/\*[\s\S]*?\*\//g, '');
+      re.lastIndex = 0;
+      let m;
+      while ((m = re.exec(bersih)) !== null) {
+        const spec = m[1];
+        if (/^[.~/]/.test(spec) || spec.startsWith('node:')) continue;
+        const bagian = spec.split('/');
+        const nama = spec.startsWith('@') ? bagian.slice(0, 2).join('/') : bagian[0];
+        if (!NAMA_SAH.test(nama) || bawaan.has(nama) || terdaftar.has(nama)) continue;
+        if (!hilang.has(nama)) hilang.set(nama, new Set());
+        hilang.get(nama).add(f);
+      }
+    }
+    assert.ok(jumlahBerkas > 0, 'nol berkas chat-server terpindai; pemeriksaannya kosong.');
+    const daftar = [...hilang].map(([n, f]) => `${n} (${[...f].join(', ')})`);
+    assert.deepStrictEqual(daftar, [], `import chat-server tidak terdaftar di manifesnya: ${daftar.join('; ')}`);
+  });
+
+  it('paket server chat tidak ikut masuk dependency aplikasi Next', () => {
+    // `express`, `socket.io`, dan `cors` hanya milik proses chat-server.
+    // Menariknya ke package.json akar akan membuatnya ikut ter-bundle /
+    // ter-install pada deploy aplikasi Next yang tidak pernah memakainya —
+    // dan `socket.io` (server) mudah tertukar dengan `socket.io-client`
+    // (yang memang dipakai browser).
+    const akar = new Set([
+      ...Object.keys(pkg.dependencies || {}),
+      ...Object.keys(pkg.devDependencies || {}),
+    ]);
+    for (const nama of ['express', 'socket.io', 'cors', 'nodemon', 'cross-env']) {
+      assert.ok(!akar.has(nama), `\`${nama}\` milik chat-server, bukan aplikasi Next.`);
+    }
+    assert.ok(akar.has('socket.io-client'), 'browser tetap butuh socket.io-client.');
+  });
+});
