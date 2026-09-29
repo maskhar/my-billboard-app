@@ -5,7 +5,7 @@ import { prisma } from "@/lib/prisma";
 import { amankanHtml } from "@/lib/html";
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { DesignOption, daftarNilai, sahDesignOption } from "@/lib/enum-guard";
-import { addMonths, isBefore, startOfDay } from "date-fns";
+import { akhirSewa, periksaMulaiSewa } from "@/lib/hari-sewa";
 import { PaymentStatus, PaymentTujuan, Prisma } from "@prisma/client";
 import { jumlah, kali, keAngka, keDecimal, kurang, persen, rupiah } from "@/lib/money";
 import { BIAYA_ADMIN, PERSEN_DP, PERSEN_PPN } from "@/lib/tarif";
@@ -133,39 +133,51 @@ export async function POST(req: Request) {
         );
     }
 
-    // Tanggal mulai juga datang mentah dari browser. `new Date("halo")`
-    // menghasilkan Invalid Date, yang lolos sampai ke Prisma dan menggagalkan
-    // pemesanan dengan pesan yang tidak menjelaskan apa pun.
+    // Tanggal mulai datang mentah dari browser, dan keputusannya seluruhnya ada
+    // di `src/lib/hari-sewa.ts` — bukan di sini.
     //
-    // TIPENYA diperiksa sebelum `new Date`, bukan hanya hasilnya. Selama body
-    // masih bertipe `any`, `new Date(startDateString)` menerima apa pun — dan
-    // dua bentuk di antaranya LOLOS pemeriksaan `Number.isNaN` di bawah alih-alih
-    // ditolak: `new Date([])` menghasilkan 1 Januari 1970 (tanggal sah di masa
-    // lalu, jadi tertangkap gerbang berikutnya) dan `new Date(1)` menghasilkan
-    // 1 Januari 1970 juga. Yang berbahaya adalah ANGKA besar: `new Date(1e12)`
-    // adalah tanggal sah di tahun 2001, dan angka yang lebih besar lagi mengunci
-    // billboard di tanggal yang tidak pernah diketik siapa pun.
-    if (typeof startDateString !== 'string' || startDateString.trim() === '') {
-        return NextResponse.json({ message: "Tanggal mulai tayang tidak valid." }, { status: 400 });
-    }
-    const startDate = startOfDay(new Date(startDateString));
-    if (Number.isNaN(startDate.getTime())) {
-        return NextResponse.json({ message: "Tanggal mulai tayang tidak valid." }, { status: 400 });
-    }
-    if (isBefore(startDate, startOfDay(new Date()))) {
+    // Yang dulu berdiri di baris ini adalah tiga baris `date-fns`
+    // (`startOfDay`, `isBefore`, `addMonths`), dan ketiganya membaca zona waktu
+    // PROSES. Di produksi (UTC) itu berarti pukul 00.00–07.00 WIB setiap hari,
+    // proses menyimpulkan "hari ini" masih hari kemarin dan MENERIMA tanggal
+    // yang di Jakarta sudah lewat — pesanan yang lalu mengunci rentang berlalu
+    // lewat `booking_tanpa_tumpang_tindih` dan menolak setiap pembeli sungguhan
+    // untuk periode itu. Tujuh jam setiap hari, tanpa satu pun galat. Komentar
+    // kepala `hari-sewa.ts` memuat ketiga cacatnya beserta harganya.
+    //
+    // Rumusnya dipindahkan ke modul tersendiri, bukan ditulis ulang di sini,
+    // karena route ini meng-`import` `@/lib/prisma` dan `next-auth` — jadi
+    // rumusnya hanya bisa diuji lewat harness bermock, atau lewat SALINAN
+    // rumusnya di dalam test. Salinan yang tetap benar sementara yang dijalankan
+    // berubah adalah test yang melaporkan hijau atas kode yang salah; terukur
+    // pada kalender publik, mutasi `<` → `<=` pada versi closure-nya tidak
+    // membunuh satu pun dari 2139 test yang ada.
+    //
+    // `new Date()` diteruskan sebagai argumen, bukan dibaca di dalam modulnya:
+    // itu yang membuat "permintaan pukul 02.00 WIB" bisa ditulis sebagai satu
+    // instan di test, bukan sebagai test yang hanya benar pada jam tertentu.
+    const hariMulai = periksaMulaiSewa(startDateString, new Date());
+    if (!hariMulai.sah) {
         return NextResponse.json(
-            { message: "Tanggal mulai tayang tidak boleh di masa lalu." },
+            {
+                message:
+                    hariMulai.alasan === 'lampau'
+                        ? "Tanggal mulai tayang tidak boleh di masa lalu."
+                        : "Tanggal mulai tayang tidak valid.",
+            },
             { status: 400 }
         );
     }
 
-    // `endDate.setMonth(bulan + durasi)` dulu dipakai di sini. JavaScript tidak
-    // memendekkan tanggal saat bulan tujuan lebih pendek: 31 Januari + 1 bulan
-    // menjadi 31 Februari, yang otomatis meluber menjadi 3 Maret. Pembeli
-    // membayar 1 bulan tapi tercatat menyewa 31 hari lewat — dan tanggal luberan
-    // itu ikut mengunci pesanan berikutnya. `addMonths` menjepitnya ke hari
-    // terakhir bulan tujuan (28/29 Februari).
-    const endDate = addMonths(startDate, durasi);
+    const startDate = hariMulai.mulai;
+
+    // `endDate.setMonth(bulan + durasi)` dulu dipakai di sini, lalu `addMonths`.
+    // Keduanya menjepit ke hari terakhir bulan tujuan (31 Januari + 1 bulan →
+    // 28 Februari, bukan 3 Maret), tapi `addMonths` menjepitnya lewat medan
+    // waktu LOKAL — pada zona negatif hasilnya bergeser sehari, jadi pembeli
+    // tercatat menyewa satu hari lebih panjang dari yang dibayar dan hari itu
+    // ikut mengunci pesanan berikutnya. `akhirSewa` bekerja atas kunci hari.
+    const endDate = akhirSewa(hariMulai.kunci, durasi);
 
     // 1. Ambil Data Billboard — sumber harga yang mengikat, sekaligus untuk
     //    nama & alamat di email.
@@ -225,8 +237,10 @@ export async function POST(req: Request) {
             // selesai DAN selesai setelah yang lain mulai. Perbandingannya
             // sengaja `<` dan `>`, bukan `<=`/`>=`: pesanan yang berakhir
             // tepat pada hari pesanan berikutnya dimulai TIDAK bertabrakan,
-            // karena `endDate` adalah batas eksklusif (hasil addMonths dari
-            // startDate).
+            // karena `endDate` adalah batas eksklusif — `akhirSewa` menjawab
+            // hari pertama yang sudah bebas lagi, dan constraint
+            // `booking_tanpa_tumpang_tindih` memakai `'[)'` yang sepakat
+            // dengannya.
             //
             // Status yang dihitung "masih hidup" ada di STATUS_MENGUNCI_TANGGAL
             // — semuanya kecuali CANCELLED dan REFUNDED.

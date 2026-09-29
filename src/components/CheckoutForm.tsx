@@ -77,26 +77,41 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   // pemeriksaan di layar yang bisa bergantung padanya. Akibatnya terukur:
   // memilih tanggal di masa lalu lolos seluruh pemeriksaan browser
   // (`checkValidity()` true, `validationMessage` kosong), permintaannya
-  // terkirim, lalu server menolaknya di `api/booking/create/route.ts:156` —
-  // pembeli menunggu perjalanan bolak-balik hanya untuk diberi tahu hal yang
-  // sudah bisa diketahui sebelum ia menekan tombol.
+  // terkirim, lalu server menolaknya lewat `periksaMulaiSewa`
+  // (`src/lib/hari-sewa.ts`) — pembeli menunggu perjalanan bolak-balik hanya
+  // untuk diberi tahu hal yang sudah bisa diketahui sebelum ia menekan tombol.
   //
   // Dengan state, `min` di bawah bisa diturunkan dari hari ini dan penolakannya
-  // terjadi di kolomnya. Batas itu SENGAJA dibuat sama dengan gerbang server
-  // (`isBefore(startDate, startOfDay(new Date()))`), bukan lebih longgar dan
-  // bukan lebih ketat — klien di sini hanya mendahului jawaban server, tidak
-  // menggantikannya.
+  // terjadi di kolomnya.
+  //
+  // BATAS INI TIDAK IDENTIK DENGAN GERBANG SERVER, DAN ITU DISENGAJA.
+  // Server memutuskan harinya di **WIB**; batas di sini dirakit dari medan waktu
+  // **peramban**. Bagi pengunjung di luar +07:00 keduanya bisa berbeda sampai
+  // sehari, dan yang dipilih adalah batas peramban: `min` adalah hari yang
+  // TERTULIS di kalender pengunjung, dan kolom yang menolak tanggal yang masih
+  // hari ini menurut layarnya sendiri tidak bisa dijelaskan kepada siapa pun.
+  //
+  // Arah selisihnya karena itu harus selalu aman satu arah: klien boleh lebih
+  // LONGGAR dari server, tidak pernah lebih ketat. Yang lebih longgar berakhir
+  // di penolakan server dengan pesan yang jelas; yang lebih ketat menyembunyikan
+  // tanggal yang sebenarnya masih bisa dijual, dan tidak ada galat yang
+  // menandainya. Server tetap satu-satunya penentu.
   // ==========================================================================
   const [tanggalMulai, setTanggalMulai] = useState(startDate);
 
   /**
-   * Hari ini dalam bentuk `YYYY-MM-DD` waktu setempat.
+   * Hari ini dalam bentuk `YYYY-MM-DD` menurut jam PERAMBAN.
    *
    * `toISOString()` TIDAK dipakai: ia mengubah ke UTC lebih dulu, jadi di
    * Jakarta (UTC+7) sepanjang pukul 00:00–06:59 ia mengembalikan tanggal
-   * KEMARIN — dan `min` yang mundur satu hari menerima tanggal yang ditolak
-   * server, yaitu cacat yang sedang diperbaiki, hidup kembali hanya pada tujuh
-   * jam pertama setiap hari.
+   * KEMARIN — hari yang tidak tertulis di kalender pengunjung mana pun, dan
+   * bukan hari yang dipakai server memutuskan. Cacat yang hidup hanya pada tujuh
+   * jam pertama setiap hari adalah cacat yang tidak pernah muncul saat diuji.
+   *
+   * Yang dipakai justru medan waktu setempat, dan itu bukan kelalaian: nilai ini
+   * hanya mengisi `min` pada `<input type="date">`, yang seluruh maknanya adalah
+   * hari kalender di layar pengunjung. Keputusan uangnya ada di
+   * `periksaMulaiSewa` di server, yang memutuskan di WIB.
    */
   const batasTanggalMulai = (() => {
     const kini = new Date();

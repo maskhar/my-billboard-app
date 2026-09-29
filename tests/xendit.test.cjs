@@ -208,6 +208,7 @@ const JALUR_LAPORAN = path.join(
   'actions.ts'
 );
 const JALUR_RENTANG = path.join(__dirname, '..', 'src', 'lib', 'rentang-tanggal.ts');
+const JALUR_HARI_SEWA = path.join(__dirname, '..', 'src', 'lib', 'hari-sewa.ts');
 const JALUR_REVENUE_SECTION = path.join(
   __dirname,
   '..',
@@ -26110,7 +26111,19 @@ describe('booking/create menjaga durasi dan rentang tanggal', () => {
       },
     };
 
-    const route = muatDenganModulPalsu(JALUR_ROUTE_BOOKING, {
+    // `tanggalSekarang` dulu diterima lalu diteruskan kembali tanpa pernah
+    // dipakai: nol test membacanya, dan route tidak pernah diberi tahu. Artinya
+    // setiap test tanggal di bawahnya hanya bisa memakai `Date.now()` yang
+    // sebenarnya — yaitu tidak bisa menguji satu pun keputusan yang bergantung
+    // pada JAM, dan cacat "pukul 00.00-07.00 WIB di proses UTC menerima tanggal
+    // yang sudah lewat" karena itu tidak terlihat sama sekali.
+    //
+    // Sekarang ia memalsukan `new Date()` selama POST berjalan. `Date.now()`
+    // ikut dipaku supaya kode yang membacanya tidak melihat jam yang berbeda
+    // dari `new Date()` di baris sebelahnya. Dipulihkan di `finally`: satu
+    // test yang melempar tanpa itu meninggalkan seluruh berkas dengan jam
+    // beku, dan kegagalan berikutnya akan muncul di suite yang tidak bersalah.
+    const rute = muatDenganModulPalsu(JALUR_ROUTE_BOOKING, {
       'next/server': {
         NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
       },
@@ -26128,6 +26141,30 @@ describe('booking/create menjaga durasi dan rentang tanggal', () => {
         sapuPesananKedaluwarsa: async () => 0,
       },
     });
+
+    const route =
+      tanggalSekarang === null
+        ? rute
+        : {
+            async POST(...arg) {
+              const DateAsli = global.Date;
+              const tetap = new DateAsli(tanggalSekarang).getTime();
+              class DateBeku extends DateAsli {
+                constructor(...a) {
+                  super(...(a.length === 0 ? [tetap] : a));
+                }
+                static now() {
+                  return tetap;
+                }
+              }
+              global.Date = DateBeku;
+              try {
+                return await rute.POST(...arg);
+              } finally {
+                global.Date = DateAsli;
+              }
+            },
+          };
 
     return {
       route,
@@ -26357,6 +26394,135 @@ describe('booking/create menjaga durasi dan rentang tanggal', () => {
         fake.data(),
         null,
         `startDateString=${JSON.stringify(nilai)} tetap menyimpan pesanan`
+      );
+    }
+  });
+
+
+  // -------------------------------------------------------------------------
+  // HARI WIB — KEPUTUSAN TANGGAL TIDAK BOLEH BERGANTUNG PADA ZONA PROSES
+  //
+  // Seluruh test di blok ini MEMAKU JAM lewat `tanggalSekarang`. Tanpa itu
+  // keduanya hanya benar pada jam tertentu — yaitu tidak menguji apa pun.
+  //
+  // Kenapa ini penting justru karena tidak terlihat secara lokal: mesin
+  // pengembang di sini berjalan pada `Asia/Bangkok` (+07:00), offset yang sama
+  // dengan WIB, jadi `startOfDay()` dan `kunciTanggal()` selalu sepakat dan
+  // cacatnya nol kali muncul. Produksi berjalan pada UTC, tempat keduanya
+  // berbeda tujuh jam setiap hari.
+  // -------------------------------------------------------------------------
+
+  it('pukul 02.00 WIB, tanggal yang di Jakarta sudah lewat ditolak', async () => {
+    // INI CACAT YANG DIPERBAIKI, dan bentuknya persis begini di produksi.
+    //
+    // `2026-09-28T19:00:00Z` adalah 29 September pukul 02.00 WIB. Rumus lama
+    // `isBefore(startDate, startOfDay(new Date()))` dijalankan pada proses UTC
+    // menyimpulkan "hari ini" = 28 September, jadi permintaan untuk
+    // 28 September DITERIMA — padahal di Jakarta hari itu sudah habis.
+    //
+    // Pesanannya lalu mengunci rentang yang sudah berlalu, dan constraint
+    // `booking_tanpa_tumpang_tindih` menolak setiap pembeli sungguhan untuk
+    // periode itu selama statusnya masih hidup. Tujuh jam setiap hari, tanpa
+    // satu pun galat yang tercatat.
+    const fake = buatRoute({ tanggalSekarang: '2026-09-28T19:00:00.000Z' });
+    const res = await kirim(fake, { startDateString: '2026-09-28' });
+
+    const isi = await res.json();
+    assert.equal(res.status, 400, `tanggal yang sudah lewat di WIB lolos (${res.status})`);
+    assert.match(isi.message, /masa lalu/i, `pesan tidak menjelaskan: ${isi.message}`);
+    assert.equal(fake.data(), null, 'pesanan tanggal lampau tetap tersimpan');
+  });
+
+  it('pukul 02.00 WIB, hari ini di Jakarta masih boleh dipesan', async () => {
+    // Pasangan wajib test di atas. Gerbang yang menolak SEMUANYA juga membuat
+    // test di atas lulus, dan yang hilang tidak terlihat: penjualan hari ini
+    // — permintaan paling lazim dari kalender publik, yang `petakTerpakai`
+    // memang menawarkan sebagai bisa dipilih.
+    const fake = buatRoute({ tanggalSekarang: '2026-09-28T19:00:00.000Z' });
+    const res = await kirim(fake, { startDateString: '2026-09-29' });
+
+    assert.equal(res.status, 200, `hari ini di WIB ditolak (${res.status})`);
+    assert.ok(fake.data(), 'pesanan hari ini tidak tersimpan');
+  });
+
+  it('pukul 23.00 WIB, hari besok di Jakarta tidak tertolak sebagai "lampau"', async () => {
+    // Arah sebaliknya, dan yang menangkap gerbang yang dipasang terlalu ketat:
+    // `2026-09-29T16:00:00Z` adalah 29 September pukul 23.00 WIB, masih
+    // 29 September di UTC. Gerbang yang memakai kunci UTC menolak 30 September
+    // — pembeli yang memesan hari berikutnya pada malam hari diberi pesan
+    // "tidak boleh di masa lalu" untuk tanggal yang justru di masa depan.
+    const fake = buatRoute({ tanggalSekarang: '2026-09-29T16:00:00.000Z' });
+    const res = await kirim(fake, { startDateString: '2026-09-30' });
+
+    assert.equal(res.status, 200, `besok di WIB ditolak (${res.status})`);
+    assert.ok(fake.data(), 'pesanan besok tidak tersimpan');
+  });
+
+  it('yang tersimpan tengah malam UTC, supaya cast ::date pada constraint tidak bergeser', async () => {
+    // KONVENSI SIMPAN, dan kenapa ia BUKAN tengah malam WIB.
+    //
+    // `Booking.startDate` bertipe `TIMESTAMP(3)` TANPA zona waktu, dan
+    // constraint penguncinya membandingkan hasil cast:
+    //
+    //     daterange("startDate"::date, "endDate"::date, '[)')
+    //
+    // `::date` membaca jam dinding yang tersimpan apa adanya. Tengah malam WIB
+    // untuk 1 Oktober tersimpan sebagai `2026-09-30T17:00:00`, dan `::date`
+    // menjawab 30 SEPTEMBER — seluruh rentang eksklusi setiap pesanan baru
+    // bergeser sehari ke belakang, tidak lagi sepakat dengan baris lama maupun
+    // dengan `where` kalender admin. Tidak ada galat saat penulisan; yang
+    // muncul adalah pesanan yang saling menolak pada tanggal yang salah.
+    //
+    // Jadi jam dindingnya DIPAKU di sini: hari diputuskan di WIB, instannya
+    // disimpan tengah malam UTC.
+    const fake = buatRoute({ tanggalSekarang: '2026-09-29T05:00:00.000Z' });
+    const res = await kirim(fake, { duration: 1, startDateString: '2026-10-01' });
+
+    assert.equal(res.status, 200, `ditolak: ${res.status}`);
+    const d = fake.data();
+    assert.equal(
+      new Date(d.startDate).toISOString(),
+      '2026-10-01T00:00:00.000Z',
+      `konvensi simpan startDate bergeser: ${new Date(d.startDate).toISOString()}`
+    );
+    assert.equal(
+      new Date(d.endDate).toISOString(),
+      '2026-11-01T00:00:00.000Z',
+      `konvensi simpan endDate bergeser: ${new Date(d.endDate).toISOString()}`
+    );
+  });
+
+  it('tanggal yang tidak ada ditolak, bukan digulung ke bulan berikutnya', async () => {
+    // `new Date('2026-02-30')` TIDAK melempar dan TIDAK menghasilkan NaN: ia
+    // menggulung menjadi 2 Maret. Gerbang yang hanya memeriksa pola dan
+    // `Number.isNaN` karena itu menerimanya, dan pesanan tersimpan pada
+    // tanggal yang tidak pernah bisa muncul di `<input type="date">` mana pun
+    // — jadi tidak ada pembeli yang bisa mengakuinya, dan tidak ada admin yang
+    // bisa menjelaskan dari mana angkanya datang.
+    for (const nilai of ['2026-02-30', '2026-04-31', '2026-13-01', '2026-10-32', '2026-1-1', '2026-10']) {
+      const fake = buatRoute({ tanggalSekarang: '2026-09-29T05:00:00.000Z' });
+      const res = await kirim(fake, { startDateString: nilai });
+      assert.equal(res.status, 400, `startDateString=${nilai} lolos (${res.status})`);
+      assert.equal(fake.data(), null, `startDateString=${nilai} tetap menyimpan pesanan`);
+    }
+  });
+
+  it('bentuk YYYY-MM-DD diambil apa adanya, tanpa konversi zona', async () => {
+    // Yang dikirim `<input type="date">` adalah hari yang DIKLIK pembeli, tanpa
+    // makna waktu. Menafsirkannya sebagai instan lalu mengubahnya ke WIB
+    // berarti pengunjung di zona di atas +07:00 memesan tanggal yang tidak
+    // tertulis di layarnya: `new Date('2026-10-01')` adalah tengah malam UTC,
+    // yaitu 1 Oktober pukul 07.00 WIB — benar di sini, tapi bentuk yang
+    // menggodanya (`awalHariWib`, offset peramban) tidak. Dipaku sebagai
+    // identitas: kunci masuk = kunci tersimpan.
+    for (const kunci of ['2026-10-01', '2026-12-31', '2027-01-01', '2028-02-29']) {
+      const fake = buatRoute({ tanggalSekarang: '2026-09-29T05:00:00.000Z' });
+      const res = await kirim(fake, { duration: 1, startDateString: kunci });
+      assert.equal(res.status, 200, `${kunci} ditolak (${res.status})`);
+      assert.equal(
+        new Date(fake.data().startDate).toISOString().slice(0, 10),
+        kunci,
+        `${kunci} bergeser saat disimpan`
       );
     }
   });
@@ -27252,11 +27418,30 @@ describe('kolom angka yang bukan kuantitas, dan tanggal mulai tayang', () => {
 
     // Pemeriksaan klien tidak boleh dianggap menggantikan gerbang server:
     // `curl` melewatinya sepenuhnya.
+    //
+    // Yang dicari bukan lagi `isBefore(startDate, startOfDay(new Date()))`.
+    // Ekspresi itu memang gerbangnya, tapi ia membaca zona waktu PROSES: di
+    // produksi (UTC) pukul 00.00–07.00 WIB ia menyimpulkan "hari ini" masih
+    // hari kemarin dan MENERIMA tanggal yang di Jakarta sudah lewat. Rumusnya
+    // pindah ke `src/lib/hari-sewa.ts`, dan keputusannya diuji di sana atas
+    // instan yang ditulis test — bukan atas jam mesin yang menjalankannya.
+    //
+    // Gerbangnya tetap dijaga di sini, hanya bentuknya yang berubah: yang
+    // dituntut adalah pemanggilan `periksaMulaiSewa` beserta `new Date()` yang
+    // diteruskan sebagai argumen. `new Date()` disebut dengan sengaja — tanpa
+    // itu, route yang meneruskan tanggal dari body pembeli sebagai "sekarang"
+    // akan lolos pemeriksaan ini.
     const kodeServer = kodeSaja(JALUR_ROUTE_CREATE);
     assert.ok(
-      /isBefore\(startDate,\s*startOfDay\(new Date\(\)\)\)/.test(kodeServer),
+      /periksaMulaiSewa\(\s*startDateString\s*,\s*new Date\(\)\s*\)/.test(kodeServer),
       'gerbang tanggal lampau di booking/create harus tetap ada — ' +
         'pemeriksaan browser bisa dilewati dengan curl.'
+    );
+    assert.ok(
+      /hariMulai\.alasan === 'lampau'/.test(kodeServer),
+      'hasil `lampau` harus dipetakan ke pesannya sendiri: "tidak valid" pada ' +
+        'tanggal yang sah tapi sudah lewat membuat pembeli mengetik ulang ' +
+        'tanggal yang bentuknya tidak pernah salah.'
     );
   });
 
@@ -30317,5 +30502,207 @@ describe('AvailabilityCalendar: endDate EKSKLUSIF dan batas hari WIB', () => {
     const kode = kodeSajaKalender(JALUR_DETAIL_CLIENT);
     assert.match(kode, /type RentangTerpakai.*from '@\/components\/AvailabilityCalendar'/s);
     assert.match(kode, /bookedDates: RentangTerpakai\[\]/);
+  });
+});
+
+// ===========================================================================
+// HARI SEWA — RUMUS TANGGAL SEWA, DIUJI LANGSUNG TANPA SATU PUN MOCK
+//
+// Modul ini di-`require` apa adanya, bukan disalin ke dalam test. Rumus yang
+// disalin akan tetap benar sementara yang dijalankan berubah, dan itu test yang
+// melaporkan hijau atas kode yang salah — terukur pada kalender publik, mutasi
+// `<` → `<=` pada versi closure-nya tidak membunuh satu pun dari 2139 test.
+// ===========================================================================
+
+describe('hari sewa', () => {
+  const H = require(JALUR_HARI_SEWA);
+
+  it('instan tersimpan adalah tengah malam UTC, bukan tengah malam WIB', () => {
+    // SATU BYTE DI SINI MENENTUKAN KEBENARAN CONSTRAINT.
+    //
+    // `Booking.startDate` bertipe `TIMESTAMP(3)` tanpa zona, dan penguncinya
+    // membandingkan `daterange("startDate"::date, "endDate"::date, '[)')`.
+    // `::date` membaca jam dinding apa adanya: menyimpan tengah malam WIB untuk
+    // 1 Oktober menghasilkan `2026-09-30T17:00:00`, dan `::date` menjawab
+    // 30 September. Seluruh rentang eksklusi setiap pesanan BARU bergeser
+    // sehari, tidak lagi sepakat dengan baris lama — tanpa satu pun galat saat
+    // penulisan.
+    assert.equal(H.awalHariTersimpan('2026-10-01').toISOString(), '2026-10-01T00:00:00.000Z');
+    assert.equal(H.awalHariTersimpan('2026-01-01').toISOString(), '2026-01-01T00:00:00.000Z');
+    assert.equal(H.awalHariTersimpan('2028-02-29').toISOString(), '2028-02-29T00:00:00.000Z');
+  });
+
+  it('kunci YYYY-MM-DD diambil apa adanya, tanpa konversi zona', () => {
+    // Yang dikirim `<input type="date">` adalah hari yang DIKLIK, tanpa makna
+    // waktu. Menafsirkannya sebagai instan lalu memetakannya ke WIB membuat
+    // pengunjung di atas +07:00 memesan tanggal yang tidak tertulis di layarnya.
+    assert.equal(H.kunciHariSewa('2026-10-01'), '2026-10-01');
+    assert.equal(H.kunciHariSewa('  2026-10-01  '), '2026-10-01');
+    assert.equal(H.kunciHariSewa('2028-02-29'), '2028-02-29');
+  });
+
+  it('tanggal yang tidak ada ditolak, bukan digulung', () => {
+    // `new Date('2026-02-30')` tidak melempar dan bukan NaN: ia menjadi 2 Maret.
+    // Gerbang yang hanya memeriksa pola dan `Number.isNaN` menerimanya, dan
+    // pesanan tersimpan pada hari yang tidak pernah bisa muncul di
+    // `<input type="date">` mana pun. Karena itu pemeriksaannya BOLAK-BALIK,
+    // bukan regex.
+    for (const n of ['2026-02-30', '2026-04-31', '2026-13-01', '2026-10-32', '2026-00-10']) {
+      assert.equal(H.kunciHariSewa(n), null, n + ' lolos');
+    }
+  });
+
+  it('bentuk yang new Date mau terima tapi tidak pernah diketik orang ditolak', () => {
+    // `new Date('2026')` adalah 1 Januari 2026 dan `new Date('2026-10')` adalah
+    // 1 Oktober — tanggal sah menurut setiap gerbang berikutnya, dan tanggal yang
+    // tidak pernah dipilih siapa pun. Itu sebabnya cabang instan menuntut `T`,
+    // bukan sekadar "bukan NaN".
+    for (const n of ['2026', '2026-10', '2026-1-1', '1/10/2026', '01-10-2026', 'besok', '']) {
+      assert.equal(H.kunciHariSewa(n), null, JSON.stringify(n) + ' lolos');
+    }
+  });
+
+  it('yang bukan teks ditolak sebelum new Date menyentuhnya', () => {
+    // Selama body request bertipe `any`, `new Date(1e15)` adalah tanggal sah di
+    // tahun 33658: bukan NaN, bukan masa lalu. Satu angka yang tersasar menjadi
+    // sewa ribuan tahun yang menolak setiap pembeli sungguhan lewat constraint.
+    for (const n of [1e15, 1e12, 0, 1, [], {}, null, undefined, true, new Date()]) {
+      assert.equal(H.kunciHariSewa(n), null, String(n) + ' lolos');
+    }
+  });
+
+  it('instan ISO penuh ditafsirkan di WIB, konsisten dengan seluruh pembaca lain', () => {
+    // 17.00 UTC adalah tengah malam WIB hari berikutnya. Konvensi yang sama
+    // dipakai `kunciTanggal` di kalender admin dan `billboard/[slug]/page.tsx`.
+    assert.equal(H.kunciHariSewa('2026-09-30T17:00:00.000Z'), '2026-10-01');
+    assert.equal(H.kunciHariSewa('2026-09-30T16:59:59.999Z'), '2026-09-30');
+    assert.equal(H.kunciHariSewa('2026-10-01T23:00:00.000Z'), '2026-10-02');
+  });
+
+  it('pukul 02.00 WIB, hari kemarin di Jakarta sudah lampau', () => {
+    // CACAT YANG DIPERBAIKI. Pukul 00.00–07.00 WIB hari D adalah hari D−1 di UTC,
+    // jadi `startOfDay(new Date())` pada proses UTC menyimpulkan "hari ini" masih
+    // D−1 dan MENERIMA D−1. Di Jakarta hari itu sudah habis; pesanannya mengunci
+    // rentang yang sudah berlalu dan memblokir pembeli sungguhan lewat
+    // `booking_tanpa_tumpang_tindih`. Tujuh jam setiap hari, tanpa galat.
+    const jam02wib = new Date('2026-09-28T19:00:00.000Z');
+    assert.deepEqual(H.periksaMulaiSewa('2026-09-28', jam02wib), { sah: false, alasan: 'lampau' });
+
+    const hariIni = H.periksaMulaiSewa('2026-09-29', jam02wib);
+    assert.equal(hariIni.sah, true, 'hari ini di WIB ikut tertolak');
+    assert.equal(hariIni.kunci, '2026-09-29');
+    assert.equal(hariIni.mulai.toISOString(), '2026-09-29T00:00:00.000Z');
+  });
+
+  it('pukul 23.00 WIB, hari besok di Jakarta bukan masa lalu', () => {
+    // Arah sebaliknya, yang menangkap gerbang terlalu ketat: 16.00 UTC masih
+    // 29 September di UTC tapi sudah pukul 23.00 WIB. Gerbang berkunci UTC
+    // menolak 30 September — pembeli malam hari diberi pesan "masa lalu" untuk
+    // tanggal yang justru di masa depan.
+    const jam23wib = new Date('2026-09-29T16:00:00.000Z');
+    assert.equal(H.periksaMulaiSewa('2026-09-30', jam23wib).sah, true);
+    assert.equal(H.periksaMulaiSewa('2026-09-29', jam23wib).sah, true, 'hari ini tertolak');
+    assert.deepEqual(H.periksaMulaiSewa('2026-09-28', jam23wib), { sah: false, alasan: 'lampau' });
+  });
+
+  it('hari ini sendiri masih boleh dipesan', () => {
+    // Perbandingannya `<`, bukan `<=`. `<=` menolak penjualan yang sah setiap
+    // hari, dan kalender publik (`petakTerpakai`) sudah menawarkan hari ini
+    // sebagai bisa dipilih — pembeli mengklik tanggal yang ditawarkan lalu
+    // ditolak servernya.
+    for (const jam of ['2026-09-29T00:00:00.000Z', '2026-09-29T12:00:00.000Z', '2026-09-29T16:59:59.999Z']) {
+      assert.equal(
+        H.periksaMulaiSewa('2026-09-29', new Date(jam)).sah,
+        true,
+        'hari ini ditolak pada ' + jam
+      );
+    }
+  });
+
+  it('alasan tolak dipisah bentuk dan lampau', () => {
+    // Dua pesan berbeda karena dua tindakan berbeda. "Tidak valid" pada tanggal
+    // yang bentuknya benar tapi sudah lewat membuat pembeli mengetik ulang
+    // tanggal yang tidak pernah salah bentuknya.
+    const jam = new Date('2026-09-29T05:00:00.000Z');
+    assert.equal(H.periksaMulaiSewa('bukan tanggal', jam).alasan, 'bentuk');
+    assert.equal(H.periksaMulaiSewa('2026-02-30', jam).alasan, 'bentuk');
+    assert.equal(H.periksaMulaiSewa(1e15, jam).alasan, 'bentuk');
+    assert.equal(H.periksaMulaiSewa('2020-01-01', jam).alasan, 'lampau');
+  });
+
+  it('akhir sewa MAJU, dan dijepit ke hari terakhir bulan tujuan', () => {
+    // 31 Januari + 1 bulan adalah 28 Februari, bukan 3 Maret. `addMonths`
+    // menjepit lewat medan waktu LOKAL, jadi pada proses berzona negatif
+    // `2027-01-31T00:00:00Z` terbaca 30 Januari dan hasilnya `2027-03-01Z` —
+    // sehari lebih panjang dari yang dibayar, dan hari itu ikut mengunci
+    // pesanan berikutnya. `geserBulan` bekerja atas kunci hari, jadi jawabannya
+    // sama dari zona mana pun.
+    assert.equal(H.akhirSewa('2027-01-31', 1).toISOString(), '2027-02-28T00:00:00.000Z');
+    assert.equal(H.akhirSewa('2027-12-31', 2).toISOString(), '2028-02-29T00:00:00.000Z');
+    assert.equal(H.akhirSewa('2026-10-01', 1).toISOString(), '2026-11-01T00:00:00.000Z');
+    assert.equal(H.akhirSewa('2026-10-01', 12).toISOString(), '2027-10-01T00:00:00.000Z');
+    assert.equal(H.akhirSewa('2026-10-01', 24).toISOString(), '2028-10-01T00:00:00.000Z');
+  });
+
+  it('akhir sewa selalu SESUDAH mulai, untuk setiap durasi yang dijual', () => {
+    // `endDate` adalah batas EKSKLUSIF, dan gerbang tumpang-tindih memakai
+    // `endDate: { gt: startDate }`. Tanda `geserBulan` terbalik dari
+    // `geserHari` (negatif berarti maju), jadi satu tanda yang tertukar
+    // menghasilkan rentang mundur: query bentrok cocok dengan nol baris, dan
+    // constraint database menjadi satu-satunya penjaga terakhir.
+    for (const kunci of ['2026-10-01', '2027-01-31', '2028-02-29', '2026-12-31']) {
+      for (const durasi of [1, 2, 3, 6, 12, 24]) {
+        const akhir = H.akhirSewa(kunci, durasi);
+        assert.ok(
+          akhir.getTime() > H.awalHariTersimpan(kunci).getTime(),
+          kunci + ' x ' + durasi + ' bulan menghasilkan rentang mundur: ' + akhir.toISOString()
+        );
+      }
+    }
+  });
+
+  it('tidak ada satu pun getter waktu lokal proses di hari-sewa', () => {
+    // Pengawal sumber, bukan pengawal perilaku. Assert di atas hanya gagal bila
+    // dijalankan dari zona yang tepat, dan mesin di sini berjalan pada
+    // `Asia/Bangkok` (+07:00) — offset yang sama dengan WIB, jadi seluruh cacat
+    // kelas ini nol kali muncul secara lokal. Yang ini gagal dari zona mana pun.
+    //
+    // `getUTCDate`/`getUTCMonth` sengaja TIDAK dilarang; keduanya tidak
+    // bergantung pada zona proses.
+    const kode = kodeSajaAny(JALUR_HARI_SEWA);
+    for (const pola of [
+      'getFullYear()',
+      'getMonth()',
+      'getDate()',
+      'getHours()',
+      'setDate(',
+      'setMonth(',
+      'setHours(',
+      'setFullYear(',
+      'toISOString',
+      'date-fns',
+    ]) {
+      assert.ok(!kode.includes(pola), 'hari-sewa.ts memakai ' + pola + ', yang membaca zona proses');
+    }
+  });
+
+  it('konvensi simpan tertulis UTC di sumbernya, bukan +07:00', () => {
+    // Pengawal byte yang paling mahal di modul ini. `T00:00:00+07:00` juga
+    // lulus setiap test yang membandingkan KUNCI, karena kuncinya memang tidak
+    // berubah — yang berubah adalah jam dinding tersimpan, dan itulah yang
+    // dibaca `::date` pada constraint GIST.
+    const kode = kodeSajaAny(JALUR_HARI_SEWA);
+    assert.match(kode, /T00:00:00\.000Z/, 'instan tersimpan harus dipaku tengah malam UTC');
+    assert.ok(!/\+07:00/.test(kode), 'offset WIB di instan tersimpan menggeser cast ::date sehari');
+  });
+
+  it('nol impor selain modul relatif, supaya bisa di-require tanpa mock', () => {
+    // Satu `@/lib/prisma` atau satu `server-only` di sini dan seluruh suite ini
+    // harus dibongkar menjadi test lewat mock — yaitu berhenti menguji rumus yang
+    // benar-benar dijalankan `booking/create`.
+    const kode = kodeSajaAny(JALUR_HARI_SEWA);
+    assert.ok(!/from '@\//.test(kode), 'impor alias @/ membuat modul ini tidak bisa di-require langsung');
+    assert.ok(!/server-only/.test(kode), 'server-only membuat modul ini tidak bisa di-require di test');
+    assert.ok(!/@prisma\/client/.test(kode), 'impor Prisma menarik client ke dalam test');
   });
 });
