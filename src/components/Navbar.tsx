@@ -158,9 +158,18 @@ const Navbar = () => {
             </span>
           </Link>
 
-          {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas) */}
+          {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas)
+
+              "Cari Billboard" MENUNJUK `/billboards`, bukan `/`.
+              Ia dulu menunjuk `/` — alamat yang sama dengan logo di sebelahnya,
+              jadi dua kendali bersebelahan melakukan hal yang identik sementara
+              satu-satunya cara MENCARI (mengurutkan harga, membaca jumlah hasil,
+              menyusuri daftar) tidak punya tautan dari mana pun. Label yang
+              menjanjikan pencarian mendarat di peta yang harus diklik penanda per
+              penanda. Peta tetap terjangkau: lewat logo, dan lewat tautan "Lihat
+              di peta" di katalog. */}
           <div className="hidden md:flex items-center space-x-8">
-              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Cari Billboard</Link>
+              <Link href="/billboards" className="text-sm font-medium text-gray-700 hover:text-utero transition">Cari Billboard</Link>
               <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
               {session && (
                 <Link href="/dashboard" className="text-sm font-medium text-gray-700 hover:text-utero transition">Pesanan Saya</Link>
@@ -290,8 +299,12 @@ const Navbar = () => {
                     </Link>
                 )}
 
-                {/* Link Navigasi Biasa */}
-                <Link href="/" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
+                {/* Link Navigasi Biasa.
+                    `/billboards`, sepasang dengan tautan desktop — lihat
+                    alasannya di sana. Di layar HP bobotnya lebih besar lagi:
+                    peta penuh penanda di lebar 375px praktis tidak bisa
+                    ditelusuri, sementara daftar satu kolom bisa. */}
+                <Link href="/billboards" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
                 <Link href="/about" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">ℹ️ Tentang Kami</Link>
                 {/* `onClick={() => setIsOpen(false)}` sama seperti tautan mobile
                     lainnya: tanpa itu menu tetap terbuka menutupi halaman

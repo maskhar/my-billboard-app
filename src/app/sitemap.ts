@@ -78,6 +78,19 @@ const HALAMAN_STATIS = [
   // — alamat yang sah tapi bukan bentuk kanonik beranda, dan berbeda dari
   // alamat yang ditaut seluruh halaman lain di situs ini.
   { jalur: '/', frekuensi: 'daily' as const, prioritas: 1.0 },
+  // `/billboards` — katalog, dan ia SATU-SATUNYA halaman di situs ini yang
+  // benar-benar menautkan setiap titik media dalam HTML-nya. Beranda merender
+  // seluruh tautan produknya di dalam popup Leaflet setelah JavaScript jalan,
+  // jadi sebelum halaman ini ada, satu-satunya yang mengaitkan
+  // `/billboard/[slug]` adalah berkas sitemap ini sendiri. Prioritasnya di bawah
+  // beranda saja: `daily` karena barisnya berubah setiap kali ada titik terjual
+  // atau masa sewa berakhir.
+  //
+  // Tanpa query apa pun. `?q=`/`?type=`/`?urut=`/`?halaman=` semuanya alamat sah
+  // yang isinya bersarang di dalam halaman ini, dan `alternates.canonical` di
+  // sana sudah menunjuk balik ke bentuk tanpa query — mendaftarkannya di sini
+  // hanya melawan kanonik yang sama.
+  { jalur: '/billboards', frekuensi: 'daily' as const, prioritas: 0.9 },
   { jalur: '/about', frekuensi: 'yearly' as const, prioritas: 0.5 },
   { jalur: '/sewakan-tempat', frekuensi: 'monthly' as const, prioritas: 0.7 },
   // `/login` dan `/register` SENGAJA tidak ada. Keduanya tidak punya isi yang

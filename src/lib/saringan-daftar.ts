@@ -19,15 +19,38 @@
 // Jadi modul ini bukan kerapian: ia yang membuat "ekspor = layar" menjadi sifat
 // STRUKTURAL, bukan janji yang harus dijaga dua berkas sekaligus.
 //
-// NOL IMPOR SELAIN TIPE PRISMA
-// ----------------------------
+// KATALOG PUBLIK IKUT KE SINI, DENGAN ALASAN YANG LEBIH KERAS
+// -----------------------------------------------------------
+// `wherePublikBillboard` di bawah menanggung beban yang berbeda dari keempat
+// `where` admin: yang dijaganya bukan kesepakatan antara layar dan berkas CSV,
+// melainkan antara dua HALAMAN PUBLIK (beranda dan `/billboards`) dan dua
+// gerbang keamanan. Gerbang `publishStatus: 'PUBLISHED'` yang disalin ke halaman
+// kedua lalu menyimpang berarti baris `DRAFT` — harga yang masih ditawar, alamat
+// yang belum dikonfirmasi pemilik lahan — tampil sebagai barang dagangan. Dan
+// klausa pencariannya sengaja BUKAN `whereBillboard`, karena `sku` tidak boleh
+// bisa dicari publik; alasannya di docstring-nya.
+//
+// NOL IMPOR SELAIN TIPE PRISMA DAN MODUL RELATIF
+// ----------------------------------------------
 // Alasannya sama seperti `paginasi.ts`, `tarif.ts`, dan `kueri-daftar.ts`:
 // dipakai dari Server Component DAN dari route handler, dan bisa di-`require`
 // langsung di test tanpa satu pun mock. `Prisma` di sini hanya dipakai sebagai
-// tipe dan sebagai `QueryMode` — bukan sebagai klien.
+// tipe dan sebagai `QueryMode` — bukan sebagai klien; `BookingStatus` murni
+// `import type`, dan keempat impor lainnya RELATIF ke modul yang sendirinya nol
+// impor. Yang TIDAK boleh masuk adalah `./transisi-status`: ia mengimpor
+// `@/lib/prisma`, jadi daftar status pengunci tanggal masuk sebagai parameter.
 
+// `BookingStatus` ditarik sebagai TIPE SAJA (`import type`), bukan sebagai objek
+// enum. Objeknya adalah nilai runtime dari `@prisma/client`, dan mengimpornya di
+// sini akan membuat berkas ini menarik klien Prisma saat di-`require` di test —
+// sifat yang justru dijaga komentar kepala berkas. Daftar status yang sebenarnya
+// masuk sebagai parameter `wherePublikBillboard`.
+import type { BookingStatus } from '@prisma/client';
 import { Prisma, StatusPengajuanTitik } from '@prisma/client';
+import { awalHariTersimpan, kunciHariSewa } from './hari-sewa';
 import { PANJANG_NOMOR_PESANAN } from './nomor-pesanan';
+import { geserBulan } from './rentang-tanggal';
+import { TIPE_SEMUA } from './tipe-billboard';
 
 /** `contains` + `insensitive`, bentuk yang dipakai setiap kolom teks di sini. */
 function memuat(kataKunci: string): Prisma.StringFilter {
@@ -107,6 +130,168 @@ export function whereBillboard(kataKunci: string): Prisma.BillboardWhereInput {
       { sku: memuat(kataKunci) },
       { address: memuat(kataKunci) },
     ],
+  };
+}
+
+/**
+ * Urutan katalog PUBLIK yang boleh diminta URL.
+ *
+ * Bukan `URUT_BILLBOARD` di atas, dan bedanya penting: `status-naik`/
+ * `status-turun` **tidak ada di sini**. Katalog publik menyaring
+ * `status: 'Available'` mati-matian, jadi seluruh barisnya berstatus sama —
+ * kunci urut yang tidak mengubah satu baris pun, sementara panah di kepala
+ * kolomnya menyatakan sesuatu terjadi.
+ *
+ * `terbaru` bakunya, sama seperti sisi admin, tapi alasannya lain: yang paling
+ * relevan bagi pengunjung adalah titik yang datanya baru disegarkan — foto baru,
+ * harga baru — bukan titik yang paling lama tidak disentuh.
+ */
+export const URUT_PUBLIK: Record<string, Prisma.BillboardOrderByWithRelationInput> = {
+  terbaru: { updatedAt: 'desc' },
+  'harga-naik': { price: 'asc' },
+  'harga-turun': { price: 'desc' },
+  'judul-naik': { title: 'asc' },
+  'judul-turun': { title: 'desc' },
+};
+
+export const KUNCI_URUT_PUBLIK = Object.keys(URUT_PUBLIK) as [string, ...string[]];
+
+/**
+ * Apa yang diminta pengunjung dari katalog publik.
+ *
+ * Semua medannya sudah BERSIH saat masuk: `kataKunci` lewat `bacaKataKunci`,
+ * `tipe` lewat `bacaPilihan(…, PILIHAN_TIPE_MEDIA, TIPE_SEMUA)`, dan `tanggal`
+ * mentah dari URL — yang terakhir sengaja dibiarkan mentah, lihat di bawah.
+ */
+export type SaringanPublik = {
+  kataKunci: string;
+  tipe: string;
+  /**
+   * `?date=` MENTAH dari URL. Divalidasi di dalam fungsi lewat `kunciHariSewa`,
+   * bukan oleh pemanggil.
+   *
+   * Sengaja di dalam: dua halaman membacanya (beranda dan `/billboards`), dan
+   * validasi yang ditulis di dua tempat adalah validasi yang akan menyimpang.
+   * Yang divalidasinya bukan kerapian — `?date=2026-02-30` lolos setiap regex
+   * `\d{4}-\d{2}-\d{2}` lalu digulung `new Date` menjadi 2 Maret, sehingga
+   * pengunjung melihat ketersediaan tanggal yang tidak pernah ia minta.
+   */
+  tanggal?: string | string[] | null;
+  /**
+   * Durasi bulan yang ditanyakan ketersediaannya. Bakunya 1.
+   *
+   * Pengunjung belum memilih durasi saat menyaring peta, dan menanyakan
+   * "kosong selama 12 bulan" pada tahap itu akan membuang hampir seluruh
+   * inventori. Satu bulan adalah durasi minimum di `booking/create`, jadi titik
+   * yang lolos saringan ini pasti bisa dipesan setidaknya sependek itu.
+   */
+  durasi?: number;
+};
+
+/** Hasil `wherePublikBillboard`: klausanya, plus apa yang dipakainya. */
+export type HasilSaringanPublik = {
+  where: Prisma.BillboardWhereInput;
+  /**
+   * Kunci hari `YYYY-MM-DD` yang benar-benar dipakai, atau `null`.
+   *
+   * Dilaporkan keluar supaya UI bisa MENGATAKANNYA, alasan yang sama seperti
+   * `PilihanBulan.ditolak` di `kalender-ketersediaan.ts`: halaman yang diam-diam
+   * mengabaikan `?date=` menampilkan seluruh inventori sementara kolom tanggal
+   * di bilah pencarian masih terisi, dan pengunjung membaca daftar itu sebagai
+   * "yang kosong pada tanggal itu".
+   */
+  kunciTanggal: string | null;
+  /** Ada `?date=` yang dikirim tapi bentuknya tidak bisa dipercaya. */
+  tanggalDitolak: boolean;
+};
+
+/**
+ * `where` katalog PUBLIK billboard: yang layak tampil, dan yang cocok saringan.
+ *
+ * KENAPA TIDAK MEMAKAI `whereBillboard` DI ATAS
+ * ---------------------------------------------
+ * Karena `whereBillboard` mencari `sku`, dan **`sku` tidak boleh bisa dicari
+ * publik**. Alasannya sama dengan `ktp`/`npwp` di `whereUser`: kolom yang bisa
+ * dicari berarti bisa dites lewat URL satu per satu, jadi seseorang bisa
+ * memastikan sebuah kode aset ada dari ada-tidaknya hasil, tanpa pernah melihat
+ * barisnya. `sku` adalah kode internal yang tertulis di kontrak dan surat jalan;
+ * ia boleh dilihat tim lapangan, bukan dijadikan kunci penelusuran inventori
+ * oleh siapa pun yang membuka bilah alamat. Halaman publik juga tidak
+ * merendernya sama sekali, sehingga hasil yang cocok lewat `sku` tampil sebagai
+ * baris yang — menurut layar — tidak memuat kata yang dicari.
+ *
+ * DUA GERBANG YANG TIDAK BOLEH HILANG
+ * -----------------------------------
+ * `status: 'Available'` dan `publishStatus: 'PUBLISHED'` dipasang MATI di sini,
+ * bukan diserahkan pemanggil. Sebelumnya keduanya ditulis di dalam
+ * `src/app/page.tsx`, dan halaman kedua yang menampilkan inventori berarti
+ * salinan kedua gerbang itu. Yang hilang bila salinannya menyimpang bukan
+ * tampilan: `DRAFT` adalah baris yang BELUM siap publik — harga yang masih
+ * ditawar, alamat yang belum dikonfirmasi pemilik lahan — dan menampilkannya
+ * berarti menjual sesuatu yang belum ada.
+ *
+ * KETERSEDIAAN TANGGAL: `none`, BUKAN `some`
+ * ------------------------------------------
+ * Saringan tanggal berbunyi "titik ini TIDAK punya satu pun pesanan yang
+ * mengunci rentang yang diminta". Ditulis `some`, jawabannya terbalik persis —
+ * pengunjung mendapat daftar titik yang justru sudah terjual, dan setiap
+ * checkout dari daftar itu ditolak constraint di ujung.
+ *
+ * Perbandingannya `lt`/`gt` atas rentang setengah terbuka `[mulai, selesai)`,
+ * sama seperti gerbang tumpang-tindih di `booking/create` dan sama seperti
+ * `'[)'` pada constraint `booking_tanpa_tumpang_tindih`. `lte`/`gte` di sini
+ * membuang titik yang pesanan lamanya SELESAI persis di hari yang diminta —
+ * hari yang menurut database masih bisa dijual.
+ *
+ * KENAPA `statusMengunci` DISERAHKAN PEMANGGIL
+ * -------------------------------------------
+ * `STATUS_MENGUNCI_TANGGAL` hidup di `transisi-status.ts`, yang mengimpor
+ * `@/lib/prisma` — menariknya ke sini menghancurkan sifat "nol impor selain tipe
+ * Prisma" yang membuat modul ini bisa di-`require` di test tanpa satu pun mock.
+ * Daftarnya karena itu masuk sebagai parameter, dan TIDAK punya nilai baku:
+ * baku `[]` berarti saringan tanggal yang diam-diam tidak menyaring apa pun,
+ * yaitu bentuk kegagalan yang paling sulit dilihat.
+ */
+export function wherePublikBillboard(
+  saringan: SaringanPublik,
+  statusMengunci: readonly BookingStatus[]
+): HasilSaringanPublik {
+  const { kataKunci, tipe, tanggal, durasi = 1 } = saringan;
+
+  const where: Prisma.BillboardWhereInput = {
+    status: 'Available',
+    publishStatus: 'PUBLISHED',
+  };
+
+  if (tipe !== TIPE_SEMUA) where.type = tipe;
+
+  if (kataKunci !== '') {
+    where.OR = [{ title: memuat(kataKunci) }, { address: memuat(kataKunci) }];
+  }
+
+  const mentah = Array.isArray(tanggal) ? tanggal[0] : tanggal;
+  const adaPermintaan = mentah !== undefined && mentah !== null && String(mentah).trim() !== '';
+  const kunci = adaPermintaan ? kunciHariSewa(mentah) : null;
+
+  if (kunci !== null) {
+    const mulai = awalHariTersimpan(kunci);
+    // Tanda NEGATIF untuk MAJU — itu kontrak `geserBulan`, bukan salah tulis.
+    // Bentuk yang sama dipakai `akhirSewa` di `hari-sewa.ts`; lihat docstring-nya.
+    const selesai = awalHariTersimpan(geserBulan(kunci, -Math.max(1, Math.floor(durasi))));
+
+    where.bookings = {
+      none: {
+        status: { in: [...statusMengunci] },
+        startDate: { lt: selesai },
+        endDate: { gt: mulai },
+      },
+    };
+  }
+
+  return {
+    where,
+    kunciTanggal: kunci,
+    tanggalDitolak: adaPermintaan && kunci === null,
   };
 }
 

@@ -2,8 +2,9 @@
 
 import { Search, MapPin, MonitorPlay, Calendar, SlidersHorizontal } from 'lucide-react';
 import { useState } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import Modal from '@/components/ui/Modal';
+import { NAMA_JENIS_MEDIA, TIPE_SEMUA } from '@/lib/tipe-billboard';
 
 // Empat isian di berkas ini memakai `outline-none` TANPA pengganti apa pun —
 // bukan `focus:ring-utero` yang lebarnya nol seperti di halaman login, tapi
@@ -26,24 +27,57 @@ const KELAS_FOKUS = 'outline-none focus:ring-2 focus:ring-inset focus:ring-utero
 const SearchFilter = () => {
   const router = useRouter();
   const searchParams = useSearchParams();
+  // Halaman tujuan diambil dari alamat yang sedang dibuka, bukan ditulis `/`.
+  //
+  // Dulu `handleSearch` selalu `router.push('/?…')`. Sejak `/billboards` ada,
+  // bilah yang sama dipakai dua halaman — dan tombol Cari yang memaksa `/`
+  // MELEMPAR pengunjung keluar dari katalog kembali ke peta setiap kali ia
+  // mempersempit pencarian. Ia kehilangan daftar yang sedang dibacanya, beserta
+  // urutan dan halaman yang sudah ia telusuri, karena satu tombol yang menurut
+  // labelnya hanya menyaring.
+  const pathname = usePathname();
 
   // STATE DATA SEARCH
+  //
+  // KETIGANYA DIBACA DARI URL, TERMASUK `date`.
+  //
+  // `date` dulu selalu `useState('')`. Akibatnya kolom tanggal kosong setiap
+  // kali halaman dimuat ulang — sementara `?date=` masih tertulis di bilah
+  // alamat dan sekarang benar-benar menyaring hasilnya. Jadi pengunjung
+  // membaca daftar yang tersaring tanggal lewat kolom yang mengaku kosong, dan
+  // begitu ia mengubah kata kunci lalu menekan Cari, `if (date)` bernilai salah
+  // dan saringan tanggalnya HILANG tanpa ia sentuh.
   const [query, setQuery] = useState(searchParams.get('q') || '');
-  const [type, setType] = useState(searchParams.get('type') || 'Semua');
-  const [date, setDate] = useState('');
+  const [type, setType] = useState(searchParams.get('type') || TIPE_SEMUA);
+  const [date, setDate] = useState(searchParams.get('date') || '');
 
   // STATE MOBILE MODAL
   const [showMobileFilter, setShowMobileFilter] = useState(false);
+
+  // Apakah kolom tanggal versi desktop sedang difokus. Lihat alasannya di
+  // isiannya sendiri: bentuk lamanya menulis `e.target.type` langsung ke DOM.
+  const [tanggalFokus, setTanggalFokus] = useState(false);
 
   // LOGIC CARI
   const handleSearch = () => {
       const params = new URLSearchParams();
       if (query) params.set('q', query);
-      if (type && type !== 'Semua') params.set('type', type);
+      if (type && type !== TIPE_SEMUA) params.set('type', type);
       if (date) params.set('date', date);
 
+      // `urut` DIBAWA SERTA, `halaman` TIDAK.
+      //
+      // Keduanya milik `/billboards`. Urutan adalah pilihan pengunjung yang
+      // tidak ada hubungannya dengan kata kunci, jadi menyaring ulang tidak
+      // boleh mengembalikannya ke `terbaru`. Nomor halaman justru sebaliknya:
+      // himpunan barisnya berubah, dan tetap di halaman 7 atas hasil yang kini
+      // hanya 2 halaman memberi daftar kosong yang terbaca sebagai "tidak ada".
+      const urut = searchParams.get('urut');
+      if (urut) params.set('urut', urut);
+
       setShowMobileFilter(false); // Tutup modal hp jika terbuka
-      router.push(`/?${params.toString()}`); // Update URL
+      const kueri = params.toString();
+      router.push(kueri === '' ? pathname : `${pathname}?${kueri}`);
   };
 
   return (
@@ -105,10 +139,20 @@ const SearchFilter = () => {
                             onChange={(e) => setType(e.target.value)} 
                             className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-utero focus:border-utero"
                         >
-                            <option>Semua</option>
-                            <option>Videotron</option>
-                            <option>Baliho</option>
-                            <option>Megatron</option>
+                            {/* Daftarnya dari `@/lib/tipe-billboard`, bukan ditulis
+                                di sini. Sebelumnya empat `<option>` yang sama
+                                tertulis di DUA tempat di berkas ini plus sekali
+                                lagi di `about/page.tsx` — dan daftar yang sama
+                                di tiga tempat adalah daftar yang akan berbeda.
+                                Yang lebih keras: nilai-nilai inilah yang menjadi
+                                gerbang `?type=` di server lewat
+                                `PILIHAN_TIPE_MEDIA`, jadi `<option>` yang
+                                menyimpang menghasilkan pilihan yang dibuang
+                                server menjadi "Semua" tanpa satu pun tanda. */}
+                            <option>{TIPE_SEMUA}</option>
+                            {NAMA_JENIS_MEDIA.map((nama) => (
+                                <option key={nama}>{nama}</option>
+                            ))}
                         </select>
                     </div>
 
@@ -176,10 +220,10 @@ const SearchFilter = () => {
                         onChange={(e) => setType(e.target.value)} 
                         className={`text-sm text-gray-800 font-bold bg-transparent w-full -ml-1 cursor-pointer truncate ${KELAS_FOKUS}`}
                     >
-                        <option>Semua</option>
-                        <option>Videotron</option>
-                        <option>Baliho</option>
-                        <option>Megatron</option>
+                        <option>{TIPE_SEMUA}</option>
+                        {NAMA_JENIS_MEDIA.map((nama) => (
+                            <option key={nama}>{nama}</option>
+                        ))}
                     </select>
                 </div>
             </div>
@@ -188,7 +232,35 @@ const SearchFilter = () => {
             <div className="w-[180px] px-6 py-3 hover:bg-gray-50/50 cursor-pointer transition group">
                 <div className="flex flex-col">
                     <label htmlFor="filter-tanggal" className="text-[10px] font-extrabold text-gray-500 uppercase tracking-wider mb-0.5 group-hover:text-utero flex items-center gap-1"><Calendar size={10} /> Mulai Tayang</label>
-                    <input id="filter-tanggal" type="text" placeholder="Kapan?" className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`} onFocus={(e) => e.target.type = 'date'} onBlur={(e) => e.target.type = 'text'} onChange={(e) => setDate(e.target.value)} />
+                    {/* `type` DIKENDALIKAN STATE, bukan disetel langsung ke DOM.
+                        Bentuk lamanya `onFocus={(e) => e.target.type = 'date'}`:
+                        sebuah penulisan ke node DOM yang React tidak tahu apa-apa
+                        tentangnya. Render berikutnya dari sebab APA PUN — mengetik
+                        di kolom lokasi sudah cukup — menuliskan kembali
+                        `type="text"` dari JSX dan menutup pemilih tanggal yang
+                        sedang terbuka, tanpa nilai tersimpan.
+
+                        Dan `value` dulu tidak terikat sama sekali. Isian tak
+                        terkendali berarti tanggal dari `?date=` tidak pernah
+                        tampil: pengunjung yang menyaring tanggal lalu menyegarkan
+                        halaman melihat "Kapan?" di kolomnya, mengubah kata kunci,
+                        dan kehilangan saringan tanggalnya karena `if (date)` di
+                        `handleSearch` bernilai salah.
+
+                        `date !== ''` ikut menentukan tipenya supaya tanggal yang
+                        sudah dipilih tampil sebagai tanggal, bukan sebagai teks
+                        `2026-10-01` di dalam kolom yang mengaku kolom teks. */}
+                    <input
+                        id="filter-tanggal"
+                        type={tanggalFokus || date !== '' ? 'date' : 'text'}
+                        value={date}
+                        placeholder="Kapan?"
+                        className={`text-sm text-gray-800 font-bold bg-transparent w-full placeholder-gray-300 ${KELAS_FOKUS}`}
+                        onFocus={() => setTanggalFokus(true)}
+                        onBlur={() => setTanggalFokus(false)}
+                        onChange={(e) => setDate(e.target.value)}
+                        onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                    />
                 </div>
             </div>
 

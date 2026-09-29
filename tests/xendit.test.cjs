@@ -17676,29 +17676,74 @@ describe('halaman /about ada, dan tautannya ikut terpasang', () => {
     assert.doesNotMatch(kode, /\b11\b|\b60\b/);
   });
 
-  it('jenis media yang disebut sama dengan yang bisa disaring di peta', () => {
-    // Jenis yang dijanjikan di sini tapi tidak ada di filter pencarian adalah
-    // janji tanpa jalan telusur: pengunjung membacanya, membuka peta, dan tidak
-    // punya cara menemukan satu pun titiknya.
+  it('jenis media yang disebut sama dengan yang bisa disaring, karena daftarnya SATU', () => {
+    // Bentuk kasus ini BERUBAH, dan perubahannya adalah inti perbaikannya.
+    //
+    // Dulu ia membandingkan dua salinan: `JENIS_MEDIA` lokal di halaman ini
+    // melawan `<option>` yang ditulis tangan di `SearchFilter`. Itu memang
+    // menangkap penyimpangan — tapi hanya SETELAH penyimpangannya ditulis, dan
+    // hanya di dua dari TIGA salinan yang ada (SearchFilter punya dua blok
+    // `<option>`: desktop dan mobile).
+    //
+    // Sekarang tidak ada yang bisa menyimpang: satu daftar di
+    // `@/lib/tipe-billboard` dibaca ketiga pembacanya, dan daftar yang SAMA
+    // menjadi gerbang `?type=` di server lewat `PILIHAN_TIPE_MEDIA`. Yang
+    // dijaga karena itu bukan lagi kesamaan dua salinan, melainkan tidak adanya
+    // salinan kedua.
     const kode = kodeSajaIdentitas(JALUR_ABOUT);
     const filter = fs.readFileSync(
       path.join(__dirname, '..', 'src', 'components', 'SearchFilter.tsx'),
       'utf8'
     );
-    const opsi = [...filter.matchAll(/<option>([^<]+)<\/option>/g)]
-      .map((m) => m[1].trim())
-      .filter((v) => v !== 'Semua');
-    assert.ok(opsi.length >= 3, 'opsi jenis di SearchFilter tidak terbaca');
+    const tipe = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'tipe-billboard.ts'),
+      'utf8'
+    );
 
-    const disebut = [...kode.matchAll(/nama: '([^']+)'/g)].map((m) => m[1]);
-    assert.deepStrictEqual([...disebut].sort(), [...new Set(opsi)].sort());
+    // Daftarnya benar-benar ada di modulnya, dan berisi minimal tiga jenis.
+    const jenis = [...tipe.matchAll(/nama: '([^']+)'/g)].map((m) => m[1]);
+    assert.ok(jenis.length >= 3, 'JENIS_MEDIA di tipe-billboard.ts tidak terbaca');
+
+    // Ketiga pembacanya MENGIMPOR, bukan menulis ulang.
+    assert.match(kode, /from '@\/lib\/tipe-billboard'/);
+    assert.match(filter, /from '@\/lib\/tipe-billboard'/);
+
+    // Dan tidak satu pun `<option>` di SearchFilter menuliskan nama jenis
+    // secara harfiah. Ini yang menahan cacatnya kembali: satu `<option>`
+    // bertulis tangan yang menyimpang dari daftar menghasilkan pilihan yang
+    // DIBUANG server menjadi "Semua" tanpa satu pun tanda bagi pengunjung.
+    const opsiHarfiah = [...filter.matchAll(/<option[^>]*>([^<{]+)<\/option>/g)].map((m) =>
+      m[1].trim()
+    );
+    assert.deepStrictEqual(
+      opsiHarfiah,
+      [],
+      'setiap <option> jenis media wajib dibangkitkan dari NAMA_JENIS_MEDIA, bukan ditulis: ' +
+        opsiHarfiah.join(', ')
+    );
+
+    // Halaman about tidak lagi punya daftar lokalnya sendiri.
+    assert.doesNotMatch(
+      kode,
+      /const JENIS_MEDIA\s*=/,
+      'about/page.tsx tidak boleh mendeklarasikan ulang JENIS_MEDIA'
+    );
   });
 
-  it('kartu jenis media menautkan ke filternya, bukan ke halaman mati', () => {
+  it('kartu jenis media menautkan ke KATALOG yang tersaring, bukan ke peta', () => {
     const kode = kodeSajaIdentitas(JALUR_ABOUT);
-    // Nilainya di-`encodeURIComponent`: ia masuk ke query string, dan jenis
-    // media adalah teks yang boleh berisi spasi.
-    assert.match(kode, /href=\{`\/\?type=\$\{encodeURIComponent\(media\.nama\)\}`\}/);
+    // Tujuannya BERUBAH dari `/` menjadi `/billboards`, dan itu bukan kerapian.
+    // Keduanya menerima `?type=` yang sama lewat `wherePublikBillboard`, tapi
+    // yang dijanjikan kartu ini adalah "tunjukkan media jenis ini" — dan di
+    // beranda jawabannya berupa penanda peta yang harus diklik satu per satu
+    // untuk dibaca, tanpa harga yang bisa dibandingkan dan tanpa jumlah hasil.
+    //
+    // Nilainya tetap di-`encodeURIComponent`: ia masuk ke query string, dan
+    // jenis media adalah teks yang boleh berisi spasi.
+    assert.match(
+      kode,
+      /href=\{`\/billboards\?type=\$\{encodeURIComponent\(media\.nama\)\}`\}/
+    );
   });
 
   it('daftar tahap pesanan memang urutan, dan dirender sebagai urutan', () => {
@@ -24144,6 +24189,7 @@ describe('setiap halaman punya tepat satu landmark `<main>`', () => {
   // Nilai = berkas yang WAJIB memuat `<main>` untuk segmen itu.
   const PEMILIK_LANDMARK = {
     'page.tsx': berkas('app', 'page.tsx'),
+    'billboards/page.tsx': berkas('app', 'billboards', 'page.tsx'),
     'about/page.tsx': berkas('app', 'about', 'page.tsx'),
     'kebijakan-privasi/page.tsx': berkas('app', 'kebijakan-privasi', 'page.tsx'),
     'syarat-ketentuan/page.tsx': berkas('app', 'syarat-ketentuan', 'page.tsx'),
@@ -30704,5 +30750,564 @@ describe('hari sewa', () => {
     assert.ok(!/from '@\//.test(kode), 'impor alias @/ membuat modul ini tidak bisa di-require langsung');
     assert.ok(!/server-only/.test(kode), 'server-only membuat modul ini tidak bisa di-require di test');
     assert.ok(!/@prisma\/client/.test(kode), 'impor Prisma menarik client ke dalam test');
+  });
+});
+
+// ===========================================================================
+// KATALOG PUBLIK: SATU `where`, DAN HALAMAN YANG MENAUTKAN BARANGNYA
+// ===========================================================================
+//
+// Yang diikat di bawah adalah cacat yang TIDAK terlihat di layar mana pun, dan
+// itu sebabnya ia bertahan lama:
+//
+//  1. NOL TAUTAN PRODUK DI HTML BERANDA. Satu-satunya jalan ke sebuah titik
+//     media adalah popup Leaflet, yang dirender browser SETELAH JavaScript
+//     jalan. Bagi mesin pengindeks dan bagi pengunjung tanpa JS, situs ini
+//     tidak punya barang dagangan — bukan "sulit ditemukan", melainkan tidak
+//     ada. Sitemap menyebut tiap `/billboard/[slug]`, tapi halaman yang
+//     menautkannya tidak pernah ada.
+//  2. GERBANG YANG DISALIN. `status: 'Available'` dan
+//     `publishStatus: 'PUBLISHED'` dulu ditulis di dalam `src/app/page.tsx`.
+//     Halaman kedua yang menampilkan inventori berarti salinan kedua gerbang
+//     itu, dan yang menyimpang tidak menghasilkan galat: baris `DRAFT` —
+//     harga yang masih ditawar, alamat yang belum dikonfirmasi pemilik lahan —
+//     tampil sebagai barang yang bisa dibeli.
+//  3. `?date=` YANG DIABAIKAN DIAM-DIAM. Halaman yang membuang tanggal tak
+//     terbaca menampilkan SELURUH inventori sementara kolom tanggalnya masih
+//     terisi, dan pengunjung membaca daftar itu sebagai "yang kosong pada
+//     tanggal itu".
+//
+// Modulnya bisa di-`require` langsung karena `saringan-daftar.ts` menjaga
+// "nol impor selain tipe Prisma dan modul relatif" — daftar status pengunci
+// masuk sebagai PARAMETER, bukan lewat `./transisi-status` yang menarik klien.
+// ===========================================================================
+describe('katalog publik /billboards (butir 6.x)', () => {
+  const JALUR_SARINGAN_PUBLIK = path.join(__dirname, '..', 'src', 'lib', 'saringan-daftar.ts');
+  const JALUR_TIPE_MEDIA = path.join(__dirname, '..', 'src', 'lib', 'tipe-billboard.ts');
+  const JALUR_KATALOG = path.join(__dirname, '..', 'src', 'app', 'billboards', 'page.tsx');
+  const JALUR_BERANDA = path.join(__dirname, '..', 'src', 'app', 'page.tsx');
+  const JALUR_SITEMAP = path.join(__dirname, '..', 'src', 'app', 'sitemap.ts');
+
+  const { wherePublikBillboard, URUT_PUBLIK, KUNCI_URUT_PUBLIK } = require(JALUR_SARINGAN_PUBLIK);
+  const {
+    JENIS_MEDIA,
+    NAMA_JENIS_MEDIA,
+    PILIHAN_TIPE_MEDIA,
+    TIPE_SEMUA,
+  } = require(JALUR_TIPE_MEDIA);
+
+  // Daftar status pengunci yang dipakai produksi. Ditulis harfiah di sini, BUKAN
+  // diimpor dari `transisi-status.ts`: modul itu mengimpor `@/lib/prisma`. Yang
+  // menahan daftar ini agar tidak menyimpang dari produksi adalah test terakhir
+  // di suite ini, yang menurunkannya ulang dari sumbernya sebagai teks.
+  //
+  // Kesembilan, bukan keenam. Ketiga status refund (`REVIEW_REFUND`,
+  // `WAITING_BANK`, `PROCESS_REFUND`) IKUT mengunci, dan itu keputusan yang
+  // benar: pesanan yang refundnya masih diproses belum tentu jadi dibatalkan,
+  // jadi menjual ulang tanggalnya berarti dua pesanan atas hari yang sama —
+  // yang lalu ditolak constraint `booking_tanpa_tumpang_tindih` di ujung,
+  // setelah pembeli kedua membayar.
+  const MENGUNCI = [
+    'PENDING_PAYMENT',
+    'PAID_CONFIRMED',
+    'DESIGN_RECEIVED',
+    'IN_PRODUCTION',
+    'INSTALLATION',
+    'ACTIVE',
+    'REVIEW_REFUND',
+    'WAITING_BANK',
+    'PROCESS_REFUND',
+  ];
+
+  const kosong = { kataKunci: '', tipe: TIPE_SEMUA };
+
+  // ------------------------------------------------------------ dua gerbang
+  describe('gerbang kelayakan tampil', () => {
+    it('SELALU menyaring status Available dan publishStatus PUBLISHED', () => {
+      // Keduanya dipasang MATI, tanpa cabang apa pun. Satu `if` di sini dan
+      // baris DRAFT bisa tampil lewat kombinasi saringan tertentu saja —
+      // bentuk kegagalan yang hanya muncul pada sebagian URL.
+      const { where } = wherePublikBillboard(kosong, MENGUNCI);
+      assert.equal(where.status, 'Available');
+      assert.equal(where.publishStatus, 'PUBLISHED');
+    });
+
+    it('gerbangnya tetap ada walau setiap saringan terisi', () => {
+      const { where } = wherePublikBillboard(
+        { kataKunci: 'Sudirman', tipe: 'Videotron', tanggal: '2026-10-01', durasi: 6 },
+        MENGUNCI
+      );
+      assert.equal(where.status, 'Available');
+      assert.equal(where.publishStatus, 'PUBLISHED');
+    });
+
+    it('casing "Available" dipertahankan apa adanya', () => {
+      // Kolomnya enum Prisma dengan casing campur yang DISENGAJA (lihat schema).
+      // 'AVAILABLE' tidak melempar di sini — ia melempar di Prisma, saat
+      // produksi, pada setiap kunjungan beranda.
+      const { where } = wherePublikBillboard(kosong, MENGUNCI);
+      assert.notEqual(where.status, 'AVAILABLE');
+      assert.notEqual(where.status, 'available');
+    });
+  });
+
+  // ------------------------------------------------------------- kata kunci
+  describe('pencarian kata kunci', () => {
+    it('sku TIDAK ikut dicari, walau where admin mencarinya', () => {
+      // Ini pemisah keamanan, bukan kerapian. Kolom yang bisa dicari berarti
+      // bisa DITES lewat URL satu per satu: keberadaan sebuah kode aset bisa
+      // dipastikan dari ada-tidaknya hasil, tanpa pernah melihat barisnya. Dan
+      // halaman publik tidak merender `sku` sama sekali, jadi baris yang cocok
+      // lewatnya tampil sebagai hasil yang — menurut layar — tidak memuat kata
+      // yang dicari.
+      const { where } = wherePublikBillboard({ kataKunci: 'BLB-001', tipe: TIPE_SEMUA }, MENGUNCI);
+      const kolom = where.OR.map((k) => Object.keys(k)[0]).sort();
+      assert.deepStrictEqual(kolom, ['address', 'title']);
+    });
+
+    it('kata kunci kosong tidak memasang OR sama sekali', () => {
+      // `OR: []` di Prisma berarti "tidak ada yang cocok" — nol baris untuk
+      // pengunjung yang tidak mencari apa pun.
+      const { where } = wherePublikBillboard(kosong, MENGUNCI);
+      assert.ok(!('OR' in where), 'OR tidak boleh ada saat tidak ada kata kunci');
+    });
+
+    it('pencariannya insensitif huruf besar-kecil', () => {
+      const { where } = wherePublikBillboard({ kataKunci: 'sudirman', tipe: TIPE_SEMUA }, MENGUNCI);
+      for (const klausa of where.OR) {
+        const isi = Object.values(klausa)[0];
+        assert.equal(isi.contains, 'sudirman');
+        assert.equal(isi.mode, 'insensitive');
+      }
+    });
+  });
+
+  // -------------------------------------------------------------- tipe media
+  describe('saringan jenis media', () => {
+    it('"Semua" berarti tidak menyaring tipe', () => {
+      const { where } = wherePublikBillboard(kosong, MENGUNCI);
+      assert.ok(!('type' in where), 'TIPE_SEMUA tidak boleh menjadi where.type');
+    });
+
+    it('setiap jenis di daftar bisa dipakai menyaring', () => {
+      // Kontrak yang dulu ditulis tangan di tiga tempat: jenis yang disebut
+      // halaman "Tentang Kami" WAJIB bisa disaring. Sekarang strukturnya
+      // menjaminnya, dan ini yang memastikan jaminannya berlaku.
+      for (const nama of NAMA_JENIS_MEDIA) {
+        const { where } = wherePublikBillboard({ kataKunci: '', tipe: nama }, MENGUNCI);
+        assert.equal(where.type, nama);
+      }
+    });
+
+    it('PILIHAN_TIPE_MEDIA memuat "Semua" plus setiap jenis, tanpa duplikat', () => {
+      // Inilah daftar tertutup yang dibaca `bacaPilihan`. Tanpa "Semua" di
+      // dalamnya, nilai baku halaman sendiri akan ditolak gerbangnya.
+      assert.equal(PILIHAN_TIPE_MEDIA[0], TIPE_SEMUA);
+      assert.deepStrictEqual([...PILIHAN_TIPE_MEDIA], [TIPE_SEMUA, ...NAMA_JENIS_MEDIA]);
+      assert.equal(new Set(PILIHAN_TIPE_MEDIA).size, PILIHAN_TIPE_MEDIA.length);
+    });
+
+    it('setiap jenis punya keterangan yang bisa dibaca pengunjung', () => {
+      assert.ok(JENIS_MEDIA.length >= 3);
+      for (const j of JENIS_MEDIA) {
+        assert.equal(typeof j.nama, 'string');
+        assert.ok(j.nama.trim() !== '', 'nama jenis media tidak boleh kosong');
+        assert.ok(
+          typeof j.keterangan === 'string' && j.keterangan.trim().length > 20,
+          'jenis "' + j.nama + '" tanpa keterangan yang berarti'
+        );
+      }
+    });
+  });
+
+  // ------------------------------------------------------- ketersediaan hari
+  describe('saringan tanggal: none, dan rentang setengah terbuka', () => {
+    it('memakai none, BUKAN some', () => {
+      // Ditulis `some`, jawabannya terbalik persis: pengunjung mendapat daftar
+      // titik yang justru sudah TERJUAL, dan setiap checkout dari daftar itu
+      // ditolak constraint di ujung.
+      const { where } = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01' },
+        MENGUNCI
+      );
+      assert.ok(where.bookings.none, 'saringan tanggal wajib memakai none');
+      assert.ok(!where.bookings.some, 'some membalik seluruh jawaban saringan');
+    });
+
+    it('perbandingannya lt/gt — bukan lte/gte', () => {
+      // `endDate` adalah batas EKSKLUSIF, sama seperti `'[)'` pada constraint
+      // `booking_tanpa_tumpang_tindih`. `lte`/`gte` di sini MEMBUANG titik
+      // yang pesanan lamanya selesai persis di hari yang diminta — hari yang
+      // menurut database masih bisa dijual.
+      const { where } = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01' },
+        MENGUNCI
+      );
+      const n = where.bookings.none;
+      assert.deepStrictEqual(Object.keys(n.startDate), ['lt']);
+      assert.deepStrictEqual(Object.keys(n.endDate), ['gt']);
+    });
+
+    it('rentangnya maju dari hari yang diminta, bukan mundur', () => {
+      // `geserBulan` memakai tanda NEGATIF untuk MAJU. Tanda yang terbalik di
+      // sini menghasilkan rentang yang berakhir SEBELUM ia mulai, sehingga
+      // `startDate: { lt: selesai }` tidak pernah cocok dan setiap titik
+      // tampak kosong — termasuk yang sudah terjual.
+      const { where } = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01', durasi: 3 },
+        MENGUNCI
+      );
+      const n = where.bookings.none;
+      assert.ok(
+        n.endDate.gt.getTime() < n.startDate.lt.getTime(),
+        'batas akhir rentang wajib SETELAH batas awalnya'
+      );
+      assert.equal(n.endDate.gt.toISOString(), '2026-10-01T00:00:00.000Z');
+      assert.equal(n.startDate.lt.toISOString(), '2027-01-01T00:00:00.000Z');
+    });
+
+    it('durasi bakunya satu bulan, bukan nol dan bukan setahun', () => {
+      // Nol menghasilkan rentang kosong yang tidak menyaring apa pun; setahun
+      // membuang hampir seluruh inventori pada tahap ketika pengunjung BELUM
+      // memilih durasi. Satu bulan adalah durasi minimum `booking/create`,
+      // jadi titik yang lolos pasti bisa dipesan setidaknya sependek itu.
+      const { where } = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01' },
+        MENGUNCI
+      );
+      assert.equal(where.bookings.none.startDate.lt.toISOString(), '2026-11-01T00:00:00.000Z');
+    });
+
+    it('durasi nol dan negatif ditahan di satu bulan', () => {
+      for (const durasi of [0, -5, 0.4]) {
+        const { where } = wherePublikBillboard(
+          { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01', durasi },
+          MENGUNCI
+        );
+        assert.equal(
+          where.bookings.none.startDate.lt.toISOString(),
+          '2026-11-01T00:00:00.000Z',
+          'durasi ' + durasi + ' harus ditahan di 1 bulan'
+        );
+      }
+    });
+
+    it('status pengunci masuk apa adanya, tanpa nilai baku', () => {
+      // Daftar kosong berarti saringan tanggal yang DIAM-DIAM tidak menyaring
+      // apa pun. Karena itu parameternya tidak punya baku, dan yang masuk harus
+      // sampai utuh ke klausanya.
+      const { where } = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01' },
+        MENGUNCI
+      );
+      assert.deepStrictEqual(where.bookings.none.status, { in: MENGUNCI });
+    });
+
+    it('tanpa ?date= tidak ada klausa bookings sama sekali', () => {
+      const { where, kunciTanggal, tanggalDitolak } = wherePublikBillboard(kosong, MENGUNCI);
+      assert.ok(!('bookings' in where));
+      assert.equal(kunciTanggal, null);
+      assert.equal(tanggalDitolak, false);
+    });
+  });
+
+  // --------------------------------------------------- tanggal yang ditolak
+  describe('?date= yang tidak bisa dipercaya DILAPORKAN, bukan dibuang', () => {
+    it('2026-02-30 ditolak, bukan digulung menjadi 2 Maret', () => {
+      // Ia lolos setiap regex \d{4}-\d{2}-\d{2} lalu digulung `new Date`
+      // menjadi 2 Maret, sehingga pengunjung melihat ketersediaan tanggal yang
+      // TIDAK PERNAH ia minta — dan tidak ada satu pun tanda di layar.
+      const h = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-02-30' },
+        MENGUNCI
+      );
+      assert.equal(h.kunciTanggal, null);
+      assert.equal(h.tanggalDitolak, true, 'tanggal tak sah wajib dilaporkan keluar');
+      assert.ok(!('bookings' in h.where), 'tanggal tak sah tidak boleh menjadi klausa');
+    });
+
+    it('bentuk sampah apa pun ditolak dengan cara yang sama', () => {
+      for (const buruk of ['besok', '2026-13-01', '01-10-2026', '2026-10-1', 'NaN', '{}']) {
+        const h = wherePublikBillboard(
+          { kataKunci: '', tipe: TIPE_SEMUA, tanggal: buruk },
+          MENGUNCI
+        );
+        assert.equal(h.kunciTanggal, null, buruk + ' seharusnya ditolak');
+        assert.equal(h.tanggalDitolak, true, buruk + ' seharusnya dilaporkan ditolak');
+      }
+    });
+
+    it('?date=&date= ganda mengambil yang pertama, bukan melempar', () => {
+      // `?date=a&date=b` sampai ke Server Component sebagai ARRAY. Diteruskan
+      // apa adanya ke `contains`/`new Date`, ia menjadi 500 — halaman mati
+      // dari URL yang bisa ditulis siapa pun.
+      const h = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: ['2026-10-01', '2026-11-01'] },
+        MENGUNCI
+      );
+      assert.equal(h.kunciTanggal, '2026-10-01');
+      assert.equal(h.tanggalDitolak, false);
+    });
+
+    it('?date= kosong bukan "ditolak" — tidak ada yang diminta', () => {
+      // Bedanya penting: kolom tanggal yang dikosongkan pengunjung mengirim
+      // `?date=`, dan memunculkan peringatan "tanggal tidak dikenali" atas
+      // kolom yang baru saja ia bersihkan adalah galat yang dikarang.
+      for (const nilai of ['', '   ', undefined, null]) {
+        const h = wherePublikBillboard(
+          { kataKunci: '', tipe: TIPE_SEMUA, tanggal: nilai },
+          MENGUNCI
+        );
+        assert.equal(h.kunciTanggal, null);
+        assert.equal(h.tanggalDitolak, false, JSON.stringify(nilai) + ' bukan permintaan');
+      }
+    });
+
+    it('tanggal sah dilaporkan keluar supaya UI bisa MENGATAKANNYA', () => {
+      const h = wherePublikBillboard(
+        { kataKunci: '', tipe: TIPE_SEMUA, tanggal: '2026-10-01' },
+        MENGUNCI
+      );
+      assert.equal(h.kunciTanggal, '2026-10-01');
+      assert.equal(h.tanggalDitolak, false);
+    });
+  });
+
+  // ------------------------------------------------------------ urutan publik
+  describe('urutan yang boleh diminta URL', () => {
+    it('daftarnya TERTUTUP dan tidak memuat kolom yang tidak dirender', () => {
+      // `orderBy` yang dirangkai dari teks URL berarti nama kolom apa pun bisa
+      // diminta pengunjung. Di tabel ini taruhannya lebih rendah daripada
+      // `User`, tapi bentuknya harus sama: daftar tertutup.
+      const kolom = KUNCI_URUT_PUBLIK.map((k) => Object.keys(URUT_PUBLIK[k])[0]);
+      for (const c of kolom) {
+        assert.ok(
+          ['updatedAt', 'price', 'title'].includes(c),
+          'urutan publik menyentuh kolom tak terduga: ' + c
+        );
+      }
+    });
+
+    it('tidak ada urut status — seluruh barisnya berstatus sama', () => {
+      // Katalog menyaring `status: 'Available'` mati-matian, jadi kunci urut
+      // status tidak mengubah satu baris pun sementara kendalinya di layar
+      // menyatakan sesuatu terjadi.
+      assert.ok(!KUNCI_URUT_PUBLIK.includes('status-naik'));
+      assert.ok(!KUNCI_URUT_PUBLIK.includes('status-turun'));
+    });
+
+    it('"terbaru" ada dan menjadi kunci baku yang sah', () => {
+      assert.ok(KUNCI_URUT_PUBLIK.includes('terbaru'));
+      assert.deepStrictEqual(URUT_PUBLIK.terbaru, { updatedAt: 'desc' });
+    });
+
+    it('harga bisa diurutkan dua arah — itu gunanya katalog', () => {
+      assert.deepStrictEqual(URUT_PUBLIK['harga-naik'], { price: 'asc' });
+      assert.deepStrictEqual(URUT_PUBLIK['harga-turun'], { price: 'desc' });
+    });
+  });
+
+  // -------------------------------------------------------- halaman katalog
+  describe('halaman /billboards menautkan barangnya di HTML', () => {
+    const kode = kodeSajaAny(JALUR_KATALOG);
+
+    it('setiap kartu adalah <Link> ke halaman produknya', () => {
+      // Inti seluruh halaman ini. Popup Leaflet dirender SETELAH JavaScript
+      // jalan; `<Link href>` ada di HTML yang dikirim server.
+      assert.match(kode, /href=\{`\/billboard\/\$\{[^}]+\}`\}/);
+    });
+
+    it('memanggil wherePublikBillboard, tidak menulis ulang gerbangnya', () => {
+      assert.match(kode, /from '@\/lib\/saringan-daftar'/);
+      assert.match(kode, /wherePublikBillboard\(/);
+      assert.ok(
+        !/publishStatus:\s*'PUBLISHED'/.test(kode),
+        'gerbang publikasi tidak boleh ditulis ulang di halaman'
+      );
+      assert.ok(
+        !/status:\s*'Available'/.test(kode),
+        'gerbang ketersediaan tidak boleh ditulis ulang di halaman'
+      );
+    });
+
+    it('?type= dan ?urut= lewat daftar tertutup, tidak langsung ke Prisma', () => {
+      // `searchParams.type` yang mendarat di `where.type` berarti nilai apa pun
+      // dari bilah alamat masuk ke kueri; `?urut=` yang lolos berarti nama
+      // kolom apa pun bisa diminta.
+      assert.match(kode, /bacaPilihan\(\s*searchParams\.type,\s*PILIHAN_TIPE_MEDIA/);
+      assert.match(kode, /bacaPilihan\(\s*searchParams\.urut,\s*KUNCI_URUT_PUBLIK/);
+      assert.match(kode, /orderBy: URUT_PUBLIK\[urutAktif\]/);
+    });
+
+    it('?q= lewat bacaKataKunci — array tidak boleh sampai ke contains', () => {
+      // `?q=a&q=b` sampai sebagai ARRAY. Diteruskan ke `contains`, Prisma
+      // melempar dan halamannya menjadi 500.
+      assert.match(kode, /bacaKataKunci\(searchParams\.q\)/);
+    });
+
+    it('jumlah dan halaman dibaca dalam SATU snapshot transaksi', () => {
+      // Dua kueri terpisah atas katalog yang sedang dipesan bisa menghitung 13
+      // baris lalu mengambil halaman yang kini memuat 12 — layar mencetak "2
+      // halaman" di atas halaman kedua yang kosong.
+      assert.match(kode, /prisma\.\$transaction\(\[/);
+      assert.match(kode, /billboard\.count\(\{ where \}\)/);
+    });
+
+    it('halaman di luar jangkauan DIALIHKAN, bukan dijepit di tampilan', () => {
+      // `skip` sudah terkirim sebelum `count` menjawab, jadi memperbaiki hanya
+      // angka di layar menghasilkan "Halaman 2 dari 2" di atas daftar kosong.
+      // Dan jumlah halaman MENYUSUT saat titik terjual, jadi setiap tautan lama
+      // adalah calon halaman kosong.
+      assert.match(kode, /if \(paginasi\.terlaluJauh\)/);
+      assert.match(kode, /redirect\(urlHalaman\('\/billboards'/);
+    });
+
+    it('?date= yang ditolak DIKATAKAN ke pengunjung', () => {
+      // Halaman yang diam-diam mengabaikannya menampilkan seluruh inventori
+      // sementara kolom tanggalnya masih terisi.
+      assert.match(kode, /tanggalDitolak/);
+      assert.match(kode, /role="status"/);
+    });
+
+    it('select-nya menyebut kolom, tidak mengambil seluruh baris', () => {
+      // `findMany` tanpa `select` mengirim setiap kolom `Billboard` — termasuk
+      // `sku`, kode internal yang halaman ini sengaja tidak boleh membocorkan.
+      assert.match(kode, /select: \{/);
+      assert.ok(!/\bsku\b/.test(kode), 'sku tidak boleh diambil halaman publik');
+    });
+
+    it('harga dirender lewat rupiah(), bukan dirangkai tangan', () => {
+      assert.match(kode, /from '@\/lib\/money'/);
+      assert.match(kode, /rupiah\(/);
+      // Tidak ada aritmetika uang di halaman: nominalnya `Prisma.Decimal`.
+      assert.ok(!/price\s*[-+*/]/.test(kode), 'tidak boleh ada aritmetika pada harga');
+    });
+
+    it('peta tetap terjangkau dari katalog', () => {
+      // Navbar "Cari Billboard" tidak lagi menunjuk `/`, jadi tanpa tautan ini
+      // satu-satunya jalan ke peta adalah logo — yang tidak mengumumkan dirinya
+      // sebagai peta.
+      assert.match(kode, /href="\/"/);
+    });
+
+    it('kanoniknya tanpa query, jadi tiap saringan bukan halaman duplikat', () => {
+      assert.match(kode, /canonical: '\/billboards'/);
+    });
+  });
+
+  // -------------------------------------------------- satu where, dua halaman
+  describe('beranda dan katalog memakai where yang SAMA', () => {
+    it('beranda juga memanggil wherePublikBillboard', () => {
+      const kodeBeranda = kodeSajaAny(JALUR_BERANDA);
+      assert.match(kodeBeranda, /from '@\/lib\/saringan-daftar'/);
+      assert.match(kodeBeranda, /wherePublikBillboard\(/);
+    });
+
+    it('tidak satu pun halaman publik menuliskan gerbangnya sendiri', () => {
+      for (const jalur of [JALUR_BERANDA, JALUR_KATALOG]) {
+        const k = kodeSajaAny(jalur);
+        assert.ok(
+          !/publishStatus:\s*'PUBLISHED'/.test(k),
+          path.basename(path.dirname(jalur)) + ' menulis ulang gerbang publikasi'
+        );
+      }
+    });
+
+    it('keduanya menyerahkan STATUS_MENGUNCI_TANGGAL dari satu sumber', () => {
+      // Daftar yang ditulis harfiah di halaman akan menyimpang dari state
+      // machine, dan yang hilang adalah status yang MENGUNCI tanggal — titik
+      // yang sudah terjual tampil kosong.
+      for (const jalur of [JALUR_BERANDA, JALUR_KATALOG]) {
+        const k = kodeSajaAny(jalur);
+        assert.match(k, /STATUS_MENGUNCI_TANGGAL/);
+      }
+    });
+  });
+
+  // ------------------------------------------------------------------ sitemap
+  describe('sitemap menyebut katalog', () => {
+    it('/billboards terdaftar sebagai halaman statis', () => {
+      // Ia satu-satunya halaman yang benar-benar menautkan setiap titik media
+      // di HTML-nya; tanpa entri ini, jalan masuk pengindeks ke inventori tetap
+      // hanya lewat sitemap per-produk tanpa halaman induk.
+      const k = kodeSajaAny(JALUR_SITEMAP);
+      assert.match(k, /jalur: '\/billboards'/);
+    });
+
+    it('didaftarkan tanpa query apa pun', () => {
+      const k = kodeSajaAny(JALUR_SITEMAP);
+      assert.ok(
+        !/'\/billboards\?/.test(k),
+        'mendaftarkan bentuk berquery melawan kanonik halaman itu sendiri'
+      );
+    });
+  });
+
+  // -------------------------------------------------- pengawal daftar status
+  it('daftar MENGUNCI di test ini sama dengan STATUS_MENGUNCI_TANGGAL produksi', () => {
+    // Pengawal sumber, dan yang paling mudah luput di suite ini. Seluruh test di
+    // atas menyuntikkan daftar status secara harfiah karena
+    // `transisi-status.ts` mengimpor `@/lib/prisma` dan tidak bisa
+    // di-`require` di sini. Tanpa test ini, produksi bisa menambah satu status
+    // tanpa satu pun assert di atas berubah — dan yang bertambah itu adalah
+    // status yang MENGUNCI tanggal, sehingga suite hijau di atas akan menjamin
+    // sifat yang tidak lagi berlaku.
+    //
+    // Daftarnya di produksi DITURUNKAN, bukan ditulis: kunci `TRANSISI_SAH`
+    // dikurangi `CANCELLED` dan `REFUNDED`. Jadi yang diturunkan ulang di sini
+    // adalah rumusnya, bukan hasilnya — status kesepuluh yang ditambahkan ke
+    // state machine langsung tertangkap.
+    const kode = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'transisi-status.ts'),
+      'utf8'
+    );
+    const awal = kode.indexOf('export const TRANSISI_SAH');
+    const akhir = kode.indexOf('export const STATUS_MENGUNCI_TANGGAL');
+    assert.ok(awal !== -1 && akhir > awal, 'TRANSISI_SAH tidak terbaca di transisi-status.ts');
+
+    const kunci = [...kode.slice(awal, akhir).matchAll(/^  ([A-Z_]+): \[/gm)].map((m) => m[1]);
+    assert.ok(kunci.length >= 10, 'kunci TRANSISI_SAH tidak terbaca: ' + kunci.length);
+
+    // Rumus yang sama dengan sumbernya. Bila bentuk penyaringnya di produksi
+    // berubah, test berikutnya di bawah yang menangkapnya.
+    const turunan = kunci.filter((k) => k !== 'CANCELLED' && k !== 'REFUNDED');
+    assert.deepStrictEqual(
+      [...turunan].sort(),
+      [...MENGUNCI].sort(),
+      'daftar status di test ini menyimpang dari produksi'
+    );
+  });
+
+  it('CANCELLED dan REFUNDED TIDAK mengunci tanggal, dan itu rumus yang dijaga', () => {
+    // Keduanya adalah status buntu: uangnya sudah kembali atau pesanannya tidak
+    // pernah jadi, jadi tanggalnya WAJIB bisa dijual ulang. Dikunci, inventori
+    // menyusut permanen setiap kali ada pembatalan — kerugian yang tidak
+    // menghasilkan satu pun galat dan hanya terlihat sebagai "stok sepi".
+    //
+    // Yang dijaga di sini adalah PENYARINGNYA di sumber, karena nilai
+    // turunannya sudah dibandingkan di test sebelumnya: keduanya harus saling
+    // menahan, kalau tidak, rumus yang salah bisa lulus keduanya bersamaan.
+    const kode = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'transisi-status.ts'),
+      'utf8'
+    );
+    const awal = kode.indexOf('export const STATUS_MENGUNCI_TANGGAL');
+    const blok = kode.slice(awal, awal + 400);
+    assert.match(blok, /Object\.keys\(TRANSISI_SAH\)/, 'daftarnya wajib diturunkan, bukan ditulis');
+    assert.match(blok, /BookingStatus\.CANCELLED/);
+    assert.match(blok, /BookingStatus\.REFUNDED/);
+    assert.ok(!MENGUNCI.includes('CANCELLED'));
+    assert.ok(!MENGUNCI.includes('REFUNDED'));
+  });
+
+  it('ketiga status refund IKUT mengunci — tanggalnya belum tentu bebas', () => {
+    // Pesanan yang refundnya masih direview/menunggu bank/diproses BELUM tentu
+    // jadi dibatalkan. Dikeluarkan dari daftar pengunci, tanggalnya dijual ulang
+    // sementara pesanan pertama masih hidup — dan tabrakannya baru muncul
+    // sebagai galat constraint `booking_tanpa_tumpang_tindih` SETELAH pembeli
+    // kedua membayar.
+    for (const s of ['REVIEW_REFUND', 'WAITING_BANK', 'PROCESS_REFUND']) {
+      assert.ok(MENGUNCI.includes(s), s + ' wajib ikut mengunci tanggal');
+    }
   });
 });

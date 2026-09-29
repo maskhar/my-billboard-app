@@ -41,6 +41,7 @@ import Navbar from '@/components/Navbar';
 import { Building2, Mail, MapPin, MessageCircle, MonitorPlay } from 'lucide-react';
 import { ambilIdentitasSitus } from '@/lib/identitas-situs';
 import { keTautanWa } from '@/lib/telepon';
+import { JENIS_MEDIA } from '@/lib/tipe-billboard';
 import {
   ALAMAT_PENJUAL,
   BADAN_USAHA_PENJUAL,
@@ -69,28 +70,17 @@ export async function generateMetadata(): Promise<Metadata> {
   };
 }
 
-// Jenis media yang ditawarkan.
+// Jenis media yang ditawarkan — sekarang DIIMPOR, tidak lagi ditulis di sini.
 //
-// Ketiganya sama dengan pilihan di `SearchFilter`, dan itu syarat: jenis yang
-// disebut di sini tapi tidak bisa disaring di peta adalah janji yang tidak
-// punya jalan untuk ditelusuri pengunjung. Tautannya langsung ke filternya.
-const JENIS_MEDIA = [
-  {
-    nama: 'Videotron',
-    keterangan:
-      'Layar LED yang menayangkan materi bergerak. Cocok untuk kampanye yang materinya berganti selama masa tayang.',
-  },
-  {
-    nama: 'Baliho',
-    keterangan:
-      'Media cetak berukuran besar di titik lalu lintas padat. Materinya tetap sepanjang periode sewa.',
-  },
-  {
-    nama: 'Megatron',
-    keterangan:
-      'Layar berukuran besar untuk jangkauan jarak jauh, umumnya di persimpangan utama kota.',
-  },
-] as const;
+// Komentar yang dulu di tempat ini sudah menuliskan kontraknya: "Ketiganya sama
+// dengan pilihan di `SearchFilter`, dan itu syarat: jenis yang disebut di sini
+// tapi tidak bisa disaring di peta adalah janji yang tidak punya jalan untuk
+// ditelusuri pengunjung." Kontrak itu ditegakkan tangan atas TIGA salinan — dua
+// di `SearchFilter` dan satu di sini — jadi ia adalah kontrak yang menunggu
+// dilanggar. Sekarang satu daftar di `@/lib/tipe-billboard` yang dibaca ketiga
+// pembacanya sekaligus, dan daftar yang sama itulah yang menjadi gerbang
+// `?type=` di server. Jenis keempat karena itu tidak bisa lagi muncul di sini
+// tanpa bisa disaring.
 
 // Tahap pesanan.
 //
@@ -156,7 +146,13 @@ export default async function AboutPage() {
             {JENIS_MEDIA.map((media) => (
               <Link
                 key={media.nama}
-                href={`/?type=${encodeURIComponent(media.nama)}`}
+                // `/billboards`, bukan `/`. Keduanya menerima `?type=` yang sama
+                // lewat `wherePublikBillboard`, tapi yang dituju kartu ini adalah
+                // "tunjukkan media jenis ini" — dan di beranda jawabannya berupa
+                // penanda di peta yang harus diklik satu per satu untuk dibaca.
+                // Katalog menjawabnya sebagai daftar yang bisa dibaca langsung,
+                // beserta jumlah hasilnya.
+                href={`/billboards?type=${encodeURIComponent(media.nama)}`}
                 className="block bg-white p-6 rounded-2xl border border-gray-100 shadow-sm hover:border-utero transition"
               >
                 <MonitorPlay className="text-utero" size={22} />

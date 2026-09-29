@@ -25,6 +25,68 @@
 /** Nilai `BillboardStatus` sebagai teks. Casing-nya sengaja begini — lihat schema. */
 export type StatusBillboard = 'Available' | 'Booked';
 
+/**
+ * Jenis media yang ditawarkan, beserta keterangannya.
+ *
+ * SATU DAFTAR, TIGA PEMBACA — dan itu syarat, bukan kerapian. Sebelum konstanta
+ * ini ada, daftarnya tertulis TIGA kali:
+ *
+ *   · `SearchFilter.tsx` versi mobile — `<option>` di dalam lembar filter
+ *   · `SearchFilter.tsx` versi desktop — `<option>` yang sama, disalin
+ *   · `about/page.tsx` `JENIS_MEDIA` — beserta keterangan yang dibaca pengunjung
+ *
+ * Komentar di `about/page.tsx` sudah menuliskan kontraknya: "Ketiganya sama
+ * dengan pilihan di `SearchFilter`, dan itu syarat: jenis yang disebut di sini
+ * tapi tidak bisa disaring di peta adalah janji yang tidak punya jalan untuk
+ * ditelusuri pengunjung." Kontrak yang ditulis tangan di tiga tempat adalah
+ * kontrak yang akan dilanggar — jenis keempat yang ditambahkan ke halaman
+ * "Tentang Kami" tanpa masuk ke dua `<option>` menghasilkan tautan filter yang
+ * mengembalikan daftar kosong, dan pengunjung membacanya sebagai "tidak ada
+ * stok", bukan sebagai saringan yang tidak dikenal.
+ *
+ * `keterangan` ikut di sini, bukan hanya namanya: satu-satunya pembacanya hari
+ * ini adalah halaman "Tentang Kami", tapi memisahkan nama dari keterangannya
+ * berarti dua daftar lagi yang harus sejalan.
+ *
+ * Nilainya harus sama persis dengan kolom `Billboard.type` di database. Kolom itu
+ * bertipe `String` bebas, bukan enum, jadi tidak ada satu pun gerbang database
+ * yang menegakkannya — daftar ini yang menjadi gerbangnya, lewat
+ * `PILIHAN_TIPE_MEDIA` di bawah yang dibaca `bacaPilihan`. Tanpa itu `?type=`
+ * apa pun lolos ke `where.type` dan selalu menjawab daftar kosong.
+ */
+export const JENIS_MEDIA = [
+  {
+    nama: 'Videotron',
+    keterangan:
+      'Layar LED yang menayangkan materi bergerak. Cocok untuk kampanye yang materinya berganti selama masa tayang.',
+  },
+  {
+    nama: 'Baliho',
+    keterangan:
+      'Media cetak berukuran besar di titik lalu lintas padat. Materinya tetap sepanjang periode sewa.',
+  },
+  {
+    nama: 'Megatron',
+    keterangan:
+      'Layar berukuran besar untuk jangkauan jarak jauh, umumnya di persimpangan utama kota.',
+  },
+] as const;
+
+/** Nama jenis media saja, urut seperti `JENIS_MEDIA`. */
+export const NAMA_JENIS_MEDIA = JENIS_MEDIA.map((j) => j.nama) as readonly string[];
+
+/**
+ * Nilai `?type=` yang berarti "jangan saring".
+ *
+ * Teks, bukan `undefined`, karena inilah yang tertulis di `<option>` pertama dan
+ * yang menjadi nilai awal `<select>`. `bacaPilihan` menuntut nilai baku yang
+ * anggota daftarnya, jadi ia harus ikut menjadi pilihan yang sah.
+ */
+export const TIPE_SEMUA = 'Semua';
+
+/** Pilihan `?type=` yang sah: `Semua` plus setiap jenis media. */
+export const PILIHAN_TIPE_MEDIA = [TIPE_SEMUA, ...NAMA_JENIS_MEDIA] as [string, ...string[]];
+
 /** Nilai `PublishStatus` sebagai teks. */
 export type StatusPublikasi = 'DRAFT' | 'PUBLISHED' | 'ARCHIVED';
 
