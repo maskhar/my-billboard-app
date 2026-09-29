@@ -146,3 +146,35 @@ export function kunciTanggal(nilai: Date | string | number | null | undefined): 
 
   return d.toLocaleDateString('en-CA', { timeZone: ZONA_WAKTU });
 }
+
+/**
+ * Kunci tanggal beserta jamnya di zona WIB: `2026-09-29 14:30`.
+ *
+ * Untuk teks yang harus DIKETIK ULANG orang guna menyetujui tindakan yang
+ * menimpa data — ketik-untuk-konfirmasi pada rollback billboard. Karena itu
+ * bentuknya dipilih untuk dua hal yang tidak dituntut `tanggalJam()`:
+ *
+ *  1. **Unik per revisi.** `kunciTanggal()` saja tidak cukup: dua revisi yang
+ *     dibuat pada hari yang sama akan menghasilkan teks konfirmasi yang
+ *     identik, sehingga menyalinnya tidak lagi membuktikan baris mana yang
+ *     dibaca — dan itulah satu-satunya hal yang dijaga pengetikan ini.
+ *  2. **Mudah diketik ulang.** Tidak ada nama bulan yang bisa disingkat
+ *     ("Sep" / "Sept"), tidak ada koma, dan tidak ada spasi ganda — perbedaan
+ *     yang tidak terlihat mata akan membuat tombolnya menolak terbuka tanpa
+ *     petunjuk apa pun.
+ *
+ * Bukan pengganti `tanggalJam()`: yang itu untuk DIBACA, ini untuk DISALIN.
+ */
+export function kunciTanggalJam(nilai: Date | string | number | null | undefined): string {
+  const d = keTanggal(nilai);
+  if (!d) return '';
+
+  const tanggal = d.toLocaleDateString('en-CA', { timeZone: ZONA_WAKTU });
+  const jam = d.toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+    timeZone: ZONA_WAKTU,
+  });
+
+  return `${tanggal} ${jam}`;
+}

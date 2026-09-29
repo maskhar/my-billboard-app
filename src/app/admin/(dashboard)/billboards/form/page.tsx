@@ -15,7 +15,9 @@ import { arrayDariJson } from '@/lib/safe-json';
 import { specsAman } from '@/lib/spesifikasi-billboard';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { angkaRupiah } from '@/lib/money';
-import { tanggalJam, tanggalRingkas } from '@/lib/tanggal';
+import { tanggalJam, tanggalRingkas, kunciTanggalJam } from '@/lib/tanggal';
+import TabelDiffRollback from '@/components/admin/TabelDiffRollback';
+import type { BarisDiffBillboard } from '@/lib/diff-billboard';
 import {
   sahStatusBillboard,
   sahStatusPublikasi,
@@ -103,6 +105,11 @@ export default function BillboardFormPage() {
 
   const [inputType, setInputType] = useState<'AUTO' | 'MANUAL'>('AUTO');
   const [historyList, setHistoryList] = useState<BarisRiwayatBillboard[]>([]);
+  // Id riwayat yang pratinjaunya sedang diambil, BUKAN sebuah boolean.
+  // Panel riwayat memuat sampai sepuluh tombol "Pulihkan"; satu boolean akan
+  // membuat kesepuluhnya berputar sekaligus, dan admin tidak tahu baris mana
+  // yang sedang ditunggunya.
+  const [memuatPratinjau, setMemuatPratinjau] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormBillboard>(FORM_KOSONG);
 
@@ -289,25 +296,93 @@ export default function BillboardFormPage() {
       setForm((p) => ({ ...p, gallery: p.gallery.filter((_, i) => i !== index) }));
 
   const handleRollback = async (historyItem: BarisRiwayatBillboard) => {
+      // PRATINJAU DIAMBIL LEBIH DULU, DI LUAR DIALOG
+      //
+      // Dialog ini tidak menghitung apa pun dan tidak boleh: diff antara data
+      // sekarang dan revisi yang dipilih dihitung server oleh kode yang sama
+      // yang menuliskan perubahannya (`bacaSnapshotBillboard`), supaya yang
+      // dipratinjau adalah — secara harfiah — objek yang akan dituliskan.
+      // Menghitungnya di sini dari `form` akan MELEWATKAN `videoUrl` (tidak ada
+      // di `FormBillboard`) dan membandingkan snapshot dengan suntingan yang
+      // belum disimpan, bukan dengan data yang benar-benar akan ditimpa.
+      setMemuatPratinjau(historyItem.id);
+      let baris: BarisDiffBillboard[];
+      try {
+          const res = await fetch(
+              `/api/admin/billboards/rollback/preview?historyId=${encodeURIComponent(historyItem.id)}`
+          );
+          if (!res.ok) {
+              const jawaban = await bacaJawaban(res);
+              // Pratinjau yang gagal MEMBATALKAN rollback, bukan melanjutkannya
+              // tanpa pratinjau. Penyebab paling mungkin — snapshot rusak atau
+              // tidak lengkap — adalah penyebab yang sama yang akan membuat
+              // route rollback menolak; membiarkan admin menekan tombolnya
+              // hanya memindahkan penolakan yang sama ke sesudah keputusannya.
+              toast.galat('Gagal menyusun pratinjau: ' + alasanPenolakan(res, jawaban));
+              setMemuatPratinjau(null);
+              return;
+          }
+          const data = (await res.json()) as { baris?: unknown };
+          baris = Array.isArray(data.baris) ? (data.baris as BarisDiffBillboard[]) : [];
+      } catch (galat) {
+          console.error('Gagal mengambil pratinjau rollback:', galat);
+          toast.galat('Server tidak dapat dihubungi. Rollback dibatalkan.');
+          setMemuatPratinjau(null);
+          return;
+      }
+      setMemuatPratinjau(null);
+
+      // Daftar kosong adalah jawaban yang sah: revisi yang dipilih identik
+      // dengan data sekarang. Tanpa cabang ini admin menekan "Pulihkan",
+      // membaca "Berhasil", lalu bertanya-tanya mengapa layarnya tidak
+      // berubah — dan satu baris riwayat kembar tertulis tanpa alasan.
+      if (baris.length === 0) {
+          toast.info(
+              'Revisi ini sama dengan data yang tersimpan sekarang. Tidak ada yang perlu dipulihkan.'
+          );
+          return;
+      }
+
+      // Teks yang harus diketik memuat TANGGAL REVISINYA, bukan kata tetap
+      // seperti "PULIHKAN". Tombol "Pulihkan" berdiri di ujung sepuluh baris
+      // yang tampak nyaris identik — nama admin sama, harga sering sama, hanya
+      // tanggalnya berbeda. Kata tetap bisa dihafal dan diketik tanpa melihat
+      // baris mana yang terbuka; tanggal yang hanya muncul di baris yang benar
+      // memaksa mata membacanya, dan itulah satu-satunya hal yang mencegah
+      // kesalahan pemilihan baris.
+      const kunciKetik = `PULIHKAN ${kunciTanggalJam(historyItem.archivedAt)}`;
+
       // Pesan lama berbunyi `confirm(\`Rollback data?\`)` — sebuah template
       // literal tanpa satu pun interpolasi, dan sebuah pertanyaan yang tidak
       // menyebut revisi mana yang akan dipulihkan maupun bahwa data sekarang
       // ditimpa. Admin yang menekan "Restore" pada baris keempat dari sepuluh
       // tidak punya cara memastikan baris itulah yang ditekannya.
-      const setuju = await konfirmasi({
+      const diketik = await konfirmasi({
           judul: 'Pulihkan billboard ke revisi ini?',
           pesan:
               `Revisi ${tanggalJam(historyItem.archivedAt)} ` +
               `oleh ${historyItem.changedBy?.name ?? 'Sistem'}, harga ` +
               `Rp ${angkaRupiah(historyItem.price)}.\n\n` +
-              'Seluruh data billboard yang tersimpan sekarang akan DITIMPA oleh ' +
-              'revisi ini. Data sekarang tetap tercatat sebagai revisi baru, jadi ' +
-              'pemulihan ini bisa dibatalkan dengan memulihkan revisi teratas.',
+              `${baris.length} kolom akan DITIMPA oleh revisi ini. Data sekarang ` +
+              'tetap tercatat sebagai revisi baru, jadi pemulihan ini bisa ' +
+              'dibatalkan dengan memulihkan revisi teratas.',
+          rincian: <TabelDiffRollback baris={baris} />,
+          lebar: 'lg',
+          isian: {
+              label: `Ketik "${kunciKetik}" untuk melanjutkan`,
+              placeholder: kunciKetik,
+              cocok: kunciKetik,
+          },
           labelSetuju: 'Pulihkan Revisi Ini',
           labelTolak: 'Jangan',
           nada: 'bahaya',
       });
-      if (!setuju) return;
+      // Kontrak `tanya()` dengan `isian`: teks terpangkas atau `null`. Dijaga
+      // dengan pemeriksaan TIPE, bukan truthiness — `cocok` menahan tombolnya
+      // sampai teksnya persis, jadi teks kosong tidak pernah pulang hari ini,
+      // tapi penjaga yang benar karena kebetulan akan salah begitu syaratnya
+      // berubah.
+      if (typeof diketik !== 'string') return;
 
       setLoading(true);
       try {
@@ -524,7 +599,21 @@ export default function BillboardFormPage() {
                                             <span className="text-[10px] font-normal text-gray-400">{tanggalRingkas(log.archivedAt)}</span>
                                         </div>
                                         <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {angkaRupiah(log.price)}</p>
-                                        <button onClick={()=>handleRollback(log)} className="text-blue-600 font-bold hover:underline flex gap-1"><RotateCcw size={10}/> Restore</button>
+                                        <button
+                                            type="button"
+                                            onClick={()=>handleRollback(log)}
+                                            // Dinonaktifkan selama pratinjau MANA PUN sedang diambil,
+                                            // bukan hanya pratinjau baris ini: dua permintaan yang
+                                            // tumpang tindih membuka dialog kedua yang ditolak
+                                            // `KonfirmasiProvider` (satu dialog pada satu waktu), jadi
+                                            // klik kedua tampak tidak melakukan apa-apa.
+                                            disabled={memuatPratinjau !== null || loading}
+                                            className="text-blue-600 font-bold hover:underline flex gap-1 items-center disabled:opacity-50 disabled:cursor-not-allowed disabled:no-underline"
+                                        >
+                                            {memuatPratinjau === log.id
+                                                ? <><Loader2 size={10} className="animate-spin"/> Menyiapkan…</>
+                                                : <><RotateCcw size={10}/> Restore</>}
+                                        </button>
                                     </div>
                                 ))
                             }

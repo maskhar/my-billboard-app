@@ -8158,6 +8158,14 @@ describe('gerbang peran admin tidak mengunci SUPER_ADMIN', () => {
   const ROUTE_ADMIN_KETAT = [
     ['billboards/create', ['admin', 'billboards', 'create']],
     ['billboards/rollback', ['admin', 'billboards', 'rollback']],
+    // Pratinjaunya hanya MEMBACA, tapi gerbangnya tetap sama ketat dengan
+    // penulisnya dan itu keputusan: jawabannya memuat slug, koordinat, SKU,
+    // dan seluruh URL foto dari revisi lama. `PERAN_PEMBACA_PANEL` yang lebih
+    // luas (CS, OPERATOR) memperluas pembacaan itu ke peran yang tidak boleh
+    // menulis billboard — pelebaran yang tidak pernah diputuskan siapa pun,
+    // dan yang paling mudah terjadi dengan menyalin route pembaca di
+    // sebelahnya.
+    ['billboards/rollback/preview', ['admin', 'billboards', 'rollback', 'preview']],
     ['users/delete', ['admin', 'users', 'delete']],
   ];
 
@@ -12083,6 +12091,452 @@ describe('rollback billboard menulis arsipnya dan menolak balapan', () => {
   });
 });
 
+// ===========================================================================
+// PRATINJAU ROLLBACK: apa yang akan ditimpa, sebelum ditimpa
+// ===========================================================================
+// Tombol "Pulihkan" menimpa sampai 17 kolom sekaligus, dan satu-satunya
+// keterangan yang dimiliki admin sebelum ini adalah tanggal revisi, nama
+// penyuntingnya, dan harganya — tiga hal yang pada sepuluh baris riwayat
+// sering identik. Kolom mana yang sesungguhnya berubah tidak terlihat sebelum
+// data lamanya sudah tertimpa.
+//
+// Yang dijaga suite ini bukan hanya "ada pratinjau", tapi bahwa pratinjaunya
+// TIDAK BISA MENYIMPANG dari penulisnya. Pratinjau yang menyimpang
+// memperlihatkan admin perubahan yang bukan perubahan yang terjadi — lebih
+// berbahaya daripada tidak ada pratinjau sama sekali, karena ia MENGHASILKAN
+// persetujuan yang tidak akan diberikan orang yang tahu.
+// ===========================================================================
+describe('pratinjau rollback billboard: diff sebelum menimpa', () => {
+  const JALUR_DIFF = path.join(__dirname, '..', 'src', 'lib', 'diff-billboard.ts');
+  const JALUR_SNAPSHOT = path.join(__dirname, '..', 'src', 'lib', 'snapshot-billboard.ts');
+  const JALUR_PRATINJAU = path.join(
+    __dirname,
+    '..',
+    'src',
+    'app',
+    'api',
+    'admin',
+    'billboards',
+    'rollback',
+    'preview',
+    'route.ts'
+  );
+
+  const { diffRollbackBillboard } = require(JALUR_DIFF);
+  const { bacaSnapshotBillboard } = require(JALUR_SNAPSHOT);
+
+  /** Pemformat uang boneka — modul diff tidak boleh mengimpor `money.ts`. */
+  const formatUang = (n) => `Rp ${String(n)}`;
+
+  const SEKARANG = {
+    title: 'Billboard Sekarang',
+    price: '12000000',
+    status: 'Available',
+    address: 'Jl. Sekarang 9',
+    sku: 'BB-009',
+    type: 'Videotron',
+    mainImage: 'https://contoh.test/sekarang.jpg',
+    lat: -6.9,
+    lng: 106.9,
+    slug: 'billboard-sekarang',
+    specs: [{ label: 'Ukuran', value: '4x6' }],
+    includes: ['Cetak'],
+    excludes: ['Pajak'],
+    gallery: ['https://contoh.test/g1.jpg'],
+    smartsucoUrl: null,
+    videoUrl: 'https://contoh.test/v-sekarang.mp4',
+    publishStatus: 'PUBLISHED',
+  };
+
+  /** Snapshot lengkap — bentuk yang sama dengan yang ditulis `update/route.ts`. */
+  const SNAPSHOT_LENGKAP = {
+    address: 'Jl. Sekarang 9',
+    sku: 'BB-009',
+    type: 'Videotron',
+    mainImage: 'https://contoh.test/sekarang.jpg',
+    lat: -6.9,
+    lng: 106.9,
+    slug: 'billboard-sekarang',
+    specs: [{ label: 'Ukuran', value: '4x6' }],
+    includes: ['Cetak'],
+    excludes: ['Pajak'],
+    gallery: ['https://contoh.test/g1.jpg'],
+    smartsucoUrl: null,
+    videoUrl: 'https://contoh.test/v-sekarang.mp4',
+    publishStatus: 'PUBLISHED',
+  };
+
+  /** Kolom hasil pembacaan snapshot, lewat pembaca yang SAMA dengan penulisnya. */
+  function kolomDari(tambalan = {}) {
+    const hasil = bacaSnapshotBillboard(
+      JSON.stringify({ ...SNAPSHOT_LENGKAP, ...tambalan }),
+      'hist-1'
+    );
+    assert.equal(hasil.ok, true, `snapshot uji tidak terbaca: ${hasil.pesan || ''}`);
+    return hasil.kolom;
+  }
+
+  function diff({ sekarang = {}, pokok = {}, snapshot = {} } = {}) {
+    return diffRollbackBillboard(
+      { ...SEKARANG, ...sekarang },
+      { title: SEKARANG.title, price: SEKARANG.price, status: SEKARANG.status, ...pokok },
+      kolomDari(snapshot),
+      formatUang
+    );
+  }
+
+  const label = (baris) => baris.map((b) => b.label);
+  const cari = (baris, nama) => baris.find((b) => b.label === nama);
+
+  // --- Diff: yang tidak berubah tidak boleh ikut --------------------------
+
+  it('revisi yang identik menghasilkan daftar KOSONG, bukan 17 baris "sama"', () => {
+    // Daftar kosong adalah jawaban yang sah dan penting: tanpa itu, admin
+    // menekan "Pulihkan", membaca "Berhasil", lalu bertanya-tanya mengapa
+    // layarnya tidak berubah — sementara satu baris riwayat baru sudah
+    // tertulis untuk perubahan yang tidak pernah terjadi.
+    assert.deepEqual(diff(), []);
+  });
+
+  it('tabel berisi 14 baris "tidak berubah" menyembunyikan 3 yang berubah', () => {
+    // Karena itu hanya kolom yang BERBEDA yang ikut. Tiga perubahan di sini
+    // harus keluar sebagai tepat tiga baris, bukan tiga di antara tujuh belas.
+    const baris = diff({
+      snapshot: { slug: 'billboard-lama', sku: 'BB-001', publishStatus: 'DRAFT' },
+    });
+    assert.deepEqual(label(baris).sort(), ['SKU', 'Slug (URL)', 'Status terbit']);
+  });
+
+  // --- Diff: kolom yang dulu tidak pernah terlihat -------------------------
+
+  it('`videoUrl` ikut terbaca — kolom yang mustahil dilihat diff sisi form', () => {
+    // INI ALASAN UTAMA diffnya dihitung di server. `FormBillboard` tidak punya
+    // `videoUrl` sama sekali, jadi diff yang dihitung dari state form akan
+    // melewatkan perubahan ini TANPA JEJAK: admin menyetujui penimpaan video
+    // yang tidak pernah disebutkan kepadanya.
+    const baris = diff({ snapshot: { videoUrl: null } });
+    assert.deepEqual(label(baris), ['Video']);
+    assert.equal(cari(baris, 'Video').sebelum, 'https://contoh.test/v-sekarang.mp4');
+    assert.equal(cari(baris, 'Video').sesudah, '(kosong)');
+  });
+
+  it('kolom yang dikosongkan tidak tampil sebagai sel kosong yang ambigu', () => {
+    // Sel kosong terbaca sebagai "tidak ada informasi", padahal artinya
+    // "nilainya akan DIHAPUS". Keduanya keputusan yang berbeda.
+    const baris = diff({ sekarang: { sku: null }, snapshot: { sku: 'BB-001' } });
+    assert.equal(cari(baris, 'SKU').sebelum, '(kosong)');
+    assert.equal(cari(baris, 'SKU').sesudah, 'BB-001');
+  });
+
+  it('spasi belaka bukan perubahan, tapi juga bukan nilai', () => {
+    const baris = diff({ sekarang: { smartsucoUrl: '   ' } });
+    assert.deepEqual(label(baris), [], 'spasi melawan null dilaporkan sebagai perubahan');
+  });
+
+  // --- Diff: uang -------------------------------------------------------
+
+  it('uang dibandingkan sebagai nominal, bukan sebagai teks terformat', () => {
+    // Kalau dibandingkan SETELAH diformat, dua nominal yang berbeda di sen
+    // menghasilkan teks yang sama dan perubahannya hilang dari pratinjau.
+    // Selisih sen pada kolom `Decimal(15,2)` adalah perubahan yang nyata.
+    const baris = diff({ pokok: { price: '12000000.01' } });
+    assert.deepEqual(label(baris), ['Harga']);
+  });
+
+  it('nol di belakang titik desimal bukan perubahan', () => {
+    // `Prisma.Decimal` diserialisasi `"12000000"`, snapshot lama bisa memuat
+    // `12000000.00`. Melaporkannya sebagai perubahan mengajari admin bahwa
+    // baris "Harga" di pratinjau ini boleh diabaikan — dan setelah itu
+    // perubahan harga yang sungguhan juga akan diabaikan.
+    assert.deepEqual(diff({ pokok: { price: '12000000.00' } }), []);
+    assert.deepEqual(diff({ sekarang: { price: 12000000 }, pokok: { price: '12000000.000' } }), []);
+  });
+
+  it('nominal DITAMPILKAN terformat walaupun dibandingkan mentah', () => {
+    const baris = diff({ pokok: { price: '10000000' } });
+    assert.equal(cari(baris, 'Harga').sebelum, 'Rp 12000000');
+    assert.equal(cari(baris, 'Harga').sesudah, 'Rp 10000000');
+  });
+
+  it('modul diff tidak mengimpor money.ts — pemformatnya disuntikkan', () => {
+    // `money.ts` mengimpor `@prisma/client`. Kalau diff mengimpornya, modul ini
+    // tidak bisa lagi di-`require` langsung di test ini tanpa mock Prisma, dan
+    // pengujian pembanding uang adalah hal terakhir yang boleh jadi sulit.
+    const kode = kodeSajaAny(JALUR_DIFF);
+    assert.doesNotMatch(kode, /@prisma\/client/);
+    assert.doesNotMatch(kode, /from ['"]\.\/money['"]/);
+    assert.match(kode, /formatUang:\s*\(/);
+  });
+
+  it('tidak ada aritmetika uang di pembandingnya', () => {
+    // Aturan proyek: tidak ada `+ - * < >` pada nominal. Pembandingnya
+    // menormalkan teks lalu memakai `===`.
+    const kode = kodeSajaAny(JALUR_DIFF);
+    const fungsi = kode
+      .slice(kode.indexOf('function uangSama'), kode.indexOf('function daftarTeks'))
+      // `=>` dibuang lebih dulu: tanda `>` di dalamnya bukan pembanding, dan
+      // pola yang menolaknya menolak fungsi panah apa pun — termasuk yang
+      // benar.
+      .replace(/=>/g, '');
+    assert.doesNotMatch(fungsi, /[<>]/, 'nominal dibandingkan dengan < atau >');
+    assert.doesNotMatch(fungsi, /\b[ab]\s*[-+*/]|[-+*/]\s*\b[ab]\b/, 'ada aritmetika pada nominal');
+    assert.doesNotMatch(fungsi, /Number\(|parseFloat\(|parseInt\(/, 'nominal dijadikan float');
+    assert.match(fungsi, /rapi\(a\) === rapi\(b\)/);
+  });
+
+  // --- Diff: daftar dan galeri -------------------------------------------
+
+  it('galeri dibandingkan per URL, bukan per jumlah', () => {
+    // Dua galeri berisi tiga foto yang BERBEDA adalah perubahan, dan
+    // `3 foto` melawan `3 foto` akan menyembunyikannya.
+    const baris = diff({
+      sekarang: { gallery: ['https://contoh.test/x.jpg'] },
+      snapshot: { gallery: ['https://contoh.test/y.jpg'] },
+    });
+    assert.deepEqual(label(baris), ['Galeri']);
+    assert.equal(cari(baris, 'Galeri').sebelum, '1 foto');
+    assert.equal(cari(baris, 'Galeri').sesudah, '1 foto');
+  });
+
+  it('urutan galeri yang bertukar tetap perubahan', () => {
+    // Foto pertama adalah yang tampil di kartu daftar.
+    const a = ['https://contoh.test/1.jpg', 'https://contoh.test/2.jpg'];
+    const baris = diff({ sekarang: { gallery: a }, snapshot: { gallery: [a[1], a[0]] } });
+    assert.deepEqual(label(baris), ['Galeri']);
+  });
+
+  it('daftar panjang diringkas, tidak dituang seluruhnya ke satu sel', () => {
+    const baris = diff({ snapshot: { includes: ['A', 'B', 'C', 'D', 'E'] } });
+    assert.equal(cari(baris, 'Termasuk harga').sesudah, 'A, B, C +2 lagi');
+  });
+
+  it('spesifikasi diringkas label:nilai, bukan sebagai JSON mentah', () => {
+    const baris = diff({
+      snapshot: { specs: [{ label: 'Ukuran', value: '5x10' }] },
+    });
+    assert.equal(cari(baris, 'Spesifikasi').sesudah, 'Ukuran: 5x10');
+    assert.doesNotMatch(cari(baris, 'Spesifikasi').sesudah, /[{}"]/);
+  });
+
+  it('koordinat dibandingkan sebagai angka: -6.20 sama dengan -6.2', () => {
+    assert.deepEqual(diff({ sekarang: { lat: -6.9, lng: 106.9 } }), []);
+    const baris = diff({ snapshot: { lat: -6.91 } });
+    assert.deepEqual(label(baris), ['Koordinat']);
+  });
+
+  // --- Route pratinjau ----------------------------------------------------
+
+  function pasangPratinjau({
+    history = {
+      billboardId: 'bb-1',
+      title: 'Billboard Lama',
+      price: '10000000',
+      status: 'Available',
+      snapshot: JSON.stringify({ ...SNAPSHOT_LENGKAP, slug: 'billboard-lama' }),
+      archivedAt: new Date('2026-09-20T03:30:00.000Z'),
+    },
+    sekarang = { ...SEKARANG },
+    peran = 'ADMIN',
+    sesi = true,
+  } = {}) {
+    const route = muatDenganModulPalsu(JALUR_PRATINJAU, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      'next-auth': {
+        getServerSession: async () => (sesi ? { user: { id: 'admin-1', role: peran } } : null),
+      },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': {
+        prisma: {
+          billboardHistory: { findUnique: async () => history },
+          billboard: { findUnique: async () => sekarang },
+        },
+      },
+    });
+
+    return {
+      minta: (id = 'hist-1') =>
+        route.GET({ url: `https://contoh.test/api?historyId=${encodeURIComponent(id)}` }),
+    };
+  }
+
+  it('pratinjau menjawab baris diff, bukan baris billboard mentah', async () => {
+    const res = await pasangPratinjau().minta();
+    assert.equal(res.status, 200);
+    const isi = await res.json();
+
+    assert.ok(Array.isArray(isi.baris));
+    assert.deepEqual(
+      isi.baris.map((b) => b.label).sort(),
+      ['Harga', 'Nama', 'Slug (URL)']
+    );
+    for (const b of isi.baris) {
+      assert.deepEqual(Object.keys(b).sort(), ['label', 'sebelum', 'sesudah']);
+    }
+  });
+
+  it('jawabannya tidak memuat kolom yang tidak pernah diminta browser', async () => {
+    // Pratinjau adalah jalur baru yang mengalirkan baris billboard ke browser.
+    // `createdById`/`updatedById` tidak diperlukan pembanding, dan kolom yang
+    // tidak menyeberang tidak bisa bocor.
+    const res = await pasangPratinjau().minta();
+    const mentah = await res.text();
+    assert.doesNotMatch(mentah, /createdById|updatedById|providerSessionId/);
+  });
+
+  it('metodenya GET, bukan POST', async () => {
+    // `POST` untuk pembacaan membuat gerbang CSRF dan pencatatan audit apa pun
+    // nanti tidak bisa membedakan pembacaan dari penulisan pada jalur yang
+    // namanya sama-sama `rollback`.
+    const kode = kodeSajaAny(JALUR_PRATINJAU);
+    assert.match(kode, /export async function GET\(/);
+    assert.doesNotMatch(kode, /export async function POST\(/);
+  });
+
+  it('pratinjau TIDAK MENULIS apa pun', async () => {
+    // Satu `update` yang terselip di sini menjadikan tombol yang dimaksudkan
+    // untuk "lihat dulu" sebagai tombol yang mengubah data.
+    const kode = kodeSajaAny(JALUR_PRATINJAU);
+    assert.doesNotMatch(kode, /\.(?:create|update|updateMany|delete|deleteMany|upsert)\(/);
+    assert.doesNotMatch(kode, /\$transaction/);
+    assert.doesNotMatch(kode, /\$executeRaw/);
+  });
+
+  it('sesi kosong ditolak sebelum satu baris pun dibaca', async () => {
+    const res = await pasangPratinjau({ sesi: false }).minta();
+    assert.equal(res.status, 401);
+  });
+
+  it('peran yang tidak boleh menulis billboard tidak boleh membaca revisinya', async () => {
+    // Jawabannya memuat slug, koordinat, SKU, dan seluruh URL foto revisi lama.
+    for (const peran of ['CS', 'OPERATOR', 'USER']) {
+      const res = await pasangPratinjau({ peran }).minta();
+      assert.equal(res.status, 401, `peran ${peran} lolos gerbang pratinjau`);
+    }
+  });
+
+  it('SUPER_ADMIN tidak terkunci dari pratinjaunya sendiri', async () => {
+    const res = await pasangPratinjau({ peran: 'SUPER_ADMIN' }).minta();
+    assert.equal(res.status, 200);
+  });
+
+  it('historyId kosong dijawab 400, bukan dicari di database', async () => {
+    const res = await pasangPratinjau().minta('');
+    assert.equal(res.status, 400);
+  });
+
+  it('riwayat yang tidak ada dijawab 404', async () => {
+    const res = await pasangPratinjau({ history: null }).minta();
+    assert.equal(res.status, 404);
+  });
+
+  it('billboard yang sudah lenyap dijawab 404 dengan sebabnya', async () => {
+    const res = await pasangPratinjau({ sekarang: null }).minta();
+    assert.equal(res.status, 404);
+    const isi = await res.json();
+    assert.match(isi.message, /sudah tidak ada/);
+  });
+
+  it('snapshot rusak menjadi PERINGATAN DINI, bukan kejutan sesudah menekan', async () => {
+    // Pratinjau yang gagal karena snapshot tidak lengkap menolak dengan alasan
+    // yang SAMA dengan yang akan dijawab route rollback atas snapshot itu.
+    // Bedanya hanya waktunya: admin membacanya sebelum memutuskan.
+    const tanpaLat = { ...SNAPSHOT_LENGKAP };
+    delete tanpaLat.lat;
+
+    const asli = console.error;
+    const tercatat = [];
+    console.error = (...a) => tercatat.push(a.map(String).join(' '));
+    let res;
+    try {
+      res = await pasangPratinjau({
+        history: {
+          billboardId: 'bb-1',
+          title: 'Billboard Lama',
+          price: '10000000',
+          status: 'Available',
+          snapshot: JSON.stringify(tanpaLat),
+          archivedAt: new Date('2026-09-20T03:30:00.000Z'),
+        },
+      }).minta();
+    } finally {
+      console.error = asli;
+    }
+
+    assert.equal(res.status, 422);
+    const isi = await res.json();
+    // Pesannya harus MENYEBUT kolom yang hilang, bukan hanya "gagal": itu
+    // satu-satunya keterangan yang memberi tahu admin bahwa masalahnya di
+    // arsipnya, bukan di tombol yang baru ia tekan.
+    assert.match(isi.message, /tidak memuat/i);
+    assert.match(isi.message, /lat\b/);
+    assert.match(isi.message, /dibatalkan/i);
+    // Log dibedakan dari pesan, dan jalurnya ikut supaya jelas pratinjau yang
+    // menolak — bukan rollback yang sungguhan.
+    assert.match(tercatat.join('\n'), /rollback\/preview/);
+  });
+
+  // --- Yang menjaga pratinjau dan penulisnya tetap satu --------------------
+
+  it('pratinjau dan penulisnya memakai SATU pembaca snapshot', () => {
+    // Inilah invariant terpenting suite ini, dan ia dijaga secara struktural,
+    // bukan dengan disiplin: dua modul memanggil fungsi yang sama, jadi
+    // keduanya tidak bisa menyimpang tanpa menyimpang bersama.
+    //
+    // Pratinjau yang punya pembacanya sendiri memperlihatkan admin perubahan
+    // yang bukan perubahan yang terjadi — dan pratinjau semacam itu lebih
+    // berbahaya daripada tidak ada pratinjau, karena ia MENGHASILKAN
+    // persetujuan yang tidak akan diberikan orang yang tahu.
+    for (const jalur of [JALUR_PRATINJAU, JALUR_ROUTE_ROLLBACK]) {
+      const kode = kodeSajaAny(jalur);
+      assert.match(
+        kode,
+        /bacaSnapshotBillboard/,
+        `${path.basename(path.dirname(jalur))} tidak memakai pembaca snapshot bersama`
+      );
+      // Penguraian snapshot sendiri-sendiri adalah bentuk lamanya.
+      assert.doesNotMatch(kode, /safeJsonParse|arrayDariJson|specsAman/);
+    }
+  });
+
+  it('pembaca snapshot tidak mengimpor Prisma — bisa diuji tanpa mock', () => {
+    const kode = kodeSajaAny(JALUR_SNAPSHOT);
+    assert.doesNotMatch(kode, /@prisma\/client/);
+    assert.doesNotMatch(kode, /from ['"]@\/lib\/prisma['"]/);
+  });
+
+  it('sisi "sesudah" diff adalah objek yang HARFIAH dituliskan rollback', () => {
+    // Bukan objek yang mirip. Kolom yang dibaca pembanding diambil dari
+    // `KolomSnapshotBillboard`, dan `updateMany` di route rollback menulis
+    // kolom yang sama dari hasil fungsi yang sama.
+    const kodeRollback = kodeSajaAny(JALUR_ROUTE_ROLLBACK);
+    const kolom = [
+      'address',
+      'sku',
+      'type',
+      'mainImage',
+      'lat',
+      'lng',
+      'slug',
+      'specs',
+      'includes',
+      'excludes',
+      'gallery',
+      'smartsucoUrl',
+      'videoUrl',
+      'publishStatus',
+    ];
+    for (const k of kolom) {
+      assert.match(
+        kodeRollback,
+        new RegExp(`${k}:\\s*kolom\\.${k}\\b`),
+        `rollback menulis \`${k}\` dari sumber selain pembaca snapshot bersama`
+      );
+    }
+  });
+});
+
 
 describe('galat yang dilaporkan tanpa membocorkan kunci', () => {
   it('route pengaturan tidak lagi mengirim pesan galat mentah ke browser', () => {
@@ -15491,7 +15945,22 @@ describe('A3: dialog bawaan peramban diganti Toast dan Konfirmasi', () => {
     // catatan pesanan. Alasan kosong membuat pembeli yang ditolak tidak tahu apa
     // yang harus diperbaiki.
     assert.match(kode, /isian\.wajib !== false/);
-    assert.match(kode, /bolehSetuju\s*=\s*!isian \|\| !wajib \|\| isi\.trim\(\) !== ''/);
+    // Dijaga sebagai DUA syarat terpisah, bukan satu ekspresi harfiah: sejak
+    // `isian.cocok` ada, gerbangnya bercabang, dan menyalin ekspresinya utuh
+    // ke sini membuat tes ini gagal setiap kali bentuknya berubah tanpa
+    // memberi tahu apakah perilakunya masih benar.
+    //
+    // 1. Tanpa `cocok`, isian yang wajib menolak teks kosong.
+    assert.match(kode, /!isian \|\| !wajib \|\| isi\.trim\(\) !== ''/);
+    // 2. Dengan `cocok`, yang dituntut adalah kesamaan PERSIS — bukan
+    //    `includes`, bukan `startsWith`, dan bukan perbandingan tanpa `trim`.
+    //    Pencocokan longgar mengembalikan kelalaian yang justru dijaga
+    //    pengetikan ini: menyetujui baris riwayat tanpa membacanya.
+    assert.match(kode, /isi\.trim\(\) === isian\.cocok/);
+    // `cocok` MENGGANTIKAN `wajib`, tidak menumpuknya. Kalau keduanya
+    // digabung dengan `&&`, `cocok: ''` menjadi gerbang yang tidak mungkin
+    // dilewati — tombolnya mati tanpa penjelasan apa pun di layar.
+    assert.doesNotMatch(kode, /isi\.trim\(\) === isian\.cocok\s*&&/);
   });
 
   it('useKonfirmasi melempar di luar provider', () => {
@@ -21172,13 +21641,40 @@ describe('src/lib/tanggal.ts', () => {
 
   it('setiap pemformat menyerahkan timeZone — tanpa itu zona proses yang menang', () => {
     const kode = kodeSajaTanggal();
-    // Ini invariant pusat modul: empat fungsi ekspor, empat `timeZone`.
-    // Satu pemanggil `toLocale*` tanpa `timeZone` mengembalikan bug yang
-    // membuat invoice mencetak tanggal yang lebih awal satu hari.
-    const pemanggil = kode.match(/toLocale(?:Date|Time)?String\(/g) || [];
-    assert.equal(pemanggil.length, 4, 'jumlah pemanggil toLocale* berubah');
-    const denganZona = kode.match(/timeZone:/g) || [];
-    assert.equal(denganZona.length, 4, 'ada pemformat tanpa timeZone');
+    // Diperiksa PER PANGGILAN, bukan dengan menghitung dua total dan
+    // menyamakannya. Dua total yang sama-sama benar bisa berarti satu
+    // panggilan membawa dua `timeZone` sementara panggilan lain tidak
+    // membawanya sama sekali — dan panggilan yang tidak membawanya itulah
+    // yang membuat invoice mencetak tanggal lebih awal satu hari.
+    //
+    // `toLocaleTimeString` ikut dijaring: `kunciTanggalJam` memakainya, dan
+    // jam tanpa `timeZone` menggeser teks ketik-untuk-konfirmasi tujuh jam
+    // sehingga admin mengetik jam yang benar dan tombolnya menolak terbuka.
+    const pemanggil = [...kode.matchAll(/\.toLocale(?:Date|Time)?String\(/g)];
+    assert.ok(pemanggil.length >= 4, `pemanggil toLocale* hilang: ${pemanggil.length}`);
+
+    const tanpaZona = [];
+    for (const cocok of pemanggil) {
+      // Ambil daftar argumen satu panggilan dengan menyeimbangkan tanda
+      // kurung, bukan dengan regex: argumen keduanya objek berisi kurung
+      // kurawal dan koma, dan `[^)]*` akan berhenti di kurung pertama.
+      let i = cocok.index + cocok[0].length;
+      let dalam = 1;
+      while (i < kode.length && dalam > 0) {
+        if (kode[i] === '(') dalam++;
+        else if (kode[i] === ')') dalam--;
+        i++;
+      }
+      const argumen = kode.slice(cocok.index + cocok[0].length, i - 1);
+      if (!/timeZone:\s*ZONA_WAKTU\b/.test(argumen)) {
+        tanpaZona.push(argumen.replace(/\s+/g, ' ').slice(0, 70));
+      }
+    }
+    assert.deepStrictEqual(
+      tanpaZona,
+      [],
+      `pemformat tanpa timeZone: ZONA_WAKTU — ${tanpaZona.join(' | ')}`
+    );
   });
 
   it('modul nol impor — dipakai dari Client Component', () => {

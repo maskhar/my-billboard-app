@@ -67,7 +67,7 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | — (4.26, 4.28, 4.29, 4.31 semua tuntas; 4.31 ternyata sudah divalidasi di kode — yang kurang adalah testnya, dan penulisannya menemukan `db-error.ts` tidak membaca `error.code`) |
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.18–5.29, 5.30, 5.33 (5.7, 5.9, 5.12 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`) |
+| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.18–5.29 (5.7, 5.9, 5.12, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`) |
 | 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | ✅ selesai | — (8.9 tuntas: nol dependency mati DAN nol paket diimpor tanpa terdaftar, kedua arah kini dijaga test; 8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
@@ -546,10 +546,54 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 
 | # | Task | File | Ref | Status |
 |---|---|---|---|---|
-| 5.30 | ⚠️ Modal rollback dengan **diff sebelum/sesudah** + ketik-untuk-konfirmasi — sekarang `confirm('Rollback data?')` lalu overwrite produksi tanpa preview & tanpa undo | `billboards/form/page.tsx:111-121` | `[05]F-11` | [ ] |
+| 5.30 | ⚠️ Modal rollback dengan **diff sebelum/sesudah** + ketik-untuk-konfirmasi. **Premis laporan sudah basi di dua hal** (lihat catatan di bawah): bukan `confirm()`, dan bukan tanpa undo. Yang benar-benar hilang hanyalah diffnya | `billboards/form/page.tsx:291-336` (bukan `:111-121`) | `[05]F-11` | [x] |
 | 5.31 | Perbaiki reconnect storm socket.io — dependency `[selectedSession]` bikin connect/disconnect tiap klik; race condition, pesan hilang/ganda | `CS_InboxLayout.tsx:176-193` | `[05]F-06` | [x] |
 | 5.32 | Ganti socket URL hardcode `http://localhost:3001` dengan `NEXT_PUBLIC_SOCKET_URL` — **live chat mati total di produksi** | `CS_InboxLayout.tsx:177` | `[05]F-07` | [x] |
 | 5.33 | Satukan 2 alur upload bukti tayang (base64 vs URL → dua format di kolom DB yang sama) | `OrderActions.tsx:196-212` vs `orders/[id]/page.tsx:50-58` | `[05]F-13` | [x] |
+
+### Catatan 5.30 — dua premis laporan yang sudah tidak benar
+
+Diperiksa sebelum dikerjakan, karena premis yang salah menghasilkan perbaikan
+yang salah:
+
+1. **Bukan `confirm('Rollback data?')`.** Saat dikerjakan, kodenya sudah berupa
+   modal `konfirmasi()` bernada `bahaya` yang menyebutkan tanggal revisi, nama
+   penyuntingnya, dan harganya. Yang hilang adalah **kolom mana yang berubah**.
+2. **Bukan "tanpa undo".** `rollback/route.ts` mengarsipkan keadaan sekarang
+   lewat `tx.billboardHistory.create` di transaksi yang sama dengan
+   `updateMany`-nya, jadi rollback bisa dibatalkan dengan memulihkan revisi
+   teratas. Klaim "bisa dibatalkan" di modal karena itu benar — kalau tidak,
+   itu yang harus diperbaiki lebih dulu, bukan diffnya.
+
+Yang dikerjakan:
+
+- `src/lib/snapshot-billboard.ts` — pembaca snapshot diangkat keluar dari route
+  rollback. **Route pratinjau dan route penulisnya memanggil fungsi yang sama**,
+  jadi keduanya tidak bisa menyimpang. Ini struktural, bukan disiplin: pratinjau
+  yang menyimpang memperlihatkan admin perubahan yang bukan perubahan yang
+  terjadi, dan itu lebih berbahaya daripada tidak ada pratinjau sama sekali
+  karena ia menghasilkan persetujuan yang tidak akan diberikan orang yang tahu.
+- `src/lib/diff-billboard.ts` — pembanding 17 kolom; hanya yang berubah yang
+  keluar. Uang dibandingkan sebagai teks yang dinormalkan (`===`), bukan
+  aritmetika, sesuai aturan proyek; galeri dibandingkan per URL, bukan per
+  jumlah.
+- `GET /api/admin/billboards/rollback/preview` — gerbangnya `PERAN_PENGELOLA`,
+  **bukan** `PERAN_PEMBACA_PANEL` yang lebih luas: jawabannya memuat slug,
+  koordinat, SKU, dan URL foto revisi lama.
+- `TabelDiffRollback.tsx` di dalam dialog, dan `isian.cocok` di `Konfirmasi.tsx`
+  yang menuntut teks **unik per revisi** (`PULIHKAN <tanggal jam WIB>`, lewat
+  `kunciTanggalJam()`). Kata tetap seperti "PULIHKAN" bisa diketik dari ingatan
+  tanpa membaca baris mana yang terbuka — justru kelalaian yang dijaga di sini.
+- Diff kosong tidak membuka dialog sama sekali: revisi yang identik dijawab
+  `toast.info`, supaya tidak ada baris riwayat baru untuk perubahan yang tidak
+  pernah terjadi.
+- Pratinjau yang gagal **membatalkan** rollback, tidak mundur ke konfirmasi
+  tanpa pratinjau: penyebab paling mungkin (snapshot rusak) adalah penyebab yang
+  sama yang akan ditolak route rollback, jadi meneruskannya hanya memindahkan
+  penolakan yang sama ke sesudah keputusan diambil.
+
+30 test baru (`pratinjau rollback billboard: diff sebelum menimpa`), 9/9 mutasi
+tertangkap, `1833 lulus / 0 gagal`, `tsc` bersih.
 
 ---
 
