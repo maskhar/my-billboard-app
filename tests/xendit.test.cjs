@@ -24110,4 +24110,139 @@ describe('tabel dan panel tidak melebihi layar tanpa cara menggulungnya', () => 
       'pembungkus gulungan tidak ditutup sebelum blok paginasi'
     );
   });
+
+  // --- 5.7: kotak masuk CS ---
+  //
+  // Bugnya bukan "h-screen bersarang" seperti yang ditulis laporan audit.
+  // Grid kotak masuk dulu `h-screen` (800px di layar 800px) sementara
+  // barisnya `auto` semua, sehingga ketika banner galat muncul tinggi
+  // barisnya menjadi 45 + 800 = 845px DI DALAM grid 800px yang
+  // `overflow-hidden`, tanpa satu pun pembungkus yang bisa digulung. 45px
+  // kelebihannya dipotong dan tidak terjangkau dengan cara apa pun — dan yang
+  // jatuh di sana adalah kotak balasan CS. Terukur di browser: kotak balasan
+  // `bottom: 845` di layar 800.
+  const JALUR_INBOX_CS = path.join(
+    AKAR_SRC_LUBER, 'app', 'admin', '_components', 'cs', 'CS_InboxLayout.tsx'
+  );
+  const JALUR_LAYOUT_CS = path.join(
+    AKAR_SRC_LUBER, 'app', 'admin', '_components', 'cs', 'CS_Layout.tsx'
+  );
+
+  it('grid kotak masuk CS tidak mengukur layar untuk kedua kalinya', () => {
+    const isiInbox = tanpaKomentar(fs.readFileSync(JALUR_INBOX_CS, 'utf8'));
+
+    assert.ok(
+      !/h-screen/.test(isiInbox),
+      'CS_InboxLayout kembali memakai h-screen. Ia dirender di dalam <main> ' +
+        'milik CS_Layout yang sudah setinggi layar; mengukur layar lagi di ' +
+        'sini melepaskan tingginya dari ruang yang benar-benar tersisa, dan ' +
+        'isi yang jatuh di luar 100vh terpotong tanpa bisa digulung.'
+    );
+
+    const grid = isiInbox.match(/className="(grid grid-cols-12[^"]*)"/);
+    assert.ok(grid, 'grid 12 kolom kotak masuk CS tidak ditemukan');
+    assert.match(
+      grid[1],
+      /(?:^|\s)h-full(?:\s|$)|(?:^|\s)flex-1(?:\s|$)/,
+      `grid kotak masuk tidak mewarisi tinggi induknya: ${grid[1]}`
+    );
+  });
+
+  it('setiap baris grid kotak masuk CS punya batas bawah nol', () => {
+    const isiInbox = tanpaKomentar(fs.readFileSync(JALUR_INBOX_CS, 'utf8'));
+    const grid = isiInbox.match(/className="(grid grid-cols-12[^"]*)"/);
+    assert.ok(grid, 'grid 12 kolom kotak masuk CS tidak ditemukan');
+    const kelas = grid[1];
+
+    // Barisnya WAJIB dideklarasikan untuk kedua lebar. Di ponsel ketiga kolom
+    // `col-span-12` sehingga bertumpuk; bila hanya satu baris yang
+    // dideklarasikan, kolom kedua jatuh ke baris IMPLISIT yang selalu `auto`
+    // — yaitu setinggi isinya — dan riwayat percakapan yang panjang kembali
+    // mendorongnya keluar layar.
+    const semuaBaris = [...kelas.matchAll(/(?:^|\s)(?:\w+:)?grid-rows-\[([^\]]+)\]/g)];
+    assert.ok(
+      semuaBaris.length >= 2,
+      `baris grid harus dideklarasikan untuk ponsel DAN desktop; dapat ` +
+        `${semuaBaris.length}: ${kelas}`
+    );
+
+    for (const [, isiBaris] of semuaBaris) {
+      // `1fr` telanjang tidak cukup: batas bawah bawaan sebuah `fr` adalah
+      // `auto`, jadi barisnya tetap boleh melebar mengikuti isinya dan
+      // kelebihan itu dipotong oleh `overflow-hidden` di grid — persis bug
+      // yang sedang dijaga.
+      const bagian = isiBaris.split('_');
+      for (const satu of bagian) {
+        assert.ok(
+          /^minmax\(0,/.test(satu) || satu === 'auto',
+          `baris grid \`${satu}\` tidak punya batas bawah nol. ` +
+            `\`1fr\` saja berbatas bawah \`auto\` (setinggi isi), jadi baris ` +
+            `yang memuat riwayat panjang melebar melewati layar dan ` +
+            `terpotong oleh overflow-hidden. Pakai \`minmax(0,1fr)\`. ` +
+            `Seluruh deklarasi: ${isiBaris}`
+        );
+      }
+    }
+
+    // Banner galat TIDAK boleh menjadi item grid. Selama ia item, ada/tidaknya
+    // galat menggeser setiap kolom ke baris yang lain, jadi tata letaknya
+    // punya dua bentuk yang harus benar dua-duanya — dan bentuk "ada galat"
+    // di ponsel memakai baris ketiga yang tidak pernah dideklarasikan.
+    const banner = isiInbox.match(/<div role="alert" className="([^"]*)"/);
+    assert.ok(banner, 'banner galat kotak masuk CS tidak ditemukan');
+    assert.ok(
+      !/col-span-/.test(banner[1]),
+      `banner galat kembali menjadi item grid (${banner[1]}). Selama ia di ` +
+        'dalam grid, jumlah baris yang terpakai bergantung pada ada atau ' +
+        'tidaknya galat, dan bentuk "ada galat" di ponsel memakai baris ' +
+        'implisit yang tumbuh mengikuti isi.'
+    );
+  });
+
+  it('kolom kotak masuk CS dan <main> CS memakai min-h-0', () => {
+    const isiInbox = tanpaKomentar(fs.readFileSync(JALUR_INBOX_CS, 'utf8'));
+
+    // Tanpa `min-h-0`, tinggi minimum bawaan sebuah item grid/flex adalah
+    // `auto` — setinggi isinya. Akibatnya `overflow-y-auto` di dalamnya
+    // TIDAK PERNAH aktif: alih-alih menggulung, kolomnya memanjang dan
+    // mendorong isi keluar layar.
+    const kolom = [...isiInbox.matchAll(/className="((?:hidden md:block )?(?:md:)?col-span-\d+[^"]*)"/g)]
+      .map((m) => m[1])
+      .filter((k) => !/bg-red-50/.test(k));
+    assert.ok(kolom.length >= 3, `kolom kotak masuk tidak ditemukan; dapat ${kolom.length}`);
+    for (const k of kolom) {
+      assert.match(
+        k,
+        /(?:^|\s)min-h-0(?:\s|$)/,
+        `kolom kotak masuk tanpa min-h-0: ${k}. Tinggi minimum bawaan item ` +
+          'grid adalah setinggi isinya, jadi overflow-y-auto di dalamnya ' +
+          'tidak pernah aktif dan kolomnya memanjang keluar layar.'
+      );
+    }
+
+    const isiLayout = tanpaKomentar(fs.readFileSync(JALUR_LAYOUT_CS, 'utf8'));
+    const utama = isiLayout.match(/<main[^>]*className="([^"]*)"/);
+    assert.ok(utama, '<main> CS_Layout tidak ditemukan');
+    assert.match(
+      utama[1],
+      /(?:^|\s)min-h-0(?:\s|$)/,
+      `<main> CS_Layout tanpa min-h-0: ${utama[1]}. \`flex-1\` saja tidak ` +
+        'menahan apa pun, sehingga h-full di kotak masuk mengukur ruang yang salah.'
+    );
+    assert.match(
+      utama[1],
+      /(?:^|\s)min-w-0(?:\s|$)/,
+      `<main> CS_Layout tanpa min-w-0: ${utama[1]}. Tabel lebar di halaman CS ` +
+        'lain akan melebarkan rel ikon di sebelahnya.'
+    );
+    // Penggulungnya dipertahankan: <main> ini menampung SELURUH halaman CS,
+    // bukan hanya kotak masuk chat, dan halaman yang panjang memang perlu
+    // digulung.
+    assert.match(
+      utama[1],
+      /overflow-y-auto/,
+      `<main> CS_Layout kehilangan overflow-y-auto: ${utama[1]}. Halaman CS ` +
+        'yang isinya panjang tidak lagi bisa digulung sama sekali.'
+    );
+  });
 });

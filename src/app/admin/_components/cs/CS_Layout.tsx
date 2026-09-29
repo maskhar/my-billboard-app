@@ -24,7 +24,19 @@ export default function CS_Layout({
             <CS_Sidebar user={session.user} />
             {/* `tabIndex={-1}` wajib pada sasaran tautan lewati: tanpa itu fokus
                 papan tombol tertinggal di tautannya. */}
-            <main id="isi-cs" tabIndex={-1} className="flex-1 overflow-y-auto">
+            {/* `overflow-y-auto` DIPERTAHANKAN: `<main>` ini menampung seluruh
+                halaman CS, bukan hanya kotak masuk chat, dan yang panjang
+                memang perlu digulung.
+
+                `min-w-0 min-h-0` yang ditambahkan. `flex-1` saja tidak menahan
+                apa pun — tinggi dan lebar minimum bawaan item flex adalah
+                `auto`, yaitu setinggi/selebar isinya — sehingga isi yang
+                panjang melebarkan `<main>` melewati layar alih-alih
+                menggulung di dalamnya, dan rel ikon di sebelahnya ikut
+                terdorong. Dengan keduanya, `h-full` di kotak masuk chat
+                mengukur ruang yang benar-benar tersedia, dan halaman lain
+                tetap bisa digulung seperti sebelumnya. */}
+            <main id="isi-cs" tabIndex={-1} className="flex-1 min-w-0 min-h-0 overflow-y-auto">
                 {children}
             </main>
         </div>

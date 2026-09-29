@@ -684,7 +684,29 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
   const sesiTerpilihTampil = selectedSession ? denganKehadiran(selectedSession) : null;
 
   return (
-    <div className="grid grid-cols-12 h-screen w-full overflow-hidden">
+    /* `h-full`, bukan `h-screen`. Kotak masuk ini dirender di dalam `<main>`
+       milik `CS_Layout`, yang sudah setinggi layar dan berada di bawah tidak
+       ada apa pun: mengukur layar untuk KEDUA kalinya di sini membuat tingginya
+       lepas dari ruang yang benar-benar tersedia.
+
+       Dulu di sini ada SATU grid `h-screen` dengan baris `auto` semua, dan
+       banner galat menjadi salah satu itemnya. Ketika banner muncul, tinggi
+       barisnya menjadi banner + kolom `h-screen` — 845px di layar 800px. Grid
+       `overflow-hidden` dan tidak ada satu pun pembungkus yang bisa digulung,
+       jadi 45px kelebihannya DIPOTONG DAN TIDAK TERJANGKAU dengan cara apa
+       pun. Yang jatuh tepat di 45px itu kotak balasan CS: petugas melihat
+       percakapan yang minta dijawab, dan tidak punya tempat menulis
+       jawabannya.
+
+       Banner sekarang di LUAR grid, dan itu bukan kosmetik. Selama ia menjadi
+       item grid, ada/tidaknya galat menggeser setiap kolom ke baris yang lain,
+       sehingga tata letaknya punya dua bentuk yang harus benar dua-duanya —
+       dan di ponsel bentuk "ada galat" memakai baris ketiga yang tidak pernah
+       dideklarasikan, yaitu baris implisit `auto` yang kembali tumbuh
+       mengikuti isi. (Terukur: dengan riwayat panjang barisnya menjadi
+       `105px 0px 707px` — kolom daftar percakapan menyusut sampai HILANG.)
+       Di luar grid, jumlah baris tidak lagi bergantung pada galat. */
+    <div className="flex flex-col h-full w-full overflow-hidden">
         {/* Judul "Chat tidak tersambung." yang DITULIS TETAP di sini dibuang:
             banner yang sama sekarang juga memuat kegagalan memuat riwayat, dan
             di kasus itu kalimatnya salah — chatnya tersambung, yang gagal
@@ -692,18 +714,45 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
             terjadi, jadi judulnya tidak menambah apa pun kecuali risiko
             berbohong. */}
         {galatChat && (
-            <div role="alert" className="col-span-12 bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800">
+            <div role="alert" className="flex-shrink-0 bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800">
                 {galatChat}
             </div>
         )}
-        <div className="col-span-12 md:col-span-3 h-screen overflow-y-auto">
+        {/* Barisnya dideklarasikan untuk KEDUA lebar, dan semuanya
+            `minmax(0,…)`:
+
+            - Di ponsel ketiga kolom `col-span-12` sehingga bertumpuk menjadi
+              dua baris (panel tamu `hidden`). `2fr`/`3fr` memberi daftar
+              percakapan bagian tetap dan sisanya ke percakapan.
+            - Dari `md` ke atas ketiganya berdampingan, jadi satu baris cukup.
+
+            `minmax(0,…)`, bukan `2fr`/`1fr` telanjang: batas bawah bawaan
+            sebuah `fr` adalah `auto`, yaitu setinggi isinya, jadi baris yang
+            memuat riwayat panjang tetap boleh melebar melewati layar dan
+            kembali terpotong — bug yang sama dengan wajah lain.
+
+            `min-h-0` pada grid-nya sendiri wajib karena ia item flex, yang
+            tinggi minimum bawaannya juga `auto`. */}
+        <div className="grid grid-cols-12 grid-rows-[minmax(0,2fr)_minmax(0,3fr)] md:grid-rows-[minmax(0,1fr)] flex-1 min-h-0 w-full">
+        {/* `h-screen` diganti `min-h-0`: ketiga kolom kini mengambil tinggi
+            dari baris grid-nya, yaitu ruang yang BENAR-BENAR sisa setelah
+            banner. `min-h-0` wajib ada — tanpanya tinggi minimum bawaan sebuah
+            item grid adalah setinggi isinya, jadi `overflow-y-auto` di sini
+            tidak pernah aktif dan kolomnya memanjang mendorong isi keluar
+            layar, persis seperti `h-screen` yang digantinya. */}
+        <div className="col-span-12 md:col-span-3 min-h-0 overflow-y-auto">
             <ChatList
                 sessions={sesiTampil}
                 onSelectSession={handleSelectSession}
                 selectedSessionId={selectedSession?.id}
             />
         </div>
-        <div className="col-span-12 md:col-span-6 h-screen overflow-y-auto">
+        {/* Kolom percakapan TIDAK `overflow-y-auto`. Panel di dalamnya sudah
+            punya daerah gulungnya sendiri (daftar pesan `flex-1`), dan dua
+            lapis penggulung bersarang membuat kotak balasan `sticky bottom-0`
+            menempel ke dasar daerah gulung LUAR yang tinggi — bukan ke dasar
+            layar. `min-h-0` menahan tingginya di tinggi baris grid. */}
+        <div className="col-span-12 md:col-span-6 min-h-0">
             <ChatRoom
                 session={sesiTerpilihTampil}
                 messages={messages}
@@ -714,8 +763,9 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
                 onSendMessage={handleSendMessage}
             />
         </div>
-        <div className="hidden md:block md:col-span-3 h-screen overflow-y-auto">
+        <div className="hidden md:block md:col-span-3 min-h-0 overflow-y-auto">
             <VisitorDetails session={sesiTerpilihTampil} />
+        </div>
         </div>
     </div>
   );
