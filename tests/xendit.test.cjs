@@ -24599,3 +24599,566 @@ describe('panel tugas dashboard admin menghitung, bukan mengarang', () => {
     assert.deepStrictEqual(hasil.rincian.map((b) => b.status), ['REVIEW_REFUND']);
   });
 });
+
+// ===========================================================================
+// RENTANG TANGGAL DAN DURASI DI `booking/create`
+//
+// Temuan 4.31 pada laporan audit berbunyi "`booking/create` tidak validasi
+// `duration` maupun tumpang-tindih tanggal". Pemeriksaan ulang menunjukkan
+// kodenya SUDAH memvalidasi keduanya — tapi tidak ada satu pun test yang
+// menjaganya, dan itulah bentuk kerusakan yang tersisa: seluruh gerbang di
+// bawah bisa dihapus hari ini dan suite tetap hijau.
+//
+// Yang dijaga suite ini, masing-masing dengan akibat uangnya:
+//
+//   1. `duration` pecahan/negatif/teks → tagihan negatif DAN rentang tanggal
+//      terbalik. Rentang terbalik membuat `startDate < endDate` pada query
+//      tumpang-tindih tidak pernah cocok, jadi tanggal yang sudah terjual
+//      dijual ulang — validasi durasi adalah bagian dari penjaga tanggal,
+//      bukan sekadar kerapian angka.
+//   2. `addMonths`, bukan `endDate.setMonth(bulan + durasi)`. 31 Januari + 1
+//      bulan menjadi 31 Februari, yang meluber menjadi 3 Maret: pembeli
+//      membayar 1 bulan tapi mengunci 31 hari lewat, dan luberan itu ikut
+//      menolak pesanan berikutnya.
+//   3. Dua jalur menuju 409 yang sama — pemeriksaan aplikasi dan penolakan
+//      constraint database. Yang kedua adalah kasus balapan, satu-satunya
+//      kasus yang tidak bisa ditiru dengan menekan tombol, dan sebelum
+//      diterjemahkan ia jatuh ke "Error Server".
+// ===========================================================================
+describe('booking/create menjaga durasi dan rentang tanggal', () => {
+  const { Prisma } = require('@prisma/client');
+
+  const HARI = 24 * 60 * 60 * 1000;
+
+  /**
+   * Route `booking/create` dengan seluruh batasnya dipalsukan.
+   *
+   * Berbeda dari `buatRouteBooking` di suite atas, di sini `booking.findFirst`
+   * dan `booking.create` bisa disetel per test supaya kedua jalur 409 bisa
+   * dipicu: satu lewat baris yang bentrok, satu lewat galat constraint.
+   */
+  function buatRoute({
+    bentrok = null,
+    galatCreate = null,
+    statusBillboard = 'Available',
+    tanggalSekarang = null,
+  } = {}) {
+    let dataCreate = null;
+    let jumlahFindFirst = 0;
+    let argFindFirst = null;
+
+    const prisma = {
+      billboard: {
+        async findUnique() {
+          return {
+            id: 'bb-1',
+            status: statusBillboard,
+            price: new Prisma.Decimal('1000000'),
+            title: 'Billboard Tes',
+            address: 'Jl. Tes',
+          };
+        },
+      },
+      async $transaction(kerja) {
+        return kerja({
+          user: { async update() { return { id: 'user-1' }; } },
+          booking: {
+            async findFirst(args) {
+              jumlahFindFirst += 1;
+              argFindFirst = args;
+              return bentrok;
+            },
+            async create(args) {
+              if (galatCreate) throw galatCreate;
+              dataCreate = args.data;
+              return {
+                id: 'booking-baru',
+                ...args.data,
+                payments: [
+                  {
+                    id: 'pay-awal',
+                    tujuan: args.data.payments.create.tujuan,
+                    jumlah: args.data.payments.create.jumlah,
+                  },
+                ],
+              };
+            },
+          },
+        });
+      },
+    };
+
+    const route = muatDenganModulPalsu(JALUR_ROUTE_BOOKING, {
+      'next/server': {
+        NextResponse: { json: (isi, init = {}) => new Response(JSON.stringify(isi), init) },
+      },
+      'next-auth/next': {
+        getServerSession: async () => ({
+          user: { id: 'user-1', role: 'USER', email: null, name: 'Budi' },
+        }),
+      },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma },
+      '@/lib/mail': mailPalsu(),
+      '@/lib/transisi-status': {
+        STATUS_MENGUNCI_TANGGAL: ['PENDING_PAYMENT', 'PAID_CONFIRMED'],
+        hitungTenggatPembayaran: () => new Date('2026-09-30T12:00:00.000Z'),
+        sapuPesananKedaluwarsa: async () => 0,
+      },
+    });
+
+    return {
+      route,
+      data: () => dataCreate,
+      jumlahFindFirst: () => jumlahFindFirst,
+      argFindFirst: () => argFindFirst,
+      tanggalSekarang,
+    };
+  }
+
+  /** Tanggal mulai yang selalu di masa depan, apa pun hari ini. */
+  function tanggalDepan(tambahHari = 7) {
+    const d = new Date(Date.now() + tambahHari * HARI);
+    return d.toISOString();
+  }
+
+  async function kirim(fake, ganti = {}) {
+    const body = {
+      billboardId: 'bb-1',
+      duration: 1,
+      paymentType: 'full',
+      designOption: 'upload',
+      startDateString: tanggalDepan(),
+      name: 'Budi Santoso',
+      whatsapp: '08123456789',
+      ...ganti,
+    };
+    return fake.route.POST(
+      new Request('https://contoh.test/api/booking/create', {
+        method: 'POST',
+        body: JSON.stringify(body),
+      })
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // DURASI
+  // -------------------------------------------------------------------------
+
+  it('durasi pecahan, nol, negatif, dan teks ditolak 400 sebelum apa pun tersimpan', async () => {
+    // Masing-masing bentuk ini punya akibat sendiri, dan tidak satu pun berhenti
+    // di "angka jelek di invoice":
+    //
+    //   1.5   → `addMonths` membulatkan, jadi pembeli ditagih 1,5 bulan untuk
+    //           rentang 1 bulan (atau sebaliknya).
+    //   0     → rentangnya nol hari; query tumpang-tindih `startDate < endDate`
+    //           tidak pernah cocok, jadi pesanan ini lolos di atas tanggal yang
+    //           sudah terjual, dan tagihannya nol rupiah.
+    //   -1    → `endDate` MUNDUR dari `startDate`. Rentang terbalik, jadi
+    //           gerbang tumpang-tindih mati sepenuhnya, dan `basePrice` negatif.
+    //   'dua' → `Number('dua')` adalah NaN; `NaN < 1` dan `NaN > 24` keduanya
+    //           false, jadi perbandingan rentang SAJA tidak menahannya. Yang
+    //           menahannya `Number.isInteger`.
+    //   1e3   → di atas batas wajar; mengunci billboard 83 tahun.
+    for (const durasi of [1.5, 0, -1, 'dua', 1e3, null, [], {}, NaN, Infinity]) {
+      const fake = buatRoute();
+      const res = await kirim(fake, { duration: durasi });
+      const isi = await res.json();
+
+      assert.equal(
+        res.status,
+        400,
+        `duration=${JSON.stringify(durasi)} tidak ditolak 400 (dapat ${res.status})`
+      );
+      assert.match(
+        isi.message,
+        /[Dd]urasi/,
+        `pesan untuk duration=${JSON.stringify(durasi)} tidak menyebut durasi: ${isi.message}`
+      );
+      assert.equal(
+        fake.data(),
+        null,
+        `duration=${JSON.stringify(durasi)} tetap menyimpan pesanan`
+      );
+      assert.equal(
+        fake.jumlahFindFirst(),
+        0,
+        `duration=${JSON.stringify(durasi)} sudah masuk transaksi sebelum ditolak`
+      );
+    }
+  });
+
+  it('durasi 1 sampai 24 bulan diterima, dan durasinya tersimpan apa adanya', async () => {
+    // Batasnya harus benar di KEDUA ujung. Gerbang yang menolak 1 atau menolak
+    // 24 adalah gerbang yang menolak pemesanan yang sah, dan itu kegagalan yang
+    // sama mahalnya — hanya arahnya yang berbeda.
+    for (const durasi of [1, 12, 24]) {
+      const fake = buatRoute();
+      const res = await kirim(fake, { duration: durasi });
+      assert.equal(res.status, 200, `duration=${durasi} ditolak (${res.status})`);
+      assert.equal(fake.data().duration, durasi, `durasi tersimpan salah untuk ${durasi}`);
+    }
+
+    const fake = buatRoute();
+    const res = await kirim(fake, { duration: 25 });
+    assert.equal(res.status, 400, 'duration=25 lolos — batas atas tidak menahan apa pun');
+  });
+
+  it('durasi bertipe teks angka diterima — `input type=number` bisa mengirimkannya', async () => {
+    // Bentuk ini SAH dan harus lolos: formulir HTML mengirim "3", bukan 3.
+    // Test ini memasang pagar di sisi lain gerbang: memperketatnya menjadi
+    // `typeof duration === 'number'` akan menolak setiap pemesanan dari
+    // formulir biasa.
+    const fake = buatRoute();
+    const res = await kirim(fake, { duration: '3' });
+    assert.equal(res.status, 200, `teks "3" ditolak (${res.status})`);
+    assert.equal(fake.data().duration, 3);
+  });
+
+  it('tagihan dihitung dari durasi, bukan dari nominal yang dikirim browser', async () => {
+    // Durasi adalah satu-satunya pengali yang browser boleh tentukan, jadi
+    // sekalian dipastikan ia benar-benar mengalikan harga database — bukan
+    // dipakai sebagai hiasan sementara nominalnya datang dari body.
+    const fake = buatRoute();
+    const res = await kirim(fake, {
+      duration: 2,
+      totalPrice: 1,
+      dpAmount: 1,
+      basePrice: 1,
+    });
+    const isi = await res.json();
+
+    assert.equal(res.status, 200);
+    // Tarifnya DIBACA dari `src/lib/tarif.ts`, tidak ditulis ulang sebagai
+    // angka di sini. Test yang menyalin 11% dan Rp 50.000 akan gagal setiap
+    // kali tarif resmi berubah — melaporkan "tagihan salah" pada perubahan
+    // yang benar, lalu dimatikan orang. Yang dijaga test ini adalah RUMUSNYA:
+    // pokok × durasi, ditambah PPN, ditambah biaya admin.
+    const { PERSEN_PPN, BIAYA_ADMIN } = require(
+      path.join(__dirname, '..', 'src', 'lib', 'tarif.ts')
+    );
+    const pokok = 2 * 1000000;
+    const harusnya = pokok + Math.round((pokok * PERSEN_PPN) / 100) + BIAYA_ADMIN;
+
+    assert.equal(fake.data().basePrice.toString(), String(pokok));
+    assert.equal(isi.totalPrice, harusnya, `total salah: ${isi.totalPrice}`);
+  });
+
+  // -------------------------------------------------------------------------
+  // RENTANG TANGGAL
+  // -------------------------------------------------------------------------
+
+  it('endDate dihitung dengan addMonths, jadi 31 Januari + 1 bulan bukan 3 Maret', async () => {
+    // `endDate.setMonth(bulan + durasi)` — bentuk yang dipakai sebelumnya —
+    // tidak memendekkan tanggal saat bulan tujuan lebih pendek: 31 Januari
+    // menjadi 31 Februari, yang otomatis meluber menjadi 3 Maret. Pembeli
+    // membayar 1 bulan tapi tercatat menyewa 31 hari lewat, DAN tanggal
+    // luberan itu ikut mengunci pesanan berikutnya.
+    //
+    // 2027 dipakai supaya tanggalnya selalu di masa depan tanpa bergantung pada
+    // hari test dijalankan, dan Februari 2027 punya 28 hari (bukan kabisat).
+    const fake = buatRoute();
+    const res = await kirim(fake, {
+      duration: 1,
+      startDateString: '2027-01-31T00:00:00.000Z',
+    });
+    assert.equal(res.status, 200, `ditolak: ${res.status}`);
+
+    const akhir = new Date(fake.data().endDate);
+    assert.equal(akhir.getMonth(), 1, `bulan akhir bukan Februari: ${akhir.toISOString()}`);
+    assert.equal(
+      akhir.getDate(),
+      28,
+      `tanggal akhir meluber ke bulan berikutnya: ${akhir.toISOString()}`
+    );
+  });
+
+  it('endDate selalu SESUDAH startDate, sehingga gerbang tumpang-tindih bisa cocok', async () => {
+    // Ini yang menyatukan validasi durasi dengan penjaga tanggal. Query
+    // bentrok berbunyi `startDate < endDate` DAN `endDate > startDate`: pada
+    // rentang terbalik keduanya tidak pernah benar sekaligus, jadi gerbangnya
+    // tidak menolak apa pun. Rentang terbalik bukan tampilan yang salah — ia
+    // penjaga yang mati.
+    const fake = buatRoute();
+    await kirim(fake, { duration: 1, startDateString: '2027-03-15T00:00:00.000Z' });
+    const d = fake.data();
+    assert.ok(
+      new Date(d.endDate).getTime() > new Date(d.startDate).getTime(),
+      `rentang terbalik: ${d.startDate} → ${d.endDate}`
+    );
+  });
+
+  it('tanggal mulai di masa lalu ditolak', async () => {
+    // Tanggal di masa lalu mengunci rentang yang sudah berlalu, dan rentang itu
+    // ikut menolak pemesanan lain lewat constraint selama statusnya masih hidup
+    // — billboard menjadi tidak bisa dipesan untuk periode yang tidak pernah
+    // benar-benar terjual.
+    const fake = buatRoute();
+    const res = await kirim(fake, {
+      startDateString: new Date(Date.now() - 3 * HARI).toISOString(),
+    });
+    const isi = await res.json();
+    assert.equal(res.status, 400, `tanggal lampau lolos (${res.status})`);
+    assert.match(isi.message, /masa lalu/i, `pesan tidak menjelaskan: ${isi.message}`);
+    assert.equal(fake.data(), null, 'pesanan tanggal lampau tetap tersimpan');
+  });
+
+  it('tanggal mulai yang bukan teks ditolak sebelum `new Date` menyentuhnya', async () => {
+    // BENTUK MANA YANG BENAR-BENAR MEMBUTUHKAN PEMERIKSAAN TIPE INI.
+    //
+    // Sebagian besar nilai asing sudah tertahan gerbang lain tanpa bantuan
+    // siapa pun: `new Date(null)`, `new Date(0)`, `new Date(1)`, `new Date([])`
+    // dan `new Date(true)` semuanya mendarat di 1 Januari 1970 — tanggal SAH
+    // di masa lalu, jadi gerbang "tidak boleh di masa lalu" menolaknya. `{}`,
+    // `''` dan `'   '` menjadi Invalid Date, jadi `Number.isNaN` menolaknya.
+    //
+    // Yang hanya bisa ditahan pemeriksaan TIPE adalah ANGKA BESAR yang mendarat
+    // di MASA DEPAN. Itu tanggal yang sah menurut setiap gerbang berikutnya:
+    // bukan NaN, bukan masa lalu. Ia lolos sampai `booking.create` dan mengunci
+    // billboard di tanggal yang tidak pernah diketik siapa pun — sebuah angka
+    // yang tersasar di payload menjadi sewa bertahun-tahun ke depan yang
+    // menolak setiap pembeli sungguhan lewat constraint.
+    //
+    // Karena itu daftar ini memuat keduanya: angka masa depan sebagai kasus
+    // yang MEMBUTUHKAN gerbang tipe, dan sisanya sebagai pagar agar gerbang
+    // lain tidak ikut dilepas.
+    const angkaMasaDepan = Date.now() + 5 * 365 * HARI;
+    for (const nilai of [angkaMasaDepan, 1e12, 1, 0, [], {}, null, true, '', '   ']) {
+      const fake = buatRoute();
+      const res = await kirim(fake, { startDateString: nilai });
+      assert.equal(
+        res.status,
+        400,
+        `startDateString=${JSON.stringify(nilai)} lolos (${res.status})`
+      );
+      assert.equal(
+        fake.data(),
+        null,
+        `startDateString=${JSON.stringify(nilai)} tetap menyimpan pesanan`
+      );
+    }
+  });
+
+  // -------------------------------------------------------------------------
+  // TUMPANG-TINDIH — DUA JALUR, SATU JAWABAN
+  // -------------------------------------------------------------------------
+
+  it('query bentrok dibatasi ke status pengunci dan memakai batas eksklusif', async () => {
+    // Bentuk querynya adalah penjaganya. Tiga hal diperiksa sekaligus:
+    //
+    //   · `status: { in: STATUS_MENGUNCI_TANGGAL }` — kalau saringan status
+    //     hilang, pesanan CANCELLED ikut menolak pembeli baru dan tanggal yang
+    //     sudah lepas tidak pernah bisa dijual lagi.
+    //   · `startDate: { lt: endDate }` dan `endDate: { gt: startDate }` —
+    //     `lte`/`gte` akan menolak pesanan yang mulai tepat pada hari pesanan
+    //     sebelumnya berakhir, padahal `endDate` batas eksklusif. Satu hari
+    //     hilang dari setiap sambungan sewa.
+    //   · `billboardId` — tanpanya, satu pesanan di Jl. Sudirman menolak
+    //     pesanan di Jl. Thamrin pada tanggal yang sama.
+    const fake = buatRoute();
+    await kirim(fake, { duration: 1 });
+
+    const arg = fake.argFindFirst();
+    assert.ok(arg, 'query bentrok tidak pernah dijalankan');
+    assert.equal(arg.where.billboardId, 'bb-1', 'query bentrok tidak dibatasi per billboard');
+    assert.deepStrictEqual(
+      arg.where.status,
+      { in: ['PENDING_PAYMENT', 'PAID_CONFIRMED'] },
+      'query bentrok tidak dibatasi ke status pengunci tanggal'
+    );
+    assert.deepStrictEqual(
+      Object.keys(arg.where.startDate),
+      ['lt'],
+      `startDate harus dibandingkan dengan lt (eksklusif), dapat ${JSON.stringify(arg.where.startDate)}`
+    );
+    assert.deepStrictEqual(
+      Object.keys(arg.where.endDate),
+      ['gt'],
+      `endDate harus dibandingkan dengan gt (eksklusif), dapat ${JSON.stringify(arg.where.endDate)}`
+    );
+  });
+
+  it('pemeriksaan bentrok berjalan DI DALAM transaksi, sebelum penulisan', async () => {
+    // Di luar transaksi, jarak antara "memeriksa" dan "menyimpan" adalah jendela
+    // tempat pesanan lain bisa masuk. Di dalamnya, constraint database masih
+    // penjaga terakhir — tapi pemeriksaan ini yang memberi pembeli pesan yang
+    // menyebut tanggal mana yang bentrok, dan ia harus dijalankan sebelum
+    // `booking.create`, bukan sesudah.
+    const fake = buatRoute();
+    await kirim(fake);
+    assert.equal(fake.jumlahFindFirst(), 1, 'pemeriksaan bentrok tidak dijalankan tepat sekali');
+  });
+
+  it('tanggal yang sudah dipesan dijawab 409, bukan 500 dan bukan 200', async () => {
+    // 409 karena permintaannya sah tapi keadaannya bertentangan. 200 berarti
+    // billboard terjual dua kali; 500 berarti pembeli membaca "Error Server"
+    // untuk keadaan yang sepenuhnya normal, lalu menghubungi CS mengira situsnya
+    // rusak.
+    const fake = buatRoute({
+      bentrok: {
+        startDate: new Date('2027-05-01T00:00:00.000Z'),
+        endDate: new Date('2027-06-01T00:00:00.000Z'),
+      },
+    });
+    const res = await kirim(fake, { startDateString: '2027-05-10T00:00:00.000Z' });
+    const isi = await res.json();
+
+    assert.equal(res.status, 409, `status salah: ${res.status}`);
+    assert.match(
+      isi.message,
+      /sudah dipesan/i,
+      `pesan tidak menjelaskan apa yang terjadi: ${isi.message}`
+    );
+    assert.equal(fake.data(), null, 'pesanan bentrok tetap tersimpan');
+  });
+
+  it('penolakan constraint database juga dijawab 409, bukan "Error Server"', async () => {
+    // KASUS BALAPAN — satu-satunya yang tidak bisa ditiru dengan menekan
+    // tombol. Dua permintaan tiba pada detik yang sama, keduanya lolos
+    // pemeriksaan di atas karena transaksi ini memakai isolasi read committed,
+    // lalu `booking_tanpa_tumpang_tindih` menolak penulisan kedua. Sebelum
+    // diterjemahkan, galat itu jatuh ke penanganan 500 umum: pesan yang benar
+    // sudah tertulis beberapa baris di atasnya dan tidak pernah sampai —
+    // justru pada kasus yang paling mungkin terjadi di billboard populer.
+    const galat = new Error(
+      'conflicting key value violates exclusion constraint "booking_tanpa_tumpang_tindih"'
+    );
+    const fake = buatRoute({ galatCreate: galat });
+    const res = await kirim(fake);
+    const isi = await res.json();
+
+    assert.equal(res.status, 409, `galat constraint dijawab ${res.status}, bukan 409`);
+    assert.match(isi.message, /sudah dipesan/i, `pesan salah: ${isi.message}`);
+  });
+
+  it('galat constraint yang hanya membawa kode 23P01 pun dikenali', async () => {
+    // Prisma tidak selalu menyertakan nama constraint di `message`. Kadang yang
+    // sampai hanya kode PostgreSQL, dan kadang hanya di dalam `cause` berlapis.
+    // Pengenalan yang bergantung pada satu bentuk saja akan meloloskan bentuk
+    // yang lain menjadi 500.
+    const dalam = new Error('database error');
+    dalam.code = '23P01';
+    const luar = new Error('Invalid `prisma.booking.create()` invocation');
+    luar.cause = dalam;
+
+    const fake = buatRoute({ galatCreate: luar });
+    const res = await kirim(fake);
+    assert.equal(res.status, 409, `galat 23P01 berlapis dijawab ${res.status}, bukan 409`);
+  });
+
+  it('galat lain TETAP menjadi 500 — 409 tidak boleh menelan kegagalan nyata', async () => {
+    // Pagar di sisi sebaliknya. Pengenal bentrok yang terlalu longgar mengubah
+    // setiap kegagalan database menjadi "tanggal sudah dipesan": pembeli
+    // mengganti tanggal berulang kali atas kerusakan yang tidak ada
+    // hubungannya dengan tanggal, dan galat aslinya tidak pernah terlihat.
+    const fake = buatRoute({ galatCreate: new Error('koneksi database terputus') });
+    const res = await kirim(fake);
+    const isi = await res.json();
+    assert.equal(res.status, 500, `galat tak terkait dijawab ${res.status}`);
+    assert.doesNotMatch(
+      isi.message,
+      /sudah dipesan/i,
+      'galat tak terkait disamarkan menjadi bentrok tanggal'
+    );
+  });
+
+  it('`adalahBentrokTanggal` mengenali nama constraint dan kode, dan menolak sisanya', () => {
+    // Fungsi pengenalnya diuji langsung juga: lewat route ia hanya terlihat
+    // sebagai "409 atau 500", sementara di sini bentuk-bentuk pembungkus
+    // Prisma bisa disebut satu per satu.
+    const { adalahBentrokTanggal } = require(
+      path.join(__dirname, '..', 'src', 'lib', 'db-error.ts')
+    );
+
+    const kena = [
+      new Error('violates exclusion constraint "booking_tanpa_tumpang_tindih"'),
+      new Error('ERROR: 23P01'),
+      Object.assign(new Error('gagal'), { meta: { message: 'booking_tanpa_tumpang_tindih' } }),
+      Object.assign(new Error('luar'), { cause: new Error('kode 23P01 di lapisan dalam') }),
+    ];
+    for (const e of kena) {
+      assert.equal(adalahBentrokTanggal(e), true, `tidak dikenali: ${e.message}`);
+    }
+
+    const lolos = [
+      new Error('unique constraint "User_email_key"'),
+      new Error('connection refused'),
+      null,
+      undefined,
+      'teks biasa',
+      {},
+    ];
+    for (const e of lolos) {
+      assert.equal(
+        adalahBentrokTanggal(e),
+        false,
+        `dikenali sebagai bentrok padahal bukan: ${JSON.stringify(e)}`
+      );
+    }
+  });
+
+  it('rantai `cause` yang berputar dijawab, bukan menggantung permintaan', () => {
+    // DUA BENTUK PUTARAN, DAN HANYA SATU DI ANTARANYA YANG MUDAH.
+    //
+    // `e.cause = e` — putaran LANGSUNG — sudah tertahan perbandingan
+    // `e.cause !== error`. Menguji hanya bentuk itu tidak menuntut apa pun dari
+    // batas kedalaman, dan itulah yang membuat versi pertama test ini lulus di
+    // atas kode yang batasnya sudah dihapus.
+    //
+    // Yang MEMBUTUHKAN batas kedalaman adalah putaran TAK LANGSUNG: a → b → a.
+    // Pada tiap langkah `e.cause !== error` bernilai true (b memang bukan a),
+    // jadi penelusuran berjalan selamanya. Akibatnya bukan jawaban yang salah
+    // melainkan permintaan yang TIDAK PERNAH DIJAWAB sampai stack habis —
+    // kegagalan yang lebih buruk daripada salah menebak jenis galat, dan yang
+    // tidak akan pernah terlihat sebagai "409 vs 500" di log.
+    //
+    // Batas waktunya diperiksa, bukan hanya nilai kembaliannya: rekursi tanpa
+    // batas berakhir dengan RangeError yang tertangkap `assert.throws` biasa,
+    // jadi test yang hanya memeriksa "tidak melempar" bisa lulus atas kode yang
+    // sudah menghabiskan seluruh stack lebih dulu.
+    const { adalahBentrokTanggal } = require(
+      path.join(__dirname, '..', 'src', 'lib', 'db-error.ts')
+    );
+
+    const langsung = new Error('menunjuk diri sendiri');
+    langsung.cause = langsung;
+    assert.equal(adalahBentrokTanggal(langsung), false);
+
+    const a = new Error('lapisan a');
+    const b = new Error('lapisan b');
+    a.cause = b;
+    b.cause = a;
+    const mulai = Date.now();
+    let hasil;
+    assert.doesNotThrow(() => {
+      hasil = adalahBentrokTanggal(a);
+    }, 'penelusuran cause berputar melempar — rekursinya tidak dibatasi');
+    assert.equal(hasil, false);
+    assert.ok(
+      Date.now() - mulai < 1000,
+      'penelusuran cause berputar memakan waktu tak wajar — rekursinya tidak dibatasi'
+    );
+
+    // Rantai panjang yang SAH tetap harus terbaca sampai penandanya, supaya
+    // batas kedalaman tidak menjadi cara baru meloloskan bentrok menjadi 500.
+    let dalam = new Error('violates exclusion constraint "booking_tanpa_tumpang_tindih"');
+    for (let i = 0; i < 4; i += 1) {
+      dalam = Object.assign(new Error(`pembungkus ${i}`), { cause: dalam });
+    }
+    assert.equal(
+      adalahBentrokTanggal(dalam),
+      true,
+      'penanda bentrok di lapisan dalam yang sah tidak terbaca'
+    );
+  });
+
+  it('billboard yang tidak Available ditolak sebelum tagihan dihitung', async () => {
+    // Gerbang ini BUKAN penjaga pemesanan ganda — tidak ada kode yang pernah
+    // menulis 'Booked', jadi ia selalu terbuka. Yang dijaganya adalah
+    // penutupan manual oleh admin, dan itu tetap harus berlaku.
+    const fake = buatRoute({ statusBillboard: 'Maintenance' });
+    const res = await kirim(fake);
+    assert.equal(res.status, 400, `billboard tertutup lolos (${res.status})`);
+    assert.equal(fake.jumlahFindFirst(), 0, 'transaksi dibuka untuk billboard tertutup');
+  });
+});

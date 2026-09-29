@@ -30,17 +30,41 @@ const KODE_PG_EXCLUSION = "23P01";
  * Pelanggaran constraint EXCLUDE khususnya tidak punya kode galat Prisma
  * sendiri (tidak ada "P2xxx" untuknya), jadi satu-satunya penanda yang bisa
  * diandalkan adalah nama constraint atau kode PostgreSQL di dalam teks itu.
+ *
+ * `code` IKUT DIBACA, dan itu bukan kelengkapan yang berlebihan: `23P01` adalah
+ * kode PostgreSQL, dan driver menaruh kode di bidang `code` — bukan merangkainya
+ * ke dalam `message`. Fungsi ini menelusuri `cause` justru untuk menjangkau
+ * galat driver di lapisan terdalam, jadi mengabaikan `code` berarti menelusuri
+ * sampai ke sana lalu tidak membaca satu-satunya bidang yang menandainya.
+ * Akibatnya persis kegagalan yang hendak dicegah modul ini: pembeli membaca
+ * "Error Server" untuk tanggal yang keburu diambil orang lain.
+ *
+ * `kedalaman` membatasi penelusuran. `cause` yang menunjuk kembali ke salah satu
+ * pembungkus di atasnya bukan hal mustahil pada galat berlapis, dan rekursi
+ * tanpa batas pada rantai seperti itu menggantung permintaan alih-alih
+ * menjawabnya — kegagalan yang jauh lebih buruk daripada salah menebak jenis
+ * galat. Perbandingan `e.cause !== error` saja hanya menahan rantai yang
+ * menunjuk dirinya sendiri secara langsung, bukan putaran a → b → a.
  */
-function teksGalat(error: unknown): string {
+function teksGalat(error: unknown, kedalaman = 0): string {
   if (!error || typeof error !== "object") return String(error ?? "");
+  if (kedalaman > 8) return "";
 
   const bagian: string[] = [];
-  const e = error as { message?: unknown; meta?: unknown; cause?: unknown };
+  const e = error as {
+    message?: unknown;
+    code?: unknown;
+    meta?: unknown;
+    cause?: unknown;
+  };
 
   if (typeof e.message === "string") bagian.push(e.message);
+  if (typeof e.code === "string" || typeof e.code === "number") {
+    bagian.push(String(e.code));
+  }
   if (e.meta) bagian.push(JSON.stringify(e.meta));
   // `cause` bisa berlapis — galat asli dari driver sering ada di lapisan dalam.
-  if (e.cause && e.cause !== error) bagian.push(teksGalat(e.cause));
+  if (e.cause && e.cause !== error) bagian.push(teksGalat(e.cause, kedalaman + 1));
 
   return bagian.join(" ");
 }
