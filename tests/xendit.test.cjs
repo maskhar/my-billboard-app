@@ -24168,9 +24168,10 @@ describe('setiap halaman punya tepat satu landmark `<main>`', () => {
     'dashboard/page.tsx': LAYOUT_DASBOR,
     'dashboard/settings/page.tsx': LAYOUT_DASBOR,
 
-    // Delegasi ke shell lewat `layout.tsx`. Kesepuluh halaman admin ini tidak
+    // Delegasi ke shell lewat `layout.tsx`. Kesebelas halaman admin ini tidak
     // memuat `<main>` sendiri DENGAN SENGAJA: `AdminShell` sudah memasangnya.
     'admin/(dashboard)/page.tsx': SHELL_ADMIN,
+    'admin/(dashboard)/calendar/page.tsx': SHELL_ADMIN,
     'admin/(dashboard)/orders/page.tsx': SHELL_ADMIN,
     'admin/(dashboard)/orders/[id]/page.tsx': SHELL_ADMIN,
     'admin/(dashboard)/users/page.tsx': SHELL_ADMIN,
@@ -29395,3 +29396,564 @@ describe('ekspor CSV daftar admin (butir 5.21)', () => {
   });
 });
 
+// ===========================================================================
+// KALENDER KETERSEDIAAN ADMIN (butir 5.23)
+// ===========================================================================
+describe('kalender-ketersediaan: hari, segmen, dan jalur', () => {
+  const K = require(path.join(__dirname, '..', 'src', 'lib', 'kalender-ketersediaan.ts'));
+
+  // Satu pembantu supaya setiap kasus hanya menuliskan yang berbeda.
+  // `endDate` SELALU batas eksklusif di sini, sama seperti di database.
+  const pesanan = (id, mulai, akhirEksklusif, lain) =>
+    Object.assign(
+      {
+        id,
+        billboardId: 'bb-1',
+        status: 'ACTIVE',
+        startDate: new Date(mulai),
+        endDate: new Date(akhirEksklusif),
+      },
+      lain || {}
+    );
+
+  // -------------------------------------------------------------------------
+  // kunciBulanSah
+  // -------------------------------------------------------------------------
+  it('menolak bulan 00 dan 13 yang lolos pola tapi tidak ada', () => {
+    assert.equal(K.kunciBulanSah('2026-10'), true);
+    assert.equal(K.kunciBulanSah('2026-01'), true);
+    assert.equal(K.kunciBulanSah('2026-12'), true);
+
+    // Keduanya cocok dengan /^\d{4}-\d{2}$/ dan akan digulung `new Date`
+    // menjadi bulan yang tidak pernah diminta siapa pun.
+    assert.equal(K.kunciBulanSah('2026-00'), false);
+    assert.equal(K.kunciBulanSah('2026-13'), false);
+    assert.equal(K.kunciBulanSah('2026-99'), false);
+
+    assert.equal(K.kunciBulanSah('2026-1'), false);
+    assert.equal(K.kunciBulanSah('2026-10-01'), false);
+    assert.equal(K.kunciBulanSah(202610), false);
+    assert.equal(K.kunciBulanSah(null), false);
+    assert.equal(K.kunciBulanSah(undefined), false);
+  });
+
+  // -------------------------------------------------------------------------
+  // bulanSekarang / bacaBulan
+  // -------------------------------------------------------------------------
+  it('bulanSekarang memakai kalender WIB, bukan zona proses', () => {
+    // 2026-09-30T17:00:00Z === 2026-10-01T00:00:00+07:00. Di UTC instan ini
+    // masih September; kalender yang membacanya sebagai September membuka
+    // bulan yang salah setiap hari antara 00.00 dan 07.00 WIB.
+    assert.equal(K.bulanSekarang(new Date('2026-09-30T17:00:00Z')), '2026-10');
+    assert.equal(K.bulanSekarang(new Date('2026-09-30T16:59:59.999Z')), '2026-09');
+  });
+
+  it('bacaBulan mengambil nilai pertama dari parameter ganda', () => {
+    const hasil = K.bacaBulan(['2026-11', '2026-12'], new Date('2026-09-29T05:00:00Z'));
+    assert.equal(hasil.bulan, '2026-11');
+    assert.equal(hasil.ditolak, false);
+  });
+
+  it('bacaBulan melaporkan penolakan alih-alih diam-diam jatuh ke bulan ini', () => {
+    const sekarang = new Date('2026-09-29T05:00:00Z');
+
+    for (const jelek of ['2026-13', '2026-00', 'kemarin', '2026', '2026-10-01']) {
+      const hasil = K.bacaBulan(jelek, sekarang);
+      assert.equal(hasil.bulan, '2026-09', jelek);
+      assert.equal(hasil.ditolak, true, jelek);
+    }
+
+    // Kosong bukan penolakan: tidak ada yang diminta, jadi tidak ada yang
+    // ditolak, dan spanduk peringatan tidak boleh muncul di kunjungan pertama.
+    for (const kosong of [undefined, null, '', '   ']) {
+      const hasil = K.bacaBulan(kosong, sekarang);
+      assert.equal(hasil.bulan, '2026-09');
+      assert.equal(hasil.ditolak, false);
+    }
+  });
+
+  it('bacaBulan menolak bulan di luar BATAS_BULAN di kedua arah', () => {
+    const sekarang = new Date('2026-09-29T05:00:00Z');
+
+    // Tepat di batas masih diterima; satu bulan di luarnya ditolak.
+    const majuBatas = K.geserKunciBulan(K.bulanSekarang(sekarang), K.BATAS_BULAN);
+    const majuLewat = K.geserKunciBulan(K.bulanSekarang(sekarang), K.BATAS_BULAN + 1);
+    assert.equal(K.bacaBulan(majuBatas, sekarang).ditolak, false, majuBatas);
+    assert.equal(K.bacaBulan(majuLewat, sekarang).ditolak, true, majuLewat);
+
+    const mundurBatas = K.geserKunciBulan(K.bulanSekarang(sekarang), -K.BATAS_BULAN);
+    const mundurLewat = K.geserKunciBulan(K.bulanSekarang(sekarang), -K.BATAS_BULAN - 1);
+    assert.equal(K.bacaBulan(mundurBatas, sekarang).ditolak, false, mundurBatas);
+    assert.equal(K.bacaBulan(mundurLewat, sekarang).ditolak, true, mundurLewat);
+  });
+
+  // -------------------------------------------------------------------------
+  // geserKunciBulan: tandanya kebalikan dari geserBulan()
+  // -------------------------------------------------------------------------
+  it('geserKunciBulan positif MAJU, dan melewati batas tahun', () => {
+    assert.equal(K.geserKunciBulan('2026-09', 1), '2026-10');
+    assert.equal(K.geserKunciBulan('2026-12', 1), '2027-01');
+    assert.equal(K.geserKunciBulan('2026-01', -1), '2025-12');
+    assert.equal(K.geserKunciBulan('2026-09', 0), '2026-09');
+    assert.equal(K.geserKunciBulan('2026-09', 12), '2027-09');
+  });
+
+  it('geserKunciBulan tidak pernah menjepit akhir bulan', () => {
+    // Kalau ia dihitung dari tanggal 31 alih-alih tanggal 1, `2026-01` + 1
+    // bulan menjadi Maret (31 Feb digulung) dan Februari HILANG dari navigasi.
+    assert.equal(K.geserKunciBulan('2026-01', 1), '2026-02');
+    assert.equal(K.geserKunciBulan('2026-03', -1), '2026-02');
+    assert.equal(K.geserKunciBulan('2026-08', 1), '2026-09');
+  });
+
+  // -------------------------------------------------------------------------
+  // rentangBulan: setangkup dengan gerbang tumpang-tindih
+  // -------------------------------------------------------------------------
+  it('rentangBulan setengah terbuka dan dihitung di WIB', () => {
+    const r = K.rentangBulan('2026-10');
+    assert.equal(r.jumlahHari, 31);
+    assert.equal(r.kunciAwal, '2026-10-01');
+    assert.equal(r.kunciAkhir, '2026-10-31');
+    // 1 Oktober 00.00 WIB adalah 30 September 17.00 UTC.
+    assert.equal(r.mulai.toISOString(), '2026-09-30T17:00:00.000Z');
+    assert.equal(r.sampaiEksklusif.toISOString(), '2026-10-31T17:00:00.000Z');
+  });
+
+  it('rentangBulan tahu Februari kabisat dan bukan-kabisat', () => {
+    assert.equal(K.rentangBulan('2026-02').jumlahHari, 28);
+    assert.equal(K.rentangBulan('2028-02').jumlahHari, 29);
+    assert.equal(K.rentangBulan('2028-02').kunciAkhir, '2028-02-29');
+    // 2100 bukan kabisat walau habis dibagi 4.
+    assert.equal(K.rentangBulan('2100-02').jumlahHari, 28);
+  });
+
+  // -------------------------------------------------------------------------
+  // hariKalender: kolom hari dan penyelarasan nama hari
+  // -------------------------------------------------------------------------
+  it('hariKalender menghasilkan tepat sejumlah hari bulan itu', () => {
+    assert.equal(K.hariKalender('2026-10', new Date('2026-10-05T05:00:00Z')).length, 31);
+    assert.equal(K.hariKalender('2026-11', new Date('2026-10-05T05:00:00Z')).length, 30);
+    assert.equal(K.hariKalender('2026-02', new Date('2026-10-05T05:00:00Z')).length, 28);
+  });
+
+  it('inisial hari selaras dengan kalender, termasuk lintas batas bulan', () => {
+    const sekarang = new Date('2026-10-05T05:00:00Z');
+
+    // 1 Oktober 2026 adalah hari Kamis. Kalau `hariMinggu()` dihitung dari
+    // `awalHariWib(kunci).getUTCDay()`, instannya adalah 30 September 17.00
+    // UTC — hari Rabu — dan SETIAP kolom bergeser satu, sehingga Jumat dan
+    // Sabtu yang tersorot sebagai akhir pekan.
+    const okt = K.hariKalender('2026-10', sekarang);
+    assert.equal(okt[0].inisial, 'K', '1 Okt 2026 = Kamis');
+    assert.equal(okt[0].akhirPekan, false);
+
+    // 3 Oktober 2026 Sabtu, 4 Oktober Minggu.
+    assert.equal(okt[2].akhirPekan, true);
+    assert.equal(okt[3].akhirPekan, true);
+    assert.equal(okt[4].akhirPekan, false);
+
+    // 1 November 2026 hari Minggu -- bulan berikutnya harus mulai tepat satu
+    // hari setelah 31 Oktober (Sabtu), bukan mengulang atau melompat.
+    const nov = K.hariKalender('2026-11', sekarang);
+    assert.equal(okt[30].akhirPekan, true, '31 Okt 2026 = Sabtu');
+    assert.equal(nov[0].akhirPekan, true, '1 Nov 2026 = Minggu');
+
+    // Setiap hari harus punya inisial, dan tujuh hari berurutan harus
+    // menghasilkan tujuh inisial berbeda.
+    const tujuh = new Set(okt.slice(0, 7).map((h) => h.inisial + String(h.tanggal % 7)));
+    assert.equal(tujuh.size, 7);
+  });
+
+  it('hariIni dan lewat diturunkan dari WIB, bukan dari zona proses', () => {
+    // Instan ini 1 Oktober 00.30 WIB dan masih 30 September di UTC.
+    const hari = K.hariKalender('2026-10', new Date('2026-09-30T17:30:00Z'));
+
+    assert.equal(hari[0].kunci, '2026-10-01');
+    assert.equal(hari[0].hariIni, true, 'tanggal 1 harus hari ini');
+    assert.equal(hari[0].lewat, false);
+    assert.equal(hari[1].hariIni, false);
+    assert.equal(hari[1].lewat, false);
+
+    // Dan satu bulan sebelumnya seluruhnya sudah lewat.
+    const sept = K.hariKalender('2026-09', new Date('2026-09-30T17:30:00Z'));
+    assert.equal(sept.every((h) => h.lewat), true);
+    assert.equal(sept.some((h) => h.hariIni), false);
+  });
+
+  // -------------------------------------------------------------------------
+  // segmenKalender: endDate EKSKLUSIF
+  // -------------------------------------------------------------------------
+  it('endDate diperlakukan EKSKLUSIF: hari terakhir adalah sehari sebelumnya', () => {
+    // Ini cacat yang dibawa `AvailabilityCalendar.tsx` di halaman publik: ia
+    // memakai `date <= end`, sehingga satu hari yang masih bisa dijual
+    // ditandai terpakai -- kerugian pendapatan, sekali per pesanan, selamanya.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-10-01T00:00:00+07:00', '2026-10-11T00:00:00+07:00')]
+    );
+
+    assert.equal(segmen.length, 1);
+    assert.equal(segmen[0].kolomMulai, 1);
+    assert.equal(segmen[0].kolomSampai, 10, 'tanggal 11 masih bisa dijual');
+    assert.equal(segmen[0].kunciSampaiAsli, '2026-10-10');
+    assert.equal(segmen[0].mulaiSebelumBulan, false);
+    assert.equal(segmen[0].sampaiSetelahBulan, false);
+  });
+
+  it('irisan KUNCI, bukan irisan instan: startOfDay UTC tidak mencuri sehari', () => {
+    // `booking/create` menulis `startDate` lewat `startOfDay()` pada zona
+    // PROSES. Di Vercel (UTC) itu `T00:00:00Z`, yaitu 07.00 WIB. Pendekatan
+    // irisan instan melihat tumpang-tindih tujuh jam dengan hari sebelumnya
+    // dan menandainya terpakai -- padahal gerbang `booking/create` justru
+    // akan menjualnya.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-10-05T00:00:00Z', '2026-10-08T00:00:00Z')]
+    );
+
+    assert.equal(segmen.length, 1);
+    assert.equal(segmen[0].kolomMulai, 5, 'bukan 4');
+    assert.equal(segmen[0].kolomSampai, 7);
+  });
+
+  it('pesanan yang menembus kedua ujung bulan dipotong dan DITANDAI', () => {
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-08-15T00:00:00+07:00', '2027-01-15T00:00:00+07:00')]
+    );
+
+    assert.equal(segmen.length, 1);
+    assert.equal(segmen[0].kolomMulai, 1);
+    assert.equal(segmen[0].kolomSampai, 31);
+    assert.equal(segmen[0].mulaiSebelumBulan, true);
+    assert.equal(segmen[0].sampaiSetelahBulan, true);
+
+    // Rentang ASLINYA tetap dibawa. Tanpa itu, tooltip membacakan "1 Oktober"
+    // ke pembeli di telepon -- tanggal yang tidak pernah ada di pesanannya.
+    assert.equal(segmen[0].kunciMulaiAsli, '2026-08-15');
+    assert.equal(segmen[0].kunciSampaiAsli, '2027-01-14');
+  });
+
+  it('pesanan yang berakhir tepat tanggal 1 bulan ini TIDAK muncul', () => {
+    // `endDate = 2026-10-01` berarti hari terakhirnya 30 September. Kalau
+    // batasnya dibaca inklusif, batang nol hari muncul di kolom 1 dan tanggal
+    // 1 Oktober terbaca terpakai padahal ia hari pertama yang bebas.
+    const { segmen, rentangKosong } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-09-01T00:00:00+07:00', '2026-10-01T00:00:00+07:00')]
+    );
+
+    assert.deepEqual(segmen, []);
+    assert.deepEqual(rentangKosong, []);
+  });
+
+  it('pesanan yang mulai tepat hari setelah bulan ini TIDAK muncul', () => {
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-11-01T00:00:00+07:00', '2026-12-01T00:00:00+07:00')]
+    );
+    assert.deepEqual(segmen, []);
+  });
+
+  it('pesanan satu hari menjadi batang satu kolom', () => {
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('bk-1', '2026-10-09T00:00:00+07:00', '2026-10-10T00:00:00+07:00')]
+    );
+    assert.equal(segmen.length, 1);
+    assert.equal(segmen[0].kolomMulai, 9);
+    assert.equal(segmen[0].kolomSampai, 9);
+  });
+
+  // -------------------------------------------------------------------------
+  // rentangKosong: dilaporkan, tidak dibuang
+  // -------------------------------------------------------------------------
+  it('rentang nol hari dan terbalik dilaporkan, bukan digambar', () => {
+    const { segmen, rentangKosong } = K.segmenKalender(
+      '2026-10',
+      [
+        // Nol hari: startDate === endDate.
+        pesanan('nol', '2026-10-05T00:00:00+07:00', '2026-10-05T00:00:00+07:00'),
+        // Terbalik: endDate sebelum startDate.
+        pesanan('balik', '2026-10-20T00:00:00+07:00', '2026-10-10T00:00:00+07:00'),
+        // Yang sah tetap digambar.
+        pesanan('sah', '2026-10-01T00:00:00+07:00', '2026-10-03T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(segmen.length, 1);
+    assert.equal(segmen[0].bookingId, 'sah');
+    assert.deepEqual(rentangKosong.slice().sort(), ['balik', 'nol']);
+  });
+
+  it('tanggal yang tidak bisa dibaca tidak menjadi batang sepanjang bulan', () => {
+    // `kunciTanggal()` menjawab '' untuk itu, dan '' < apa pun bernilai true.
+    const { segmen, rentangKosong } = K.segmenKalender(
+      '2026-10',
+      [
+        { id: 'rusak-a', billboardId: 'bb-1', status: 'ACTIVE', startDate: 'bukan tanggal', endDate: new Date('2026-10-10T00:00:00+07:00') },
+        { id: 'rusak-b', billboardId: 'bb-1', status: 'ACTIVE', startDate: new Date('2026-10-01T00:00:00+07:00'), endDate: null },
+      ]
+    );
+
+    assert.deepEqual(segmen, []);
+    assert.deepEqual(rentangKosong.slice().sort(), ['rusak-a', 'rusak-b']);
+  });
+
+  // -------------------------------------------------------------------------
+  // Penempatan jalur
+  // -------------------------------------------------------------------------
+  it('pesanan yang tidak beririsan berbagi satu jalur', () => {
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-06T00:00:00+07:00'),
+        pesanan('b', '2026-10-10T00:00:00+07:00', '2026-10-16T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(segmen.length, 2);
+    assert.equal(segmen[0].jalur, 0);
+    assert.equal(segmen[1].jalur, 0);
+    assert.equal(K.jumlahJalur(segmen), 1);
+  });
+
+  it('pesanan berdempet (endDate lama === startDate baru) tetap satu jalur', () => {
+    // Ini bentuk yang PALING sering terjadi: perpanjangan sewa. Kalau
+    // batas eksklusifnya salah dibaca, keduanya dianggap bertumpuk dan
+    // setiap perpanjangan menambah satu jalur -- baris titik menjadi dua kali
+    // lebih tinggi tanpa satu hari pun benar-benar bertabrakan.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-11T00:00:00+07:00'),
+        pesanan('b', '2026-10-11T00:00:00+07:00', '2026-10-21T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(segmen.length, 2);
+    assert.equal(segmen[0].kolomSampai, 10);
+    assert.equal(segmen[1].kolomMulai, 11);
+    assert.equal(K.jumlahJalur(segmen), 1);
+  });
+
+  it('tumpang-tindih SATU hari tetap dipisah ke dua jalur', () => {
+    // Ini kasus yang membedakan `akhir < kolomMulai` dari `akhir <=
+    // kolomMulai` pada penempatan jalur, dan satu-satunya yang bisa
+    // membedakannya: hari terakhir batang lama SAMA dengan hari pertama
+    // batang baru. Dengan `<=` keduanya masuk jalur 0, dan batang kedua
+    // digambar menimpa batang pertama tepat pada hari yang bertabrakan --
+    // sehingga pelanggaran `booking_tanpa_tumpang_tindih` terlihat sebagai
+    // kalender yang rapi.
+    //
+    // Bedanya dengan kasus berdempet di atas: di sana `endDate` lama ===
+    // `startDate` baru, jadi hari terakhirnya berselisih satu dan satu jalur
+    // MEMANG benar. Di sini `startDate` baru mendahuluinya sehari.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-11T00:00:00+07:00'),
+        pesanan('b', '2026-10-10T00:00:00+07:00', '2026-10-21T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(segmen.length, 2);
+    assert.equal(segmen[0].kolomSampai, 10);
+    assert.equal(segmen[1].kolomMulai, 10);
+    assert.equal(segmen[0].jalur, 0);
+    assert.equal(segmen[1].jalur, 1, 'tumpang-tindih sehari wajib pindah jalur');
+    assert.equal(K.jumlahJalur(segmen), 2);
+  });
+
+  it('pesanan yang BENAR-BENAR bertumpuk dipisah ke jalur berbeda', () => {
+    // Ini seharusnya tidak mungkin: constraint GIST
+    // `booking_tanpa_tumpang_tindih` menolaknya. Tapi daftar statusnya
+    // ditulis tangan di SQL, jadi status baru yang lupa ditambahkan ke sana
+    // menghasilkan tumpang-tindih yang nyata -- dan kalender adalah satu-
+    // satunya layar yang bisa memperlihatkannya. Dua batang di koordinat
+    // grid yang sama saling menimpa, membuat pelanggaran terpenting menjadi
+    // yang paling tidak terlihat.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-16T00:00:00+07:00'),
+        pesanan('b', '2026-10-10T00:00:00+07:00', '2026-10-21T00:00:00+07:00'),
+        pesanan('c', '2026-10-12T00:00:00+07:00', '2026-10-14T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(segmen.length, 3);
+    assert.equal(K.jumlahJalur(segmen), 3);
+
+    // Tidak ada dua segmen pada jalur yang sama yang kolomnya beririsan.
+    for (let i = 0; i < segmen.length; i++) {
+      for (let j = i + 1; j < segmen.length; j++) {
+        if (segmen[i].jalur !== segmen[j].jalur) continue;
+        const beririsan =
+          segmen[i].kolomMulai <= segmen[j].kolomSampai &&
+          segmen[j].kolomMulai <= segmen[i].kolomSampai;
+        assert.equal(
+          beririsan,
+          false,
+          segmen[i].bookingId + ' dan ' + segmen[j].bookingId + ' setumpuk di jalur ' + segmen[i].jalur
+        );
+      }
+    }
+  });
+
+  it('jalur dikelompokkan per titik: dua titik dengan tanggal sama tetap jalur 0', () => {
+    // Kalau jalurnya global, setiap baris titik setinggi jumlah pesanan
+    // SELURUH halaman -- 25 titik menjadi tabel yang tidak bisa dibaca.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-16T00:00:00+07:00'),
+        pesanan('b', '2026-10-01T00:00:00+07:00', '2026-10-16T00:00:00+07:00', { billboardId: 'bb-2' }),
+      ]
+    );
+
+    assert.equal(segmen.length, 2);
+    assert.equal(segmen[0].jalur, 0);
+    assert.equal(segmen[1].jalur, 0);
+  });
+
+  it('jumlahJalur minimum 1 walau tidak ada segmen', () => {
+    // Baris setinggi nol menghilangkan NAMA titiknya -- dan titik yang
+    // seluruh bulannya kosong justru yang paling ingin dilihat admin.
+    assert.equal(K.jumlahJalur([]), 1);
+  });
+
+  // -------------------------------------------------------------------------
+  // hariKosong
+  // -------------------------------------------------------------------------
+  it('hariKosong menghitung himpunan hari, bukan jumlah panjang batang', () => {
+    // Dua batang bertumpuk. Menjumlahkan panjangnya memberi 15 + 12 = 27 dan
+    // hasilnya "31 - 27 = 4", sementara hari yang benar-benar terpakai hanya
+    // 1..20 -- yaitu 11 hari kosong.
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [
+        pesanan('a', '2026-10-01T00:00:00+07:00', '2026-10-16T00:00:00+07:00'),
+        pesanan('b', '2026-10-10T00:00:00+07:00', '2026-10-21T00:00:00+07:00'),
+      ]
+    );
+
+    assert.equal(K.hariKosong('2026-10', segmen), 11);
+  });
+
+  it('hariKosong nol saat seluruh bulan terisi, dan penuh saat tidak ada pesanan', () => {
+    const { segmen } = K.segmenKalender(
+      '2026-10',
+      [pesanan('a', '2026-09-01T00:00:00+07:00', '2026-12-01T00:00:00+07:00')]
+    );
+    assert.equal(K.hariKosong('2026-10', segmen), 0);
+    assert.equal(K.hariKosong('2026-10', []), 31);
+    assert.equal(K.hariKosong('2026-02', []), 28);
+  });
+
+  // -------------------------------------------------------------------------
+  // labelBulan
+  // -------------------------------------------------------------------------
+  it('labelBulan memakai nama Indonesia dan dibaca dari TEKS kuncinya', () => {
+    assert.equal(K.labelBulan('2026-10'), 'Oktober 2026');
+    assert.equal(K.labelBulan('2026-01'), 'Januari 2026');
+    assert.equal(K.labelBulan('2026-12'), 'Desember 2026');
+  });
+
+  // -------------------------------------------------------------------------
+  // Pengawal sumber
+  // -------------------------------------------------------------------------
+  it('modulnya tidak mengimpor @prisma/client, jadi bisa di-require tanpa mock', () => {
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'lib', 'kalender-ketersediaan.ts'));
+    assert.doesNotMatch(kode, /@prisma\/client/);
+    assert.doesNotMatch(kode, /server-only/);
+    // Hanya impor relatif.
+    assert.doesNotMatch(kode, /from '@\//);
+  });
+
+  it('tidak satu pun getter waktu lokal proses di modul dan komponennya', () => {
+    // Pengawal sumber, bukan pengawal perilaku: assert di atas hanya gagal
+    // bila test dijalankan dari zona yang tepat, sedangkan yang ini gagal dari
+    // zona mana pun. Itulah yang menahan cacatnya kembali lewat satu
+    // `setHours(0,0,0,0)` yang tampak lebih sederhana.
+    const TERLARANG = [
+      'getFullYear()',
+      'getMonth()',
+      'getDate()',
+      'getHours()',
+      'setDate(',
+      'setMonth(',
+      'setHours(',
+      'setFullYear(',
+      'toISOString',
+    ];
+
+    const berkas = [
+      path.join(__dirname, '..', 'src', 'lib', 'kalender-ketersediaan.ts'),
+      path.join(__dirname, '..', 'src', 'components', 'admin', 'GridKalender.tsx'),
+      path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'calendar', 'page.tsx'),
+    ];
+
+    for (const jalur of berkas) {
+      const kode = kodeSajaAny(jalur);
+      for (const pola of TERLARANG) {
+        assert.ok(
+          !kode.includes(pola),
+          path.basename(jalur) + ' memakai ' + pola + ', yang membaca zona waktu proses'
+        );
+      }
+    }
+  });
+
+  it('halaman kalender tidak menulis ulang daftar status pengunci tanggal', () => {
+    // Daftarnya diturunkan otomatis dari `TRANSISI_SAH`. Salinan di halaman
+    // ini akan menampilkan tanggal sebagai kosong padahal `booking/create`
+    // menolak menjualnya -- dan penjual menawarkannya ke pembeli.
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'calendar', 'page.tsx'));
+
+    assert.match(kode, /STATUS_MENGUNCI_TANGGAL/);
+    assert.doesNotMatch(kode, /'PAID_CONFIRMED'/);
+    assert.doesNotMatch(kode, /BookingStatus\./);
+  });
+
+  it('saringan tanggal halaman memakai lt/gt, bukan lte/gte', () => {
+    // `endDate` batas EKSKLUSIF. `gte: mulai` menarik pesanan yang berakhir
+    // tepat tanggal 1 ke dalam bulan ini, dan `segmenKalender` lalu
+    // memotongnya menjadi batang nol hari di kolom 1.
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'calendar', 'page.tsx'));
+
+    const potong = kode.slice(kode.indexOf('bookings: {'), kode.indexOf('orderBy: { startDate'));
+    assert.ok(potong.length > 0);
+    assert.match(potong, /startDate: \{ lt: sampaiEksklusif \}/);
+    assert.match(potong, /endDate: \{ gt: mulai \}/);
+    assert.doesNotMatch(potong, /lte:|gte:/);
+  });
+
+  it('halaman menggerbangi dirinya sendiri dengan PERAN_PEMBACA_PESANAN', () => {
+    // Layout `(dashboard)` memang memulangkan CS ke `CS_Layout`, tapi itu
+    // kebetulan struktur route -- bukan aturan. Halaman yang menggantungkan
+    // izinnya pada tata letak induk akan terbuka pada hari seseorang
+    // memindahkannya satu direktori.
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'calendar', 'page.tsx'));
+
+    assert.match(kode, /peranBoleh\(PERAN_PEMBACA_PESANAN, session\.user\?\.role\)/);
+    assert.match(kode, /export const dynamic = 'force-dynamic'/);
+  });
+
+  it('kolom uang dan penyedia pembayaran tidak ikut ke browser', () => {
+    // `select` yang longgar di Server Component berakhir di HTML yang
+    // terkirim -- termasuk id sesi Xendit dan nominalnya.
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', 'calendar', 'page.tsx'));
+
+    for (const dilarang of ['totalPrice', 'provider', 'payments', 'additionalCharges', 'companyName', 'ktp', 'npwp']) {
+      assert.ok(!kode.includes(dilarang), 'calendar/page.tsx memilih ' + dilarang);
+    }
+  });
+
+  it('GridKalender bukan Client Component dan nol hook', () => {
+    const kode = kodeSajaAny(path.join(__dirname, '..', 'src', 'components', 'admin', 'GridKalender.tsx'));
+
+    assert.doesNotMatch(kode, /'use client'/);
+    assert.doesNotMatch(kode, /useState|useEffect|useMemo|useRef|usePathname|useSearchParams/);
+  });
+});

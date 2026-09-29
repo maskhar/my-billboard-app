@@ -27,6 +27,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
 import {
+  CalendarDays,
   Inbox,
   LayoutDashboard,
   LogOut,
@@ -46,6 +47,7 @@ export type IkonAdmin =
   | 'overview'
   | 'transaksi'
   | 'inventory'
+  | 'kalender'
   | 'pengajuan'
   | 'users'
   | 'chat'
@@ -55,6 +57,7 @@ const PETA_IKON: Record<IkonAdmin, LucideIcon> = {
   overview: LayoutDashboard,
   transaksi: ShoppingCart,
   inventory: Map,
+  kalender: CalendarDays,
   pengajuan: Inbox,
   users: Users,
   chat: MessageCircle,

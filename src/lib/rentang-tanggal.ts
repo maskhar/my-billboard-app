@@ -141,8 +141,14 @@ export const PRESET_BAKU: KunciPreset = '6b';
  * yang tidak perlu tahu apa-apa soal tahun kabisat. UTC, bukan konstruktor
  * lokal: yang dibaca hanya nomor harinya, dan konstruktor lokal membuat
  * jawabannya bergantung pada zona proses.
+ *
+ * Diekspor untuk `kalender-ketersediaan.ts`, yang perlu tahu panjang bulan
+ * untuk menyusun kolom harinya. Menyalin empat baris ini ke sana berarti dua
+ * jawaban untuk "berapa hari di Februari 2028", dan yang salah akan muncul
+ * sebagai satu kolom hilang pada tahun kabisat — sekali tiap empat tahun,
+ * yaitu selang waktu yang cukup panjang untuk tidak ada yang mengingatnya.
  */
-function hariDalamBulan(tahun: number, bulan: number): number {
+export function hariDalamBulan(tahun: number, bulan: number): number {
   return new Date(Date.UTC(tahun, bulan, 0)).getUTCDate();
 }
 
@@ -169,10 +175,22 @@ export function kunciTanggalSah(mentah: unknown): mentah is string {
   return kunciTanggal(d) === mentah;
 }
 
-/** Instan pertama hari `kunci` di WIB. */
-function awalHari(kunci: string): Date {
+/**
+ * Instan pertama hari `kunci` di WIB.
+ *
+ * Diekspor untuk kalender ketersediaan admin, yang harus membandingkan kunci
+ * hari terhadap `Booking.startDate`/`endDate` — keduanya `DateTime` di
+ * database. Pembandingan itu HARUS lewat instan yang dihitung di WIB, bukan
+ * lewat `new Date(kunci)` (yang membaca tengah malam UTC, tujuh jam lebih awal)
+ * maupun lewat `new Date(kunci + 'T00:00')` (yang membaca zona proses, dan di
+ * Vercel prosesnya UTC). Lihat cacat nomor 1 di komentar kepala berkas.
+ */
+export function awalHariWib(kunci: string): Date {
   return new Date(`${kunci}T00:00:00${OFFSET_WIB}`);
 }
+
+/** Alias internal, supaya pemanggil di berkas ini tetap ringkas. */
+const awalHari = awalHariWib;
 
 /**
  * Geser kunci tanggal sebanyak `hari`, di kalender WIB.
@@ -182,8 +200,12 @@ function awalHari(kunci: string): Date {
  * bentuk ini tetap benar bila suatu hari modul ini dipakai untuk zona lain,
  * dan ia tidak menggoda pembaca berikutnya menyalin `+ MS_HARI` ke tempat yang
  * DST-nya ada.
+ *
+ * Diekspor untuk kalender ketersediaan: ia melangkah hari per hari untuk
+ * menyusun sel bulannya, dan `+ 86400000` yang ditulis di sana akan menjadi
+ * salinan kedua dari aturan ini.
  */
-function geserHari(kunci: string, hari: number): string {
+export function geserHari(kunci: string, hari: number): string {
   const d = awalHari(kunci);
   d.setUTCDate(d.getUTCDate() + hari);
   return kunciTanggal(d);
@@ -202,8 +224,14 @@ function geserHari(kunci: string, hari: number): string {
  * Penjepitan membuat "1 bulan sebelum 31 Maret" menjadi 28 Februari — jawaban
  * yang dimaksud setiap orang yang menekan tombolnya, dan satu-satunya jawaban
  * yang tidak melompati satu bulan penuh.
+ *
+ * Nilai NEGATIF berarti MAJU: `geserBulan(k, -1)` adalah bulan berikutnya.
+ * Tanda itu kebalikan dari `geserHari`, dan itu bukan kelalaian — nama
+ * fungsinya menyebut "ke belakang", dan pemanggil terbanyaknya adalah preset
+ * yang memang menghitung mundur. Diekspor untuk tombol bulan sebelum/sesudah
+ * pada kalender admin, yang karena itu memanggilnya dengan `-1` untuk maju.
  */
-function geserBulan(kunci: string, bulan: number): string {
+export function geserBulan(kunci: string, bulan: number): string {
   const [tahun, bln, tgl] = kunci.split('-').map(Number);
 
   // Dihitung sebagai jumlah bulan absolut supaya pembagiannya tidak perlu

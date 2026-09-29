@@ -534,7 +534,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | 5.20 | ⚠️ Filter & sort pada tabel admin. **Premis laporan sudah basi** (lihat catatan di bawah): `orders` dan `pengajuan` sudah punya saringan status. Yang tidak ada sama sekali adalah **pencarian yang menyaring di database** dan **pengurutan** — dan 5.19 ditandai selesai atas kotak cari yang menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi ada di halaman 2 | `[05]` | [x] |
 | 5.21 | Export CSV/Excel. Satu route untuk keempat daftar, `where`/`orderBy` dipakai bersama halamannya lewat `@/lib/saringan-daftar` — dan gerbangnya diputuskan ULANG per daftar, lebih sempit daripada pintu panel | `[05]` | [x] |
 | 5.22 | Date-range filter di dashboard/revenue. Rentangnya dihitung di WIB lewat `src/lib/rentang-tanggal.ts` — tiga cacat yang membuat grafik menjawab salah tepat di batas ikut diperbaiki, dan dua di antaranya sudah ada di produksi | `[05]` | [x] |
-| 5.23 | Kalender ketersediaan / timeline booking untuk admin | `[05]` | [ ] |
+| 5.23 | Kalender ketersediaan / timeline booking untuk admin. Timeline satu bulan, satu baris per titik, satu batang per pesanan — dihitung di WIB lewat `src/lib/kalender-ketersediaan.ts`, dan `endDate` diperlakukan EKSKLUSIF seperti gerbang tumpang-tindihnya. `Billboard.status` tidak bisa menjawab pertanyaannya: ia satu bit tanpa tanggal | `[05]` | [x] |
 | 5.24 | Audit log viewer | `[05]` | [ ] |
 | 5.25 | Notification center + unread badge | `[05]` | [ ] |
 | 5.26 | Bulk actions | `[05]` | [ ] |

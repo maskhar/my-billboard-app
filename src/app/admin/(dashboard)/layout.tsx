@@ -96,6 +96,11 @@ export default async function AdminLayout({ children }: { children: React.ReactN
       { name: "Overview", ikon: "overview", link: "/admin" },
       { name: "Transaksi", ikon: "transaksi", link: "/admin/orders" },
       { name: "Inventory Billboard", ikon: "inventory", link: "/admin/billboards" },
+      // Kalender ikut ditampilkan ke OPERATOR: halamannya digerbangi
+      // `PERAN_PEMBACA_PESANAN`, yang memuat OPERATOR, dan menjadwalkan
+      // pemasangan adalah pekerjaannya. Ia tidak disaring di bawah bersama
+      // `/admin/billboards` karena kalender tidak menyunting inventori.
+      { name: "Kalender Ketersediaan", ikon: "kalender", link: "/admin/calendar" },
       { name: "Pengajuan Titik", ikon: "pengajuan", link: "/admin/pengajuan" },
       { name: "Manage Users", ikon: "users", link: "/admin/users" },
       { name: "Live Chat CS", ikon: "chat", link: "/admin/live-chat" },
