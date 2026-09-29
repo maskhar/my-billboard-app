@@ -22776,3 +22776,261 @@ describe('setiap halaman punya tepat satu landmark `<main>`', () => {
     }
   });
 });
+
+describe('setiap segmen yang mengambil data punya batas galat dan keadaan memuat', () => {
+  const AKAR_APP = path.join(__dirname, '..', 'src', 'app');
+
+  // Komentar dibuang lebih dulu: beberapa berkas di bawah MENJELASKAN kenapa
+  // `Navbar`, `print:`, atau angka nol sengaja tidak dipakai, jadi mencari pola
+  // pada teks mentahnya akan menemukan kalimat yang menyangkalnya.
+  const kodeSajaBatas = (jalur) =>
+    fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\{\s*\/\*[\s\S]*?\*\/\s*\}/g, '')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .split(/\r?\n/)
+      .map((baris) => baris.replace(/\/\/.*$/, ''))
+      .filter((baris) => !/^\s*\*/.test(baris))
+      .join('\n');
+
+  // Segmen yang WAJIB punya `loading.tsx`, dan alasannya masing-masing.
+  //
+  // Daftar ini bukan "semua segmen": halaman yang tidak menyentuh database
+  // (`about`, `login`, `register`, `forgot-password`, `pembayaran/selesai`)
+  // tidak punya jeda untuk diisi, dan kerangka di sana hanya akan berkedip.
+  // Yang masuk daftar adalah segmen yang menunggu database sebelum piksel
+  // pertamanya bisa dirender.
+  const SEGMEN_WAJIB_MEMUAT = [
+    ['billboard', '[slug]'],
+    ['checkout'],
+    ['dashboard'],
+    ['dashboard', 'order', '[id]'],
+    ['invoice', '[id]'],
+  ];
+
+  // Segmen yang punya batas galat SENDIRI, terpisah dari batas akar. Alasannya
+  // selalu sama bentuknya: kalimat yang benar di halaman publik menjadi salah
+  // di segmen ini.
+  const SEGMEN_WAJIB_GALAT = [['dashboard'], ['invoice'], ['admin', '(dashboard)']];
+
+  it('setiap segmen pengambil data punya `loading.tsx`', () => {
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      assert.ok(
+        fs.existsSync(jalur),
+        `src/app/${bagian.join('/')}/loading.tsx wajib ada — tanpa itu Next.js ` +
+          'menahan layar sebelumnya sampai query selesai, dan pengguna tidak ' +
+          'punya tanda bahwa kliknya terbaca'
+      );
+    }
+  });
+
+  it('setiap batas galat khusus segmen ada dan Client Component dengan reset', () => {
+    for (const bagian of SEGMEN_WAJIB_GALAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'error.tsx');
+      const label = `src/app/${bagian.join('/')}/error.tsx`;
+      assert.ok(fs.existsSync(jalur), `${label} wajib ada`);
+      const mentah = fs.readFileSync(jalur, 'utf8');
+      assert.match(mentah, /^'use client';/, `${label} wajib Client Component`);
+      assert.match(mentah, /reset:\s*\(\)\s*=>\s*void/, `${label} wajib menerima reset`);
+    }
+  });
+
+  it('batas galat segmen menampilkan digest saja, bukan error.message', () => {
+    // Parameter rute di `dashboard` dan `invoice` adalah id pesanan milik
+    // pembeli. `error.message` di Server Component bisa memuat nilai parameter.
+    for (const bagian of SEGMEN_WAJIB_GALAT) {
+      const isi = kodeSajaBatas(path.join(AKAR_APP, ...bagian, 'error.tsx'));
+      const label = `src/app/${bagian.join('/')}/error.tsx`;
+      assert.doesNotMatch(isi, /\{error\.message\}/, `${label} membocorkan error.message`);
+      assert.match(isi, /error\.digest/, `${label} wajib menampilkan digest`);
+    }
+  });
+
+  it('batas galat segmen mencatat nama dan digest saja ke konsol', () => {
+    // Konsol browser terbaca siapa pun yang membuka devtools, termasuk di
+    // komputer bersama.
+    for (const bagian of SEGMEN_WAJIB_GALAT) {
+      const isi = kodeSajaBatas(path.join(AKAR_APP, ...bagian, 'error.tsx'));
+      const label = `src/app/${bagian.join('/')}/error.tsx`;
+      assert.match(isi, /console\.error\(/, `${label} wajib mencatat galatnya`);
+      assert.doesNotMatch(
+        isi,
+        /console\.error\([^)]*error\.message/,
+        `${label} mencatat error.message ke konsol browser`
+      );
+    }
+  });
+
+  it('keadaan memuat adalah Server Component tanpa JavaScript', () => {
+    // Kerangka yang mengirim JavaScript melawan tujuannya sendiri: ia harus
+    // tampil justru SEBELUM bundel halamannya selesai diunduh.
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.doesNotMatch(isi, /'use client'/, `${label} tidak boleh Client Component`);
+      assert.doesNotMatch(isi, /useState|useEffect|onClick/, `${label} tidak boleh punya logika`);
+    }
+  });
+
+  it('keadaan memuat tidak mengimpor `Navbar`', () => {
+    // `Navbar` memanggil `useSession()`. Memasangnya di kerangka berarti
+    // mengirim JavaScript dan menunggu sesi hanya untuk menggambar kotak
+    // kelabu. Tingginya ditahan `h-16` statis; navigasi asli datang bersama
+    // halamannya.
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.doesNotMatch(isi, /from '@\/components\/Navbar'/, `${label} mengimpor Navbar`);
+      assert.doesNotMatch(isi, /<Navbar/, `${label} merender Navbar`);
+    }
+  });
+
+  it('keadaan memuat mengumumkan dirinya ke pembaca layar', () => {
+    // `animate-pulse` hanya terlihat oleh mata. Tanpa `aria-busy`/`aria-live`
+    // dan teks `sr-only`, pengguna pembaca layar mendapat halaman yang sunyi
+    // dan menyimpulkan tidak ada apa-apa di sana.
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.match(isi, /aria-busy="true"/, `${label} wajib aria-busy`);
+      assert.match(isi, /aria-live="polite"/, `${label} wajib aria-live`);
+      assert.match(isi, /className="sr-only"/, `${label} wajib teks sr-only`);
+      assert.match(isi, /animate-pulse/, `${label} wajib animasi CSS`);
+    }
+  });
+
+  it('keadaan memuat halaman penuh tetap memuat landmark `<main>`', () => {
+    // Berkas ini MENGGANTIKAN `page.tsx` selama pemuatan. Tanpa `<main>` di
+    // sini, pembaca layar kehilangan landmark utamanya justru pada saat halaman
+    // paling butuh diumumkan.
+    //
+    // `admin/(dashboard)/loading.tsx` sengaja TIDAK ikut: ia dirender di dalam
+    // `<main>` milik `AdminShell`, jadi menambah satu lagi di sana membuat dua
+    // landmark bersarang.
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.match(isi, /<main[\s>]/, `${label} wajib memuat <main>`);
+      assert.equal(
+        (isi.match(/<main[\s>]/g) || []).length,
+        1,
+        `${label} hanya boleh punya satu <main>`
+      );
+      assert.equal(
+        (isi.match(/<\/main>/g) || []).length,
+        1,
+        `${label} tag <main> tidak berpasangan`
+      );
+    }
+  });
+
+  it('kerangka memuat tidak menuliskan nominal atau angka nol', () => {
+    // Kotak kelabu yang kebetulan terbaca "Rp 0" pada halaman tagihan adalah
+    // kesalahan paling mahal di aplikasi ini: nol yang tampil selama pemuatan
+    // tidak bisa dibedakan dari tagihan yang sudah lunas, dan pembeli yang
+    // menyimpulkan sebaliknya membayar dua kali. Yang digambar hanya bentuknya.
+    for (const bagian of SEGMEN_WAJIB_MEMUAT) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.doesNotMatch(isi, /Rp/, `${label} menuliskan nominal`);
+      // Teks JSX apa pun di antara tag, bukan nilai atribut: kerangka ini tidak
+      // punya satu pun kata yang tampil di layar selain teks `sr-only`.
+      assert.doesNotMatch(isi, />\s*0\s*</, `${label} menuliskan angka nol`);
+    }
+  });
+
+  it('kerangka invoice tidak meniru aturan cetak halaman aslinya', () => {
+    // Berkas ini tidak pernah menjadi yang dicetak: yang tercetak adalah halaman
+    // aslinya yang sudah selesai dimuat. Menyalin varian `print:` ke kerangka
+    // hanya menambah aturan yang tidak pernah berlaku — dan membuka peluang
+    // kerangka kosong ikut keluar dari printer.
+    const isi = kodeSajaBatas(path.join(AKAR_APP, 'invoice', '[id]', 'loading.tsx'));
+    assert.doesNotMatch(isi, /print:/);
+    // Chrome-nya tetap harus cocok dengan halaman aslinya: halaman kelabu,
+    // lembar selebar A4, dan TANPA batang navigasi.
+    assert.match(isi, /bg-gray-100/);
+    assert.match(isi, /max-w-\[21cm\]/);
+    assert.doesNotMatch(isi, /fixed top-0/);
+  });
+
+  it('kerangka yang memakai batang navigasi menahan tingginya persis `h-16`', () => {
+    // `Navbar` asli setinggi `h-16` dan berposisi `fixed`. Kerangka yang
+    // memakai tinggi lain menggeser seluruh isi saat halaman aslinya
+    // menggantikannya, dan pergeseran itu terjadi tepat saat pengguna sudah
+    // mulai membaca.
+    for (const bagian of [['billboard', '[slug]'], ['checkout'], ['dashboard'], ['dashboard', 'order', '[id]']]) {
+      const jalur = path.join(AKAR_APP, ...bagian, 'loading.tsx');
+      const isi = kodeSajaBatas(jalur);
+      const label = `src/app/${bagian.join('/')}/loading.tsx`;
+      assert.match(isi, /fixed top-0 w-full h-16/, `${label} tinggi batang navigasi tidak h-16`);
+    }
+  });
+
+  it('kerangka memakai padding atas yang sama dengan halamannya', () => {
+    // Pasangan (kerangka, halaman) harus menyetel jarak atas yang sama, kalau
+    // tidak isinya melompat saat kerangka digantikan.
+    const pasangan = [
+      [['checkout', 'loading.tsx'], ['checkout', 'page.tsx'], 'pt-24'],
+      [
+        ['dashboard', 'order', '[id]', 'loading.tsx'],
+        ['dashboard', 'order', '[id]', 'page.tsx'],
+        'pt-24',
+      ],
+      [['dashboard', 'loading.tsx'], ['dashboard', 'DashboardLayout.tsx'], 'pt-20'],
+    ];
+    for (const [kerangka, halaman, kelas] of pasangan) {
+      assert.ok(
+        kodeSajaBatas(path.join(AKAR_APP, ...kerangka)).includes(kelas),
+        `src/app/${kerangka.join('/')} wajib memakai ${kelas}`
+      );
+      assert.ok(
+        kodeSajaBatas(path.join(AKAR_APP, ...halaman)).includes(kelas),
+        `src/app/${halaman.join('/')} berubah — ${kelas} tidak lagi cocok dengan kerangkanya`
+      );
+    }
+  });
+
+  it('batas galat dashboard memperingatkan agar tidak membayar ulang', () => {
+    // Ini bukan hiasan kalimat. Pembeli yang melihat layar rusak setelah
+    // menekan tombol bayar menyangka pembayarannya batal — dan yang menyatakan
+    // uang masuk hanya webhook, bukan halaman ini.
+    const isi = kodeSajaBatas(path.join(AKAR_APP, 'dashboard', 'error.tsx'));
+    assert.match(isi, /jangan membayar ulang/i);
+  });
+
+  it('batas galat segmen tidak mengimpor `Navbar`', () => {
+    // `Navbar` memanggil `useSession()`. Batas galat harus tetap bisa dirender
+    // walau penyebab galatnya justru ada di jalur sesi.
+    for (const bagian of [['dashboard'], ['invoice']]) {
+      const isi = kodeSajaBatas(path.join(AKAR_APP, ...bagian, 'error.tsx'));
+      assert.doesNotMatch(isi, /from '@\/components\/Navbar'/);
+      assert.doesNotMatch(isi, /<Navbar/);
+    }
+  });
+
+  it('batas galat segmen punya landmark `<main>` tunggal', () => {
+    for (const bagian of [['dashboard'], ['invoice']]) {
+      const isi = kodeSajaBatas(path.join(AKAR_APP, ...bagian, 'error.tsx'));
+      const label = `src/app/${bagian.join('/')}/error.tsx`;
+      assert.equal((isi.match(/<main[\s>]/g) || []).length, 1, `${label} wajib satu <main>`);
+      assert.equal((isi.match(/<\/main>/g) || []).length, 1, `${label} tag <main> tidak berpasangan`);
+    }
+  });
+
+  it('batas galat `admin/(dashboard)` justru TIDAK boleh punya `<main>`', () => {
+    // Ia dirender DI DALAM `<main>` milik `AdminShell` — sidebar admin tetap
+    // utuh saat satu halaman gagal. Menambah `<main>` di sana membuat dua
+    // landmark bersarang, yang membuat pintasan "lompat ke main" ambigu alih-alih
+    // memperbaikinya. Alasan yang sama berlaku untuk `loading.tsx`-nya.
+    for (const nama of ['error.tsx', 'loading.tsx']) {
+      const isi = kodeSajaBatas(path.join(AKAR_APP, 'admin', '(dashboard)', nama));
+      assert.doesNotMatch(isi, /<main[\s>]/, `admin/(dashboard)/${nama} tidak boleh punya <main>`);
+    }
+  });
+});
