@@ -15,8 +15,16 @@ export default function CS_Layout({
 }) {
     return (
         <div className="flex h-screen bg-white font-sans">
+            {/* Lewati ke isi. Rel ikon CS selalu tampak di segala lebar layar
+                (tidak `hidden md:flex` seperti sidebar admin), jadi tautannya
+                berguna di ponsel maupun desktop. Gayanya di `globals.css`. */}
+            <a href="#isi-cs" className="lewati-ke-isi">
+                Lewati ke isi halaman
+            </a>
             <CS_Sidebar user={session.user} />
-            <main className="flex-1 overflow-y-auto">
+            {/* `tabIndex={-1}` wajib pada sasaran tautan lewati: tanpa itu fokus
+                papan tombol tertinggal di tautannya. */}
+            <main id="isi-cs" tabIndex={-1} className="flex-1 overflow-y-auto">
                 {children}
             </main>
         </div>

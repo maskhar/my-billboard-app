@@ -22258,3 +22258,312 @@ describe('chat-server membatasi penulisan pesan, bukan hanya panggilan AI', () =
     );
   });
 });
+
+// ===========================================================================
+// PENANDA FOKUS PAPAN TOMBOL
+// ===========================================================================
+//
+// KENAPA GERBANG INI ADA
+// ----------------------
+// Angkanya sebelum perbaikan: dari 117 `<button>` di `src/`, hanya 5 yang
+// menuliskan gaya `focus:` apa pun; dari 76 `<Link>`, hanya 3. Dan
+// `:focus-visible` — satu-satunya pseudo-class yang membedakan fokus papan
+// tombol dari fokus klik tetikus — muncul NOL kali di seluruh repo.
+//
+// Yang membuatnya benar-benar rusak, bukan sekadar "mengandalkan bawaan
+// peramban", adalah `@tailwind base`: Preflight menyetel
+// `outline: 2px solid transparent` pada elemen yang difokuskan. Penandanya
+// karena itu DIGAMBAR tapi tidak berwarna. Pengguna papan tombol menekan Tab
+// dan tidak ada apa pun yang bergerak di layar — di aplikasi yang seluruh alur
+// bayarnya berupa tombol, itu berarti tidak ada cara menyelesaikan pembelian
+// tanpa tetikus.
+//
+// KENAPA DIJAGA DI CSS, BUKAN DIHITUNG PER TOMBOL
+// -----------------------------------------------
+// Gerbang yang menuntut setiap `<button>` menuliskan `focus-visible:ring-2`
+// akan menuntut 190 suntingan hari ini dan melupakan tombol ke-191. Aturan
+// global di `globals.css` berlaku untuk elemen yang bisa difokuskan, termasuk
+// komponen yang belum ditulis. Jadi yang diuji di sini adalah KEBERADAAN aturan
+// itu dan kelengkapan tautan lewati — bukan isi setiap berkas komponen.
+describe('penanda fokus papan tombol tidak boleh hilang lagi', () => {
+  const JALUR_CSS = path.join(__dirname, '..', 'src', 'app', 'globals.css');
+  const JALUR_NAVBAR = path.join(__dirname, '..', 'src', 'components', 'Navbar.tsx');
+  const JALUR_SHELL = path.join(
+    __dirname, '..', 'src', 'app', 'admin', '_components', 'AdminShell.tsx'
+  );
+  const JALUR_CS = path.join(
+    __dirname, '..', 'src', 'app', 'admin', '_components', 'cs', 'CS_Layout.tsx'
+  );
+  const JALUR_LAYOUT_AKAR = path.join(__dirname, '..', 'src', 'app', 'layout.tsx');
+
+  const css = () => fs.readFileSync(JALUR_CSS, 'utf8');
+
+  it('`globals.css` mendefinisikan aturan `:focus-visible` global', () => {
+    const teks = css();
+
+    // Komentar dibuang lebih dulu: berkas ini MENJELASKAN cacatnya dengan
+    // menyebut `:focus-visible` di dalam prosa, jadi mencari namanya di teks
+    // mentah akan lulus walaupun aturannya sendiri dihapus.
+    const tanpaKomentar = teks.replace(/\/\*[\s\S]*?\*\//g, '');
+
+    assert.match(
+      tanpaKomentar,
+      /:focus-visible\s*\{[^}]*outline:\s*2px solid/,
+      '`:focus-visible` global dengan `outline` yang terlihat wajib ada di globals.css'
+    );
+  });
+
+  it('penandanya memakai `outline`, bukan `box-shadow` sendirian', () => {
+    // `box-shadow` ikut terpotong `overflow: hidden` milik induknya, dan di
+    // aplikasi ini tombol hidup di dalam kartu, drawer, dan modal yang semuanya
+    // memotong. `outline` tidak terpotong.
+    const tanpaKomentar = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    const blok = tanpaKomentar.match(/(?<!\])(?<!\))\s:focus-visible\s*\{([^}]*)\}/);
+
+    assert.ok(blok, 'blok `:focus-visible` global tidak ditemukan');
+    assert.match(blok[1], /outline:/, 'wajib memakai `outline`');
+    assert.match(blok[1], /outline-offset:/, '`outline-offset` menjaga penanda tidak menempel di tepi');
+  });
+
+  it('warna penandanya bukan `transparent` dan bukan `none`', () => {
+    // Ini bentuk regresi yang paling mudah terjadi: aturannya tetap ada tapi
+    // nilainya dikembalikan ke bawaan Preflight, dan seluruh gerbang di atas
+    // tetap lulus.
+    const tanpaKomentar = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    const blok = tanpaKomentar.match(/(?<!\])(?<!\))\s:focus-visible\s*\{([^}]*)\}/);
+
+    assert.ok(blok, 'blok `:focus-visible` global tidak ditemukan');
+    assert.doesNotMatch(blok[1], /outline:\s*(none|0|2px solid transparent)/);
+  });
+
+  it('wadah ber-`tabIndex={-1}` dikecualikan dari kotak fokus', () => {
+    // Fokus yang dipasang PROGRAM pada wadah — panel drawer admin, sasaran
+    // tautan lewati — bukan navigasi papan tombol pengguna. Menandainya
+    // menggambar kotak di sekeliling seluruh panel, yang tidak memberi tahu
+    // apa pun tentang di mana fokusnya berada.
+    assert.match(
+      css().replace(/\/\*[\s\S]*?\*\//g, ''),
+      /\[tabindex='-1'\]:focus-visible\s*\{[^}]*outline:\s*none/
+    );
+  });
+
+  it('kelas `.lewati-ke-isi` disembunyikan dengan `clip-path`, bukan `display: none`', () => {
+    // Elemen ber-`display: none` DIBUANG dari urutan Tab, jadi tautan lewati
+    // yang disembunyikan begitu tidak bisa difokuskan sama sekali — persis
+    // kebalikan dari gunanya. `clip-path` menyembunyikannya secara visual
+    // sambil menahannya tetap bisa difokuskan.
+    const tanpaKomentar = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    const blok = tanpaKomentar.match(/\.lewati-ke-isi\s*\{([^}]*)\}/);
+
+    assert.ok(blok, 'kelas `.lewati-ke-isi` wajib ada');
+    assert.match(blok[1], /clip-path:/);
+    assert.doesNotMatch(blok[1], /display:\s*none/);
+    assert.doesNotMatch(blok[1], /visibility:\s*hidden/);
+  });
+
+  it('`.lewati-ke-isi` muncul kembali saat difokuskan', () => {
+    assert.match(
+      css().replace(/\/\*[\s\S]*?\*\//g, ''),
+      /\.lewati-ke-isi:focus\s*\{[^}]*clip-path:\s*none/
+    );
+  });
+
+  it('`.lewati-ke-isi` berada di atas navbar yang ber-z-index 9999', () => {
+    // Navbar publik `z-[9999]`. Tautan lewati yang z-index-nya lebih rendah
+    // tetap bisa difokuskan tapi tergambar DI BELAKANG navbar — terlihat
+    // seperti tidak muncul sama sekali.
+    const tanpaKomentar = css().replace(/\/\*[\s\S]*?\*\//g, '');
+    const blok = tanpaKomentar.match(/\.lewati-ke-isi\s*\{([^}]*)\}/);
+    const z = blok[1].match(/z-index:\s*(\d+)/);
+
+    assert.ok(z, '`z-index` wajib disebut');
+    assert.ok(Number(z[1]) > 9999, `z-index ${z[1]} harus di atas 9999 (navbar publik)`);
+  });
+
+  // TIGA NAVIGASI, TIGA TAUTAN LEWATI
+  //
+  // Tautan lewati harus berdiri SEBELUM navigasi yang dilewatinya dan
+  // sasarannya SESUDAH navigasi itu. Di aplikasi ini navigasinya TIDAK di
+  // layout akar: `Navbar` dipanggil di dalam 14 halaman publik, panel admin
+  // memakai `AdminShell`, dan CS memakai `CS_Layout`. Karena itu masing-masing
+  // memegang tautan dan sasarannya sendiri.
+  const NAVIGASI = [
+    { nama: 'Navbar publik', jalur: JALUR_NAVBAR, id: 'isi' },
+    { nama: 'AdminShell', jalur: JALUR_SHELL, id: 'isi-admin' },
+    { nama: 'CS_Layout', jalur: JALUR_CS, id: 'isi-cs' },
+  ];
+
+  for (const { nama, jalur, id } of NAVIGASI) {
+    it(`${nama} punya tautan lewati beserta sasarannya`, () => {
+      const kode = fs.readFileSync(jalur, 'utf8').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+
+      assert.match(kode, new RegExp(`href="#${id}"`), 'tautan lewati wajib ada');
+      assert.match(kode, /className="lewati-ke-isi"/);
+      assert.match(kode, new RegExp(`id="${id}"|id=\\{'${id}'\\}`), 'sasaran dengan id itu wajib ada');
+    });
+
+    it(`sasaran di ${nama} punya \`tabIndex={-1}\``, () => {
+      // Tanpa ini, mengklik tautan lewati hanya MENGGESER GULUNGAN halaman:
+      // fokus papan tombol tetap tertinggal di tautannya, jadi Tab berikutnya
+      // kembali ke tautan navigasi pertama dan tautannya tidak melewati apa
+      // pun. Cacat yang paling sering ada pada tautan lewati yang "sudah
+      // dipasang".
+      const kode = fs.readFileSync(jalur, 'utf8').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+      const posId = kode.indexOf(`id="${id}"`);
+
+      assert.ok(posId >= 0, `id="${id}" tidak ditemukan`);
+
+      // Dicari di dalam tag yang sama, bukan di seluruh berkas: `tabIndex={-1}`
+      // juga dipakai latar gelap drawer dan panel dialog di AdminShell, jadi
+      // pencarian global akan lulus walaupun sasarannya sendiri tidak punya.
+      const awalTag = kode.lastIndexOf('<', posId);
+      const akhirTag = kode.indexOf('>', posId);
+      const tag = kode.slice(awalTag, akhirTag);
+
+      assert.match(tag, /tabIndex=\{-1\}/, `sasaran #${id} wajib ber-tabIndex={-1}`);
+    });
+
+    it(`tautan lewati di ${nama} berdiri sebelum sasarannya`, () => {
+      // Urutan dokumen, bukan sekadar keberadaan: tautan yang tergambar SESUDAH
+      // sasarannya melewati nol elemen.
+      const kode = fs.readFileSync(jalur, 'utf8').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+
+      assert.ok(
+        kode.indexOf(`href="#${id}"`) < kode.indexOf(`id="${id}"`),
+        'tautan harus mendahului sasarannya dalam urutan dokumen'
+      );
+    });
+  }
+
+  it('layout akar TIDAK memasang tautan lewati', () => {
+    // Ini bukan kelalaian melainkan syaratnya. Kalau tautannya dipasang di
+    // layout akar, sasarannya hanya bisa membungkus `{children}` — yang MEMUAT
+    // `Navbar` itu — sehingga tautannya tidak melewati satu pun tautan
+    // navigasi, sambil tampak seperti sudah ditangani. Gerbang ini menahan
+    // "perbaikan" yang justru membatalkan ketiga tautan di atas.
+    const kode = fs
+      .readFileSync(JALUR_LAYOUT_AKAR, 'utf8')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
+
+    assert.doesNotMatch(kode, /className="lewati-ke-isi"/);
+  });
+
+  it('tidak ada `focus:outline-none` tanpa pengganti di seluruh `src/`', () => {
+    // `focus:outline-none` SENDIRIAN membuang penanda bawaan tanpa menggantinya.
+    // Digabung `focus:ring-2` ia sah — itu pilihan gaya, bukan penghapusan.
+    // Aturan global di `globals.css` memakai `:focus-visible`, yang TIDAK
+    // menang atas `focus:outline-none` pada elemen yang menuliskannya, jadi
+    // titik-titik ini tetap harus dijaga satu per satu.
+    const AKAR_SRC = path.join(__dirname, '..', 'src');
+
+    function semuaTsx(dir, hasil = []) {
+      for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) semuaTsx(penuh, hasil);
+        else if (/\.tsx?$/.test(entri.name)) hasil.push(penuh);
+      }
+      return hasil;
+    }
+
+    const berkas = semuaTsx(AKAR_SRC);
+
+    // Jaring pengaman: kalau pengumpulnya rusak, gerbang ini lulus tanpa
+    // memeriksa apa pun.
+    assert.ok(berkas.length > 100, `hanya ${berkas.length} berkas terkumpul — pengumpulnya rusak`);
+
+    const telanjang = [];
+    for (const f of berkas) {
+      // Komentar dibuang: beberapa berkas MENJELASKAN cacat lamanya dengan
+      // mengutip `focus:outline-none` di dalam prosa.
+      const kode = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+
+      for (const baris of kode.split('\n')) {
+        if (!baris.includes('focus:outline-none')) continue;
+        if (/focus:ring|focus:border|focus-visible:/.test(baris)) continue;
+        telanjang.push(path.relative(AKAR_SRC, f));
+      }
+    }
+
+    assert.deepEqual(
+      telanjang,
+      [],
+      `\`focus:outline-none\` tanpa pengganti di: ${telanjang.join(', ')}`
+    );
+  });
+
+  it('`outline-none` telanjang hanya pada elemen yang tidak bisa di-Tab', () => {
+    // `outline-none` (tanpa awalan `focus:`) membuang penanda fokus di SEGALA
+    // keadaan, bukan hanya saat difokuskan — jadi aturan `:focus-visible`
+    // global di `globals.css` pun kalah darinya pada elemen yang menuliskannya.
+    //
+    // DUA POLA YANG SAH, dan keduanya harus dibedakan dari penghapusan:
+    //
+    //   1. `outline-none focus:ring-2 focus:ring-utero` — penandanya diganti
+    //      cincin Tailwind pada elemen yang sama. Ini pola dua isian di
+    //      `AdminLoginForm`. Sah: penandanya ada, hanya bentuknya berbeda.
+    //   2. `outline-none` pada wadah ber-`tabIndex={-1}` — panel drawer admin,
+    //      yang difokuskan PROGRAM supaya pembaca layar mulai membaca dari
+    //      dalam dialog. Tidak ada pengguna papan tombol yang "berhenti" di
+    //      kotak itu.
+    //
+    // Versi pertama gerbang ini menandai pola (1) sebagai cacat: ia membaca 400
+    // aksara SETELAH `outline-none` dan menuntut `tabIndex={-1}` di dalamnya,
+    // padahal `focus:ring-2` yang menggantikannya ada di atribut `className`
+    // yang sama. Yang benar adalah membaca SELURUH tag pembawanya, lalu
+    // menerima pola (1) maupun (2).
+    const AKAR_SRC = path.join(__dirname, '..', 'src');
+
+    function semuaTsx(dir, hasil = []) {
+      for (const entri of fs.readdirSync(dir, { withFileTypes: true })) {
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) semuaTsx(penuh, hasil);
+        else if (/\.tsx?$/.test(entri.name)) hasil.push(penuh);
+      }
+      return hasil;
+    }
+
+    const berkas = semuaTsx(AKAR_SRC);
+    assert.ok(berkas.length > 100, `hanya ${berkas.length} berkas terkumpul — pengumpulnya rusak`);
+
+    const salah = [];
+    for (const f of berkas) {
+      const kode = fs
+        .readFileSync(f, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .replace(/^\s*\/\/.*$/gm, '');
+
+      // Hanya `outline-none` telanjang. `focus:outline-none` sudah dijaga
+      // gerbang di atas dengan aturannya sendiri.
+      const pola = /(?<!:)outline-none/g;
+      let cocok;
+      while ((cocok = pola.exec(kode)) !== null) {
+        // SELURUH tag pembawanya, dari `<` sebelumnya sampai `>` sesudahnya.
+        // Batas atas 4000 aksara menahan pencarian kalau `<` yang ditemukan
+        // ternyata milik tag yang jauh di atas (mis. karena `<` muncul di dalam
+        // string perbandingan).
+        const awalTag = kode.lastIndexOf('<', cocok.index);
+        const akhirTag = kode.indexOf('>', cocok.index);
+        const tag = kode.slice(
+          awalTag < 0 ? Math.max(0, cocok.index - 4000) : awalTag,
+          akhirTag < 0 ? cocok.index + 4000 : akhirTag
+        );
+
+        const adaPengganti = /focus:ring-\d|focus-visible:/.test(tag);
+        const tidakBisaDiTab = /tabIndex=\{-1\}/.test(tag);
+
+        if (!adaPengganti && !tidakBisaDiTab) {
+          salah.push(`${path.relative(AKAR_SRC, f)} (aksara ${cocok.index})`);
+        }
+      }
+    }
+
+    assert.deepEqual(
+      salah,
+      [],
+      `\`outline-none\` tanpa pengganti pada elemen yang bisa di-Tab: ${salah.join(', ')}`
+    );
+  });
+});

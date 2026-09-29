@@ -72,6 +72,24 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
   return (
     <html lang="id">
       <body>
+         {/*
+           TIDAK ADA TAUTAN "LEWATI KE ISI" DI SINI, dan itu disengaja.
+
+           Tautan lewati harus berdiri SEBELUM navigasi yang dilewatinya, dan
+           sasarannya SESUDAH navigasi itu. Di aplikasi ini navigasinya tidak
+           ada di layout akar: `Navbar` dipanggil di dalam masing-masing dari
+           14 halaman publik, panel admin memakai `AdminShell`, dan CS memakai
+           `CS_Layout`. Kalau tautannya dipasang di sini, sasarannya hanya bisa
+           membungkus `{children}` — yang MEMUAT navbar itu, sehingga tautannya
+           tidak melewati satu pun tautan navigasi.
+
+           Jadi tautan dan sasarannya tinggal bersama navigasi masing-masing:
+           lihat `src/components/Navbar.tsx`,
+           `src/app/admin/_components/AdminShell.tsx`, dan
+           `src/app/admin/_components/cs/CS_Layout.tsx`. Halaman tanpa
+           navigasi — `/admin/login` — karena itu benar tidak punya tautan
+           lewati, bukan punya tautan yang tidak melewati apa pun.
+         */}
          {/* BUNGKUS DENGAN PROVIDER AGAR BISA CEK LOGIN DI SEMUA HALAMAN */}
          <Providers>
             {children}

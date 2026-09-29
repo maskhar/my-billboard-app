@@ -191,6 +191,24 @@ export default function AdminShell({ children, menus, nama, peran }: Props) {
 
   return (
     <div className="flex min-h-screen bg-gray-100 font-sans text-slate-800">
+      {/*
+        LEWATI KE ISI, untuk seluruh panel admin.
+
+        Sidebar di bawah ini memuat tujuh tautan menu ditambah kartu akun, dan
+        ia berdiri sebelum isi halaman dalam urutan dokumen di SETIAP halaman
+        admin. Tanpa tautan ini, operator yang bekerja dengan papan tombol
+        menekan Tab melewati kedelapan kontrol itu lagi setiap kali berpindah
+        halaman.
+
+        Di bawah 768px sidebar-nya `hidden` (jadi tidak bisa di-Tab) dan
+        drawer hanya dirender saat terbuka, tapi tautan ini tetap berguna: header
+        di layar sempit masih memuat pemicu drawer dan tautan "Keluar ke Web
+        Utama" sebelum isinya.
+      */}
+      <a href="#isi-admin" className="lewati-ke-isi">
+        Lewati ke isi halaman
+      </a>
+
       {/* Sidebar layar lebar. Tetap `hidden md:flex` — yang hilang dulu adalah
           penggantinya di bawah 768px, bukan sidebar ini. */}
       <aside className="w-64 bg-[#0F172A] text-white flex-shrink-0 hidden md:flex flex-col">
@@ -282,7 +300,13 @@ export default function AdminShell({ children, menus, nama, peran }: Props) {
             <span className="hidden sm:inline">Keluar ke Web Utama</span>
           </Link>
         </header>
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 pb-32">{children}</div>
+        {/* `id`/`tabIndex` adalah sasaran tautan lewati di atas. `tabIndex={-1}`
+            wajib: tanpa itu fokus papan tombol tertinggal di tautannya dan Tab
+            berikutnya kembali ke menu pertama. Kotak fokusnya ditahan aturan
+            `[tabindex='-1']:focus-visible` di `globals.css`. */}
+        <div id="isi-admin" tabIndex={-1} className="flex-1 overflow-y-auto p-4 md:p-8 pb-32">
+          {children}
+        </div>
       </main>
     </div>
   );

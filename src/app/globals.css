@@ -2,6 +2,93 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ===========================================================================
+   Penanda fokus papan tombol, untuk SELURUH aplikasi
+   ===========================================================================
+
+   ANGKANYA DULU
+   -------------
+   Dari 117 `<button>` di `src/`, hanya 5 yang menuliskan gaya `focus:`
+   apa pun. Dari 76 `<Link>`, hanya 3. Dan `:focus-visible` — satu-satunya
+   pseudo-class yang membedakan fokus dari papan tombol dengan fokus dari
+   klik tetikus — muncul NOL kali di seluruh repo.
+
+   Itu tidak langsung berarti rusak: peramban punya penanda fokus bawaan. Yang
+   membuatnya rusak adalah `@tailwind base`, yang memuat Preflight, yang
+   menyetel `outline: 2px solid transparent` pada elemen yang difokuskan.
+   Penandanya karena itu DIGAMBAR tapi tidak berwarna — pengguna papan tombol
+   menekan Tab dan tidak ada apa pun yang bergerak di layar. Untuk aplikasi
+   yang seluruh alur bayarnya berupa tombol, itu berarti tidak ada cara
+   menyelesaikan pembelian tanpa tetikus.
+
+   KENAPA DI SINI, BUKAN DI 190 ELEMEN
+   -----------------------------------
+   Menempelkan `focus-visible:ring-2` pada setiap tombol berarti 190 suntingan
+   yang harus diingat lagi setiap kali ada tombol baru — dan tombol ke-191
+   akan lupa. Aturan di bawah berlaku untuk elemen yang bisa difokuskan, jadi
+   komponen yang belum ditulis hari ini ikut terjaga.
+
+   `:focus-visible`, BUKAN `:focus`: dengan `:focus`, setiap klik tetikus pada
+   tombol meninggalkan cincin yang menempel sampai fokusnya berpindah, dan itu
+   dulu justru alasan orang menuliskan `focus:outline-none` yang menghapus
+   penandanya sama sekali. Heuristik peramban menampilkannya untuk Tab dan
+   menyembunyikannya untuk klik.
+
+   `outline` + `outline-offset`, BUKAN `box-shadow`: outline tidak ikut
+   terpotong `overflow: hidden` milik induknya, dan di aplikasi ini penandanya
+   harus terlihat di dalam kartu, drawer, dan modal yang semuanya memotong.
+
+   Warnanya `#ce181e` — `utero.DEFAULT` dari `tailwind.config.ts`, ditulis
+   sebagai heks karena berkas CSS tidak membaca tema Tailwind. Kalau warna
+   mereknya berubah, nilai di sini ikut diubah.
+
+   Elemen yang MENULISKAN `focus:ring-*` sendiri tetap menang: Tailwind
+   memasang cincinnya lewat `box-shadow`, jadi keduanya tampil bersama, bukan
+   saling menimpa.
+   ------------------------------------------------------------------------- */
+:focus-visible {
+  outline: 2px solid #ce181e;
+  outline-offset: 2px;
+  /* Cincin merah di atas latar merah (tombol utama `bg-utero`) tidak terlihat.
+     Garis putih tipis di dalamnya membuat penandanya tampak di kedua latar,
+     tanpa perlu satu aturan per warna tombol. */
+  box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.9);
+}
+
+/* Fokus yang dipasang program pada wadah — mis. `tabIndex={-1}` pada panel
+   modal supaya pembaca layar pindah ke sana saat dibuka — bukan navigasi
+   papan tombol pengguna. Menandainya menggambar kotak di sekeliling seluruh
+   dialog, yang tidak memberi tahu apa pun tentang di mana fokusnya berada. */
+[tabindex='-1']:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
+/* LEWATI KE ISI
+   Tautan pertama di setiap halaman, tersembunyi sampai difokuskan. Tanpa ini,
+   pengguna papan tombol harus menekan Tab melewati SELURUH navbar — di menu
+   admin itu sembilan tautan — di setiap halaman sebelum mencapai isinya.
+   `clip-path` dipakai, bukan `display: none`: elemen yang disembunyikan dengan
+   `display: none` dibuang dari urutan Tab sehingga tidak bisa difokuskan sama
+   sekali, yang membatalkan seluruh gunanya. */
+.lewati-ke-isi {
+  position: absolute;
+  left: 0.5rem;
+  top: 0.5rem;
+  z-index: 10000; /* Navbar publik ber-`z-[9999]`; tautan ini harus di atasnya. */
+  clip-path: inset(50%);
+  background-color: #ce181e;
+  color: #ffffff;
+  padding: 0.625rem 1rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+.lewati-ke-isi:focus {
+  clip-path: none;
+}
+
 /* Custom Style untuk Popup Leaflet agar cantik */
 .request-popup .leaflet-popup-content-wrapper {
   padding: 0;

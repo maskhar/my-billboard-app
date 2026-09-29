@@ -99,7 +99,32 @@ const Navbar = () => {
   };
 
   return (
-    // Z-INDEX SUPER TINGGI (9999) Agar selalu di atas peta & search bar
+    <>
+    {/*
+      LEWATI KE ISI
+      -------------
+      Navbar ini memuat enam tautan di desktop dan sebelas di menu ponsel yang
+      terbuka, dan ia dipanggil di 14 halaman publik. Tanpa tautan ini, pengguna
+      papan tombol menekan Tab melewati seluruh daftar itu LAGI di setiap
+      halaman sebelum menyentuh isinya — termasuk di `/checkout`, tempat yang
+      dituju justru formulir pembayaran.
+
+      Ditaruh di sini, bukan di layout akar: tautan lewati harus berdiri SEBELUM
+      navigasi yang dilewatinya, dan navigasi aplikasi ini hidup di dalam
+      komponen ini, bukan di layout. Satu suntingan di berkas ini menutup
+      keempat belas halaman sekaligus, dan halaman publik berikutnya yang
+      memakai `Navbar` mendapatkannya tanpa diingatkan.
+
+      Gayanya di `globals.css` (`.lewati-ke-isi`): tersembunyi lewat
+      `clip-path`, bukan `display: none` — elemen yang disembunyikan dengan
+      `display: none` dibuang dari urutan Tab sehingga tidak bisa difokuskan
+      sama sekali.
+    */}
+    <a href="#isi" className="lewati-ke-isi">
+      Lewati ke isi halaman
+    </a>
+
+    {/* Z-INDEX SUPER TINGGI (9999) Agar selalu di atas peta & search bar */}
     <nav className="fixed top-0 w-full z-[9999] bg-white/95 backdrop-blur-md border-b border-gray-100 shadow-sm">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16">
@@ -257,6 +282,28 @@ const Navbar = () => {
         </div>
       )}
     </nav>
+
+    {/*
+      SASARAN TAUTAN LEWATI.
+
+      Elemen kosong, BUKAN pembungkus isi halaman: komponen ini dirender di
+      dalam masing-masing halaman, jadi ia tidak bisa membungkus apa pun yang
+      datang sesudahnya. Yang diperlukan hanya titik berhenti fokus yang berada
+      SESUDAH seluruh tautan navbar dalam urutan dokumen — dan itu persis di
+      sini.
+
+      `tabIndex={-1}` WAJIB: tanpa itu, mengklik tautan lewati hanya menggeser
+      gulungan halaman sementara fokus papan tombol tetap tertinggal di
+      tautannya, jadi Tab berikutnya kembali ke tautan navbar pertama dan
+      tautannya tidak melewati apa pun. Aturan `[tabindex='-1']:focus-visible`
+      di `globals.css` yang menahan kotak fokus supaya tidak digambar di sini.
+
+      `aria-hidden` TIDAK dipakai: elemen yang bisa menerima fokus tapi
+      disembunyikan dari pohon aksesibilitas membuat pembaca layar memindahkan
+      kursornya ke tempat yang menurut dirinya sendiri tidak ada.
+    */}
+    <div id="isi" tabIndex={-1} />
+    </>
   );
 };
 
