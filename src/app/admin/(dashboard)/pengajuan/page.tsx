@@ -13,15 +13,20 @@
 
 import Link from 'next/link';
 import { Inbox } from 'lucide-react';
-import { Prisma, StatusPengajuanTitik } from '@prisma/client';
+import { StatusPengajuanTitik } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { nilaiEnumSah } from '@/lib/enum-guard';
 import { keTautanWa } from '@/lib/telepon';
 import PengajuanClient from './PengajuanClient';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
 import { bacaKataKunci } from '@/lib/kueri-daftar';
+import { wherePengajuan } from '@/lib/saringan-daftar';
 import KotakCari from '@/components/admin/KotakCari';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import TombolEkspor from '@/components/admin/TombolEkspor';
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 import { redirect } from 'next/navigation';
 
 // Sama dengan halaman users. Tanpa `take`, halaman ini mengambil SELURUH
@@ -60,43 +65,25 @@ export default async function PengajuanTitikPage({
 
   const kataKunci = bacaKataKunci(paramsQuery?.q);
 
+  // Ekspor dibatasi pengelola, lebih sempit daripada pintu panel yang juga
+  // meloloskan CS dan OPERATOR. Isi tabel ini adalah nomor telepon dan alamat
+  // pemilik lahan yang menyerahkannya supaya DIHUBUNGI tim — bukan supaya dibawa
+  // keluar sebagai satu berkas berisi ratusan kontak. Gerbang sesungguhnya ada di
+  // route ekspor; ini hanya menentukan tombolnya digambar atau tidak.
+  const session = await getServerSession(authOptions);
+  const bolehEkspor = peranBoleh(PERAN_PENGELOLA, session?.user?.role);
+
   // Pencarian pengajuan. Tabel ini yang paling tidak punya cara dicari di antara
   // empat daftar admin: pengaju menelepon balik menyebut nama dan kotanya, dan
   // satu-satunya cara menemukan barisnya adalah membuka tab demi tab lalu
   // menggulung. Urutannya tanggal masuk, yaitu urutan yang tidak diketahui
   // penelepon.
   //
-  // `catatanAdmin` TIDAK ikut dicari walau kolomnya ada di `select`. Isinya
-  // catatan internal yang ditulis admin, dan pencarian yang menjangkaunya
-  // membuat baris muncul karena alasan yang tidak terlihat di kartunya — admin
-  // melihat hasil yang, menurut layar, tidak memuat kata yang ia cari.
-  //
-  // `AND` dengan `status` disusun eksplisit, tidak ditulis sebagai properti
-  // bersaudara: `{ status, OR: [...] }` sebetulnya juga benar (properti
-  // bersaudara di Prisma memang AND), tapi bentuk yang tertulis di sini adalah
-  // bentuk yang tidak bisa disalahbaca oleh pembaca berikutnya sebagai "status
-  // ATAU salah satu kata kunci" — yaitu pembacaan yang akan membocorkan pengajuan
-  // dari tab lain ke dalam tab yang sedang dibuka.
-  const saringanStatus: Prisma.PengajuanTitikWhereInput =
-    statusAktif === 'SEMUA' ? {} : { status: statusAktif };
-
-  const where: Prisma.PengajuanTitikWhereInput =
-    kataKunci === ''
-      ? saringanStatus
-      : {
-          AND: [
-            saringanStatus,
-            {
-              OR: [
-                { namaPemilik: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-                { nomorWa: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-                { email: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-                { kota: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-                { alamat: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-              ],
-            },
-          ],
-        };
+  // Klausanya di `wherePengajuan`, dipakai bersama route ekspor CSV — beserta
+  // alasan `catatanAdmin` tidak ikut dicari dan alasan `AND`-nya ditulis
+  // eksplisit. Ekspor yang menyusun `where`-nya sendiri menghasilkan berkas yang
+  // terbuka sempurna dengan himpunan baris yang berbeda dari layar.
+  const where = wherePengajuan(statusAktif, kataKunci);
 
   const [pengajuan, total, jumlahBaru] = await prisma.$transaction([
     prisma.pengajuanTitik.findMany({
@@ -231,13 +218,21 @@ export default async function PengajuanTitikPage({
           ke `action`: query di `action` dibuang peramban saat formulir GET
           dikirim. Menaruh `?status=BARU` di sana menghasilkan tab yang diam-diam
           kembali ke "Semua" setiap kali admin menekan Cari. */}
-      <KotakCari
-        basis="/admin/pengajuan"
-        nilai={kataKunci}
-        label="Cari pengajuan berdasarkan nama pemilik, nomor WhatsApp, email, kota, atau alamat"
-        placeholder="Cari nama, nomor WhatsApp, kota, alamat…"
-        tersembunyi={{ status: kueriAktif.status }}
-      />
+      <div className="flex flex-col gap-3 md:flex-row md:items-start">
+        <div className="flex-1">
+          <KotakCari
+            basis="/admin/pengajuan"
+            nilai={kataKunci}
+            label="Cari pengajuan berdasarkan nama pemilik, nomor WhatsApp, email, kota, atau alamat"
+            placeholder="Cari nama, nomor WhatsApp, kota, alamat…"
+            tersembunyi={{ status: kueriAktif.status }}
+          />
+        </div>
+
+        {bolehEkspor && (
+          <TombolEkspor daftar="pengajuan" parameter={kueriAktif} label="Unduh CSV" />
+        )}
+      </div>
 
       {daftar.length === 0 ? (
         // Layar kosong menjelaskan keadaannya, bukan hanya menampilkan ruang

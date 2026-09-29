@@ -5,41 +5,15 @@ import { jumlah, kurang, lebihBesar, uangUntukClient } from '@/lib/money';
 import UserClientPage from './UserClientPage';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
 import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
+// `where` dan `URUT` dipakai bersama route ekspor CSV, di
+// `@/lib/saringan-daftar`. Selama keduanya ditulis di halaman ini, berkas ekspor
+// bisa memuat himpunan baris yang berbeda dari layar tanpa satu pun tanda.
+import { KUNCI_URUT_USER, URUT_USER, whereUser } from '@/lib/saringan-daftar';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
 import { redirect } from 'next/navigation';
-
-/**
- * Urutan yang boleh diminta URL, beserta `orderBy` Prisma-nya.
- *
- * Daftarnya tertutup karena `orderBy` yang dirangkai dari teks URL berarti nama
- * kolom apa pun bisa diminta pengunjung — dan tabel ini punya kolom `password`,
- * `ktp`, dan `npwp`. Tidak satu pun dari ketiganya dirender, tapi
- * `?urut=password` yang lolos ke Prisma akan MENGURUTKAN barisnya menurut hash
- * password, dan urutan baris adalah informasi: ia membocorkan perbandingan antar
- * nilai kolom yang tidak pernah boleh terbaca siapa pun.
- *
- * Jadi peta ini bukan kenyamanan tipe, ia gerbang. Nama kunci di URL juga
- * sengaja tidak sama dengan nama kolomnya, supaya skema tabel tidak ikut
- * tertulis di bilah alamat.
- */
-const URUT: Record<string, Prisma.UserOrderByWithRelationInput> = {
-  // `terbaru` bakunya: pendaftar baru adalah yang paling sering dicari admin.
-  terbaru: { createdAt: 'desc' },
-  terlama: { createdAt: 'asc' },
-  'nama-naik': { name: 'asc' },
-  'nama-turun': { name: 'desc' },
-  'peran-naik': { role: 'asc' },
-  'peran-turun': { role: 'desc' },
-  // Mengurutkan menurut jumlah relasi, bukan kolom. Ini satu-satunya kunci yang
-  // tidak bisa ditiru di sisi client: `jumlahOrder` dihitung lewat `groupBy`
-  // TERPISAH atas 25 baris halaman ini, jadi mengurutkannya di browser hanya
-  // akan mengurutkan 25 baris itu — dan halaman 1 "menurut order terbanyak"
-  // tidak akan memuat pelanggan tersibuk yang kebetulan mendaftar tahun lalu.
-  'order-banyak': { bookings: { _count: 'desc' } },
-  'order-sedikit': { bookings: { _count: 'asc' } },
-};
-
-const KUNCI_URUT = Object.keys(URUT) as [string, ...string[]];
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 // Sejak Next 16, `searchParams` adalah sebuah Promise dan harus di-`await`
 // dulu. Sebelumnya `searchParams?.halaman` dibaca langsung dari objek Promise
@@ -57,38 +31,26 @@ export default async function ManageUsersPage({
   // yang punya riwayat panjang, halaman ini yang paling lambat dibuka
   // sekaligus paling sering dipakai admin.
   const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
-  const urutAktif = bacaPilihan(paramsQuery?.urut, KUNCI_URUT, 'terbaru');
+  const urutAktif = bacaPilihan(paramsQuery?.urut, KUNCI_URUT_USER, 'terbaru');
   const kataKunci = bacaKataKunci(paramsQuery?.q);
+
+  // Ekspor dibatasi pengelola, lebih sempit daripada pintu panel yang juga
+  // meloloskan CS dan OPERATOR. Isi tabel ini adalah daftar pelanggan beserta
+  // emailnya dan nominal belanjanya: membaca 25 baris di dalam aplikasi adalah
+  // hal lain daripada satu berkas berisi seluruh basis pelanggan yang keluar
+  // dari kendali aplikasi ini selamanya begitu tersimpan di laptop. Gerbang
+  // sesungguhnya ada di route ekspor; ini hanya menentukan tombolnya digambar.
+  const session = await getServerSession(authOptions);
+  const bolehEkspor = peranBoleh(PERAN_PENGELOLA, session?.user?.role);
 
   // Pencarian pengguna DI DATABASE. Halaman ini tidak pernah punya kotak cari:
   // satu-satunya cara menemukan satu pelanggan yang menelepon adalah menebak
   // halaman berapa ia terdaftar, dan urutan bakunya adalah tanggal daftar —
   // yaitu urutan yang tidak diketahui siapa pun yang sedang menelepon.
   //
-  // Empat kolom dicari, dan `whatsapp` yang paling penting dari keempatnya:
-  // pelanggan menelepon, layar admin menampilkan nomornya, dan itulah satu-satunya
-  // pengenal yang admin punya sebelum ia tahu nama atau emailnya.
-  //
-  // Kata kuncinya TIDAK dinormalkan ke bentuk `628…` dulu: kolomnya memang
-  // menyimpan bentuk itu, tapi `contains` dipakai untuk potongan tengah nomor —
-  // mengubah `0812` menjadi `62812` justru membuat potongan yang diketik admin
-  // tidak lagi cocok dengan apa pun.
-  //
-  // `password`, `ktp`, dan `npwp` TIDAK ikut dicari. Membuat hash password bisa
-  // dicari berarti membuatnya bisa dites lewat URL, dan nomor KTP/NPWP adalah
-  // data yang boleh dilihat pada satu profil yang sudah dibuka — bukan dijadikan
-  // kunci untuk menemukan orangnya.
-  const where: Prisma.UserWhereInput =
-    kataKunci === ''
-      ? {}
-      : {
-          OR: [
-            { name: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-            { email: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-            { whatsapp: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-            { companyName: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-          ],
-        };
+  // Empat kolom yang dicari, beserta alasan `ktp`/`npwp` tidak ikut, ada di
+  // `whereUser` — dipakai bersama route ekspornya.
+  const where = whereUser(kataKunci);
 
   // Sebelumnya query ini memakai `include: { bookings: true }` tanpa `select`,
   // sehingga SELURUH kolom User ikut terkirim ke komponen client — termasuk
@@ -107,7 +69,7 @@ export default async function ManageUsersPage({
         authProvider: true,
         createdAt: true,
       },
-      orderBy: URUT[urutAktif],
+      orderBy: URUT_USER[urutAktif],
       skip: (halamanDiminta - 1) * PER_HALAMAN,
       take: PER_HALAMAN,
     }),
@@ -229,6 +191,7 @@ export default async function ManageUsersPage({
         kataKunci={kataKunci}
         kueriAktif={kueriAktif}
         total={totalPengguna}
+        bolehEkspor={bolehEkspor}
       />
 
       <NavigasiHalaman

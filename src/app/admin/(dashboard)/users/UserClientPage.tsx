@@ -9,6 +9,7 @@ import { rupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
 import KepalaUrut from '@/components/admin/KepalaUrut';
 import KotakCari from '@/components/admin/KotakCari';
+import TombolEkspor from '@/components/admin/TombolEkspor';
 
 const GOOGLE_ICON = "https://cdn.iconscout.com/icon/free/png-256/free-google-1772223-1507807.png";
 
@@ -55,6 +56,7 @@ export default function UserClientPage({
     kataKunci,
     kueriAktif,
     total,
+    bolehEkspor,
 }: {
     users: BarisPengguna[];
     /** Kunci urut yang sedang berlaku menurut URL; dipakai kepala kolom. */
@@ -69,6 +71,15 @@ export default function UserClientPage({
     kueriAktif: Record<string, string | undefined>;
     /** Jumlah baris SELURUH hasil (bukan 25 baris halaman ini). */
     total: number;
+    /**
+     * Apakah peran yang sedang masuk boleh MENGUNDUH daftar ini.
+     *
+     * Diputuskan server dan diserahkan sebagai boolean jadi, bukan dihitung di
+     * sini dari `session`: keputusan peran tidak pernah diambil di sisi client,
+     * dan komponen ini tidak menerima `Role` sama sekali. Gerbang sesungguhnya
+     * tetap di route ekspor — ini hanya menentukan tombolnya digambar.
+     */
+    bolehEkspor: boolean;
 }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
@@ -104,13 +115,21 @@ export default function UserClientPage({
 
             {/* Urutan dibawa sebagai medan tersembunyi. Tanpa itu, menekan Cari
                 mengembalikan urutan ke bakunya tanpa satu pun tanda. */}
-            <KotakCari
-              basis="/admin/users"
-              nilai={kataKunci}
-              label="Cari pengguna berdasarkan nama, email, nomor WhatsApp, atau nama perusahaan"
-              placeholder="Cari nama, email, nomor WhatsApp, perusahaan…"
-              tersembunyi={{ urut: kueriAktif.urut }}
-            />
+            <div className="flex flex-col gap-3 md:flex-row md:items-start">
+              <div className="flex-1">
+                <KotakCari
+                  basis="/admin/users"
+                  nilai={kataKunci}
+                  label="Cari pengguna berdasarkan nama, email, nomor WhatsApp, atau nama perusahaan"
+                  placeholder="Cari nama, email, nomor WhatsApp, perusahaan…"
+                  tersembunyi={{ urut: kueriAktif.urut }}
+                />
+              </div>
+
+              {bolehEkspor && (
+                <TombolEkspor daftar="users" parameter={kueriAktif} label="Unduh CSV" />
+              )}
+            </div>
 
             {/* `overflow-hidden` dulu ada di pembungkus ini, dan yang ia
                 potong adalah kolom "Aksi" — tombol edit dan hapus di ujung

@@ -13,32 +13,28 @@ import TransactionClient, { type TransaksiUntukClient } from './TransactionClien
 import Link from 'next/link';
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { peranBoleh, PERAN_PEMBACA_PESANAN } from '@/lib/gerbang-peran';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
 import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
+// Daftar tab, status yang diwakili masing-masing, dan klausa pencariannya
+// dipakai bersama route ekspor CSV. Ekspor yang menyusun `where`-nya sendiri
+// menghasilkan berkas yang terbuka sempurna dengan himpunan baris yang berbeda
+// dari layar — dan berkas itu dipakai untuk rekonsiliasi uang.
+import { TAB_PESANAN, type TabPesanan, whereBooking } from '@/lib/saringan-daftar';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
 import KotakCari from '@/components/admin/KotakCari';
-import { PANJANG_NOMOR_PESANAN } from '@/lib/nomor-pesanan';
+import TombolEkspor from '@/components/admin/TombolEkspor';
 import { redirect } from 'next/navigation';
-
-/**
- * Tab saringan yang sah. `ALL` bukan saringan — ia berarti tidak menyaring.
- *
- * Daftarnya dituliskan, bukan disimpulkan dari deretan `if` di bawah, karena
- * nilai dari URL kini DIPERIKSA terhadapnya. Sebelumnya `paramsQuery.status`
- * diterima apa adanya: `?status=SELESAI` (nama tab dalam Bahasa Indonesia —
- * wajar diketik orang yang menyalin tulisan di tombolnya) tidak cocok dengan
- * satu pun `if`, jadi `whereClause` tetap kosong dan SELURUH transaksi
- * ditampilkan sementara tidak ada tab yang tersorot. Admin membacanya sebagai
- * hasil saringan.
- */
-const TAB_STATUS = ['ALL', 'PENDING', 'PROGRESS', 'ACTIVE', 'REFUND', 'DONE'] as const;
 
 // Label dan warna dipisah dari daftar kuncinya supaya `Record<…>` di bawah
 // memaksa setiap kunci baru punya keduanya. Sebelumnya keenam tab ditulis satu
 // per satu sebagai `<Link>`: menambah tab ketujuh berarti menyalin satu baris
 // panjang, dan satu tab pernah lahir dengan `status` yang tidak pernah ditulis
 // database (`REFUND_REQUESTED`) tanpa satu pun galat.
-const LABEL_TAB: Record<(typeof TAB_STATUS)[number], string> = {
+//
+// Daftar kuncinya sendiri (`TAB_PESANAN`) kini di `@/lib/saringan-daftar`,
+// bersama status yang diwakili masing-masing dan klausa pencariannya.
+const LABEL_TAB: Record<TabPesanan, string> = {
   ALL: 'Semua',
   PENDING: 'Pending',
   PROGRESS: 'Dikerjakan',
@@ -47,7 +43,7 @@ const LABEL_TAB: Record<(typeof TAB_STATUS)[number], string> = {
   DONE: 'Selesai',
 };
 
-const WARNA_TAB_AKTIF: Record<(typeof TAB_STATUS)[number], string> = {
+const WARNA_TAB_AKTIF: Record<TabPesanan, string> = {
   ALL: 'bg-gray-800',
   PENDING: 'bg-yellow-500',
   PROGRESS: 'bg-purple-600',
@@ -56,7 +52,7 @@ const WARNA_TAB_AKTIF: Record<(typeof TAB_STATUS)[number], string> = {
   DONE: 'bg-red-500',
 };
 
-const WARNA_TAB_HOVER: Record<(typeof TAB_STATUS)[number], string> = {
+const WARNA_TAB_HOVER: Record<TabPesanan, string> = {
   ALL: 'hover:bg-gray-50',
   PENDING: 'hover:bg-yellow-50',
   PROGRESS: 'hover:bg-purple-50',
@@ -106,12 +102,21 @@ export default async function AdminTransactionsPage({
   //    maksudnya: yang ditangani di sini adalah sesi yang tidak ada.
   const currentUserRole: Role = session?.user?.role ?? Role.USER;
 
+  // Gerbang ekspor SENGAJA lebih sempit daripada gerbang halaman ini. Layout
+  // admin meloloskan CS ke seluruh panel, dan itu wajar untuk membaca 25 baris
+  // sekali duduk di dalam aplikasi. Satu berkas berisi seluruh pesanan beserta
+  // email dan nomor WhatsApp pembelinya adalah hal yang berbeda: ia keluar dari
+  // kendali aplikasi ini selamanya begitu tersimpan di laptop. Daftarnya sama
+  // dengan `api/admin/orders/detail`, dan `peranBoleh` bertipe `Role` sehingga
+  // salah tulis di sini ditolak compiler.
+  const bolehEkspor = peranBoleh(PERAN_PEMBACA_PESANAN, currentUserRole);
+
   // `bacaPilihan`, bukan `|| 'ALL'`. Nilai asing kini jatuh ke `ALL` SECARA
   // EKSPLISIT, sehingga tab yang tersorot selalu cocok dengan baris yang
   // ditampilkan. Sebelumnya nilai asing tetap tersimpan di `filterStatus`: tidak
   // satu pun `if` di bawah cocok, `whereClause` tetap kosong, seluruh transaksi
   // ditampilkan, dan tidak ada tab yang tersorot untuk memberi tahu itu.
-  const filterStatus = bacaPilihan(paramsQuery.status, TAB_STATUS, 'ALL');
+  const filterStatus = bacaPilihan(paramsQuery.status, TAB_PESANAN, 'ALL');
 
   // Kata kunci pencarian. DI SERVER, bukan di komponen client.
   //
@@ -122,71 +127,17 @@ export default async function AdminTransactionsPage({
   // ditandai tuntas atas pencarian yang menjawab salah.
   const kataKunci = bacaKataKunci(paramsQuery.q);
 
-  // `Prisma.BookingWhereInput`, bukan `any`. Dengan `any`, nama status yang
-  // salah tulis di kanan (`'REFUND_REQUESTED'` — persis cacat yang dicatat
-  // beberapa baris di bawah) lolos pemeriksaan tipe, dan Prisma tidak
-  // mengeluhkannya saat dijalankan: ia hanya tidak cocok dengan satu baris pun,
-  // jadi tabnya tampil kosong dan terbaca sebagai "tidak ada pengajuan refund".
-  // Nama KOLOM yang salah tulis pun dulu lolos dan menjadi query yang melempar
-  // saat dijalankan, bukan saat dibangun.
-  const whereClause: Prisma.BookingWhereInput = {};
-  if (filterStatus === 'PENDING') whereClause.status = { in: ['PENDING_PAYMENT', 'PAID_CONFIRMED'] };
-  if (filterStatus === 'ACTIVE') whereClause.status = 'ACTIVE';
-  // Dulu tertulis 'REFUND_REQUESTED' — status yang tidak pernah ditulis
-  // ke database oleh kode mana pun. Yang sebenarnya dipakai saat user
-  // mengajukan refund adalah 'REVIEW_REFUND' (request-refund/route.ts).
-  // Akibatnya: pengajuan refund yang baru masuk TIDAK MUNCUL di tab Refund,
-  // dan baru terlihat setelah user mengisi nomor rekening. Permintaan yang
-  // berhenti sebelum itu tidak pernah terlihat admin.
-  if (filterStatus === 'REFUND') whereClause.status = { in: ['REVIEW_REFUND', 'PROCESS_REFUND', 'WAITING_BANK'] };
-
-  // DESIGN_RECEIVED, IN_PRODUCTION, dan INSTALLATION dulu ikut masuk tab
-  // "Selesai". Ketiganya justru pesanan yang sedang DIKERJAKAN: desain baru
-  // masuk, bahan sedang dicetak, tim sedang memasang. Akibatnya pekerjaan
-  // yang sedang berjalan terkubur di antara pesanan yang sudah tutup, dan
-  // tidak muncul di tab mana pun yang berarti "sedang dikerjakan".
-  if (filterStatus === 'PROGRESS') whereClause.status = { in: ['DESIGN_RECEIVED', 'IN_PRODUCTION', 'INSTALLATION'] };
-  if (filterStatus === 'DONE') whereClause.status = { in: ['REFUNDED', 'CANCELLED'] };
-
-  if (kataKunci !== '') {
-    // `AND`-nya implisit: `whereClause.status` dan `whereClause.OR` berdampingan
-    // di objek yang sama, dan Prisma menggabungkan properti sekerabat dengan
-    // AND. Jadi pencarian TIDAK membocorkan baris dari tab lain — admin yang
-    // mencari di tab "Refund" tetap hanya melihat pesanan refund.
-    //
-    // Nomor pesanan dicari dengan `endsWith`, bukan `contains`, dan itu bukan
-    // sekadar optimasi: yang tertera di layar, di invoice, dan yang dibacakan
-    // pembeli lewat telepon adalah `labelPesanan(id)` — 8 KARAKTER TERAKHIR id,
-    // dalam huruf besar (lihat `src/lib/nomor-pesanan.ts`). `contains` atas
-    // potongan itu mencocokkan juga bagian TENGAH cuid pesanan lain, sehingga
-    // satu nomor yang dicari memunculkan beberapa pesanan yang tidak ada
-    // hubungannya — dan admin tidak punya cara membedakan mana yang ia maksud.
-    //
-    // Awalan `#` dibuang lebih dulu: nomor yang dibaca admin di layar
-    // memuatnya, jadi ia akan ikut tersalin saat disalin-tempel.
-    //
-    // `mode: 'insensitive'` pada kolom `id` bukan kelalaian: nomor tampilannya
-    // huruf besar sedangkan cuid di database huruf kecil, jadi tanpa itu
-    // menyalin nomor dari layar TIDAK menemukan satu baris pun.
-    const nomor = kataKunci.replace(/^#/, '').trim();
-
-    whereClause.OR = [
-      // Potongan yang lebih panjang daripada nomor tampilannya tidak mungkin
-      // menjadi nomor pesanan, dan `endsWith` atasnya hanya membebani database.
-      ...(nomor !== '' && nomor.length <= PANJANG_NOMOR_PESANAN
-        ? [{ id: { endsWith: nomor, mode: Prisma.QueryMode.insensitive } }]
-        : []),
-      { billboard: { title: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
-      { user: { name: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
-      { user: { email: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
-      // Nomor WA dicari apa adanya, TANPA normalisasi. Kolomnya menyimpan bentuk
-      // `628…` (lihat `src/lib/telepon.ts`), jadi `contains` atas `812…` yang
-      // diketik admin tetap menemukannya — sementara menormalkan kata kuncinya
-      // lebih dulu akan mengubah `0812` menjadi `62812` dan membuat pencarian
-      // atas potongan tengah nomor gagal.
-      { user: { whatsapp: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } } },
-    ];
-  }
+  // Status per tab dan klausa pencariannya ada di `@/lib/saringan-daftar`,
+  // dipakai bersama route ekspor CSV. Ekspor yang menyusun `where`-nya sendiri
+  // akan menghasilkan berkas yang TERBUKA dengan sempurna dan memuat himpunan
+  // baris yang berbeda dari layar — tanpa satu pun tanda, pada berkas yang
+  // dipakai untuk rekonsiliasi uang.
+  //
+  // Dulu deretan `if` di sini pernah menulis `'REFUND_REQUESTED'`, status yang
+  // tidak pernah ditulis satu baris kode pun: pengajuan refund yang baru masuk
+  // tidak muncul di tab Refund, dan baru terlihat setelah pembeli mengisi nomor
+  // rekening. Sekarang daftar statusnya ada satu tempat, dan ada testnya.
+  const whereClause: Prisma.BookingWhereInput = whereBooking(filterStatus, kataKunci);
 
   // Relasi `user` sebelumnya diambil utuh (`user: true`), sehingga hash
   // password, otpCode, dan otpExpires milik tiap pemesan ikut terkirim ke
@@ -349,7 +300,7 @@ export default async function AdminTransactionsPage({
             Sebelumnya tautannya dirangkai dengan tangan (`?status=PENDING`),
             yang tidak punya tempat untuk membawa apa pun selain status. */}
         <div className="flex flex-wrap gap-2 p-1 bg-white border border-gray-200 rounded-lg shadow-sm">
-            {TAB_STATUS.map((kunci) => {
+            {TAB_PESANAN.map((kunci) => {
               const aktif = filterStatus === kunci;
               return (
                 <Link
@@ -373,14 +324,25 @@ export default async function AdminTransactionsPage({
           sebelumnya: yang disaringnya sekarang adalah seluruh tabel, jadi
           menaruhnya di dalam panel daftar akan menyarankan cakupan yang lebih
           sempit daripada yang sebenarnya. */}
-      <div className="mb-6">
-        <KotakCari
-          basis="/admin/orders"
-          nilai={kataKunci}
-          label="Cari pesanan berdasarkan nomor, billboard, nama, email, atau nomor WhatsApp"
-          placeholder="Cari nomor pesanan, billboard, penyewa…"
-          tersembunyi={{ status: kueriAktif.status }}
-        />
+      <div className="mb-6 flex flex-col gap-3 md:flex-row md:items-start">
+        <div className="flex-1">
+          <KotakCari
+            basis="/admin/orders"
+            nilai={kataKunci}
+            label="Cari pesanan berdasarkan nomor, billboard, nama, email, atau nomor WhatsApp"
+            placeholder="Cari nomor pesanan, billboard, penyewa…"
+            tersembunyi={{ status: kueriAktif.status }}
+          />
+        </div>
+
+        {/* Tombolnya hanya digambar untuk peran yang benar-benar boleh
+            mengunduh. Gerbang sesungguhnya ada di route — komponen ini tidak
+            menjaga apa pun — tapi tombol yang selalu tampak lalu menjawab 403
+            adalah tombol yang tampak rusak, dan CS akan melaporkannya sebagai
+            bug alih-alih memahami bahwa ekspor pesanan memang bukan haknya. */}
+        {bolehEkspor && (
+          <TombolEkspor daftar="orders" parameter={kueriAktif} label="Unduh CSV" />
+        )}
       </div>
 
       <TransactionClient

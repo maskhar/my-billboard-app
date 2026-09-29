@@ -8,9 +8,18 @@ import { angkaRupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
 import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
 import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
+// `where` dan `URUT` dipakai bersama route ekspor CSV. Selama keduanya ditulis
+// di halaman ini, berkas ekspor bisa memuat himpunan baris yang berbeda dari
+// layar tanpa satu pun tanda — dan berkas itu dipakai untuk rekonsiliasi.
+import {
+  KUNCI_URUT_BILLBOARD,
+  URUT_BILLBOARD,
+  whereBillboard,
+} from '@/lib/saringan-daftar';
 import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
 import KepalaUrut from '@/components/admin/KepalaUrut';
 import KotakCari from '@/components/admin/KotakCari';
+import TombolEkspor from '@/components/admin/TombolEkspor';
 import { redirect } from 'next/navigation';
 
 export const dynamic = 'force-dynamic';
@@ -21,35 +30,6 @@ type BillboardWithUsers = Billboard & {
   updatedBy: { id: string; name: string | null } | null;
   createdBy: { id: string; name: string | null } | null;
 }
-
-/**
- * Urutan yang boleh diminta URL, beserta `orderBy` Prisma-nya.
- *
- * Daftarnya TERTUTUP, dan itu bukan sekadar kehati-hatian: `orderBy` yang
- * dirangkai dari teks URL berarti nama kolom apa pun bisa diminta pengunjung,
- * termasuk kolom yang tidak dirender halaman ini. Prisma menolak nama yang tidak
- * dikenalnya dengan melempar — jadi `?urut=password` menghasilkan layar galat
- * penuh, dan yang lebih buruk, nama kolom yang KEBETULAN ada menjadi saluran
- * untuk menyimpulkan isi tabel dari urutan barisnya.
- *
- * Peta ini juga yang membuat kunci urutnya boleh berbeda dari nama kolom
- * database. `harga-naik` lebih jelas di URL daripada `price:asc`, dan tidak
- * membocorkan nama kolom.
- */
-const URUT: Record<string, Prisma.BillboardOrderByWithRelationInput> = {
-  // `terbaru` adalah bakunya: yang paling sering dicari admin adalah titik yang
-  // baru saja ia sunting.
-  terbaru: { updatedAt: 'desc' },
-  terlama: { updatedAt: 'asc' },
-  'judul-naik': { title: 'asc' },
-  'judul-turun': { title: 'desc' },
-  'harga-naik': { price: 'asc' },
-  'harga-turun': { price: 'desc' },
-  'status-naik': { status: 'asc' },
-  'status-turun': { status: 'desc' },
-};
-
-const KUNCI_URUT = Object.keys(URUT) as [string, ...string[]];
 
 // Sebelumnya lewat HTTP ke backend NestJS. Halaman ini Server Component dan
 // akses ke halaman admin sudah dijaga middleware, jadi query langsung sudah
@@ -115,28 +95,21 @@ export default async function AdminBillboardsPage({
   // ke 1, beserta `Infinity` dan parameter ganda (`?halaman=2&halaman=5`).
   const halamanDiminta = bacaHalaman(paramsQuery?.halaman);
 
-  const urutAktif = bacaPilihan(paramsQuery?.urut, KUNCI_URUT, 'terbaru');
+  const urutAktif = bacaPilihan(paramsQuery?.urut, KUNCI_URUT_BILLBOARD, 'terbaru');
   const kataKunci = bacaKataKunci(paramsQuery?.q);
 
   // Pencarian inventori DI DATABASE, bukan di browser. Halaman ini tidak pernah
   // punya kotak cari sama sekali — satu-satunya cara menemukan satu titik di
   // antara ribuan adalah menebak halaman berapa ia berada.
   //
-  // `sku` ikut dicari karena itulah yang tertulis di kontrak dan surat jalan,
-  // dan itulah yang dibacakan tim lapangan lewat telepon. `address` ikut karena
-  // titik lebih sering disebut lewat lokasinya daripada judulnya.
-  const where: Prisma.BillboardWhereInput =
-    kataKunci === ''
-      ? {}
-      : {
-          OR: [
-            { title: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-            { sku: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-            { address: { contains: kataKunci, mode: Prisma.QueryMode.insensitive } },
-          ],
-        };
+  // Klausanya di `@/lib/saringan-daftar`, dipakai bersama route ekspornya.
+  const where = whereBillboard(kataKunci);
 
-  const { data: billboards, total } = await getAdminBillboards(halamanDiminta, where, URUT[urutAktif]);
+  const { data: billboards, total } = await getAdminBillboards(
+    halamanDiminta,
+    where,
+    URUT_BILLBOARD[urutAktif]
+  );
   const paginasi = hitungPaginasi(halamanDiminta, total);
 
   // Urutan dan kata kunci dikumpulkan sekali, lalu dipakai pengalihan, navigasi
@@ -176,9 +149,17 @@ export default async function AdminBillboardsPage({
                 <h1 className="text-2xl font-bold text-gray-800">Inventory Billboard</h1>
                 <p className="text-gray-500 text-sm">Kelola data asset dan detail lokasi.</p>
             </div>
-            <Link href="/admin/billboards/form" className="bg-utero hover:bg-red-700 text-white px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-lg transition w-fit">
-                <Plus size={20}/> Tambah Titik Baru
-            </Link>
+            {/* Ekspor berdampingan dengan "Tambah", bukan di dalam kartu tabel:
+                keduanya tindakan atas SELURUH daftar, sedangkan yang di dalam
+                kartu adalah tindakan atas baris. Saringan yang sedang berlaku
+                ikut lewat `kueriAktif` — tombol yang tidak membawanya mengunduh
+                seluruh inventori sementara layar menampilkan hasil pencarian. */}
+            <div className="flex flex-wrap items-center gap-3">
+                <TombolEkspor daftar="billboards" parameter={kueriAktif} label="Unduh CSV" />
+                <Link href="/admin/billboards/form" className="bg-utero hover:bg-red-700 text-white px-6 py-2.5 rounded-lg font-bold flex items-center gap-2 shadow-lg transition w-fit">
+                    <Plus size={20}/> Tambah Titik Baru
+                </Link>
+            </div>
         </div>
 
         {/* Urutan ikut dibawa sebagai medan tersembunyi. Tanpa itu, menekan Cari
