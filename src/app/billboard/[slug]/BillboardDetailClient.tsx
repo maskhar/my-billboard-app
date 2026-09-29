@@ -6,14 +6,15 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import Navbar from '@/components/Navbar';
 import LocationVisualizer from '@/components/LocationVisualizer';
-import AvailabilityCalendar from '@/components/AvailabilityCalendar';
+import AvailabilityCalendar, { type RentangTerpakai } from '@/components/AvailabilityCalendar';
 import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar, MessageCircle } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
 import { arrayDariJson } from '@/lib/safe-json';
 import { specsAman } from '@/lib/spesifikasi-billboard';
 import { rupiahSingkat } from '@/lib/money';
 import type { DetailBillboardPublik, PengaturanPublik } from '@/lib/tipe-billboard';
-import { kunciTanggal, tanggalPanjang } from '@/lib/tanggal';
+import { tanggalPanjang } from '@/lib/tanggal';
+import { kunciPetak, petakDariKunci } from '@/lib/petak-kalender';
 
 // Tipe properti yang diterima dari Server Component
 //
@@ -42,7 +43,13 @@ type DetailPageClientProps = {
    * yang ada di database.
    */
   tautanWa: string | null;
-  bookedDates: { start: string; end: string }[];
+  /**
+   * Rentang terpakai sebagai kunci hari WIB. Bertipe `RentangTerpakai`, bukan
+   * `{ start, end }`: nama `end` tidak mengatakan apakah hari itu ikut
+   * terpakai, dan ketidakjelasan itu pernah membuat satu hari yang masih bisa
+   * dijual ditandai penuh pada setiap pesanan.
+   */
+  bookedDates: RentangTerpakai[];
   initialDate: string;
 };
 
@@ -52,8 +59,20 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
 
   const [selectedDate, setSelectedDate] = useState<string>(initialDate);
 
+  // `kunciPetak`, BUKAN `kunciTanggal`.
+  //
+  // `date` di sini adalah petak yang diklik pengunjung, bukan instan dari
+  // server: `react-calendar` menyusunnya `new Date(tahun, bulan, hari)` di zona
+  // peramban. `kunciTanggal()` menjawab "instan ini jatuh pada hari apa di
+  // Jakarta", dan jawabannya untuk objek seperti itu bergantung pada zona
+  // peramban — pada offset di atas +07:00 (mis. Auckland, +13) pengunjung
+  // mengeklik 1 Oktober lalu URL, kartu harga, dan tautan checkout semuanya
+  // bertuliskan 30 September. Tanggal itulah yang kemudian dikirim ke
+  // `booking/create`, jadi kesalahannya sampai ke pesanan yang tersimpan.
+  //
+  // Kedua arah konversi tinggal di `src/lib/petak-kalender.ts`.
   const handleDateSelect = (date: Date) => {
-    const dateString = kunciTanggal(date);
+    const dateString = kunciPetak(date);
     setSelectedDate(dateString);
 
     const params = new URLSearchParams(currentSearchParams);
@@ -216,10 +235,16 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
 
             {/* KALENDER */}
             <div>
+              {/* `petakDariKunci`, bukan `new Date(selectedDate)`.
+                  `new Date('2026-10-01')` dibaca sebagai tengah malam UTC, dan
+                  `react-calendar` lalu mencocokkannya dengan petak menurut
+                  tanggal LOKAL peramban — jadi di zona mana pun yang di
+                  belakang UTC, tanggal yang dipilih pengunjung disorot pada
+                  petak hari sebelumnya. */}
               <AvailabilityCalendar
                 bookedDates={bookedDates}
                 onDateSelect={handleDateSelect}
-                initialDate={selectedDate ? new Date(selectedDate) : null}
+                initialDate={petakDariKunci(selectedDate)}
               />
             </div>
           </div>

@@ -9,6 +9,7 @@ import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
 import { dekripsi } from '@/lib/rahasia';
 import { ambilIdentitasSitus } from '@/lib/identitas-situs';
 import { keTautanWa } from '@/lib/telepon';
+import { kunciTanggal } from '@/lib/tanggal';
 
 export const dynamic = 'force-dynamic';
 
@@ -228,10 +229,22 @@ export default async function DetailPage({ params, searchParams }: Props) {
     `Halo, saya ingin bertanya tentang ${rawData.title}.`
   );
 
-  // Proses data seperti biasa
-  const bookedDates = rawData.bookings.map(b => ({
-    start: new Date(b.startDate).toISOString(),
-    end: new Date(b.endDate).toISOString(),
+  // Rentang terpakai diserahkan sebagai KUNCI HARI WIB, bukan instan ISO.
+  //
+  // Sebelumnya `toISOString()`, dan peramban lalu mengubahnya kembali menjadi
+  // hari lewat `setHours(0,0,0,0)` — yaitu tengah malam di zona PERAMBAN.
+  // Pesanan yang mulai 1 Oktober WIB tersimpan `2026-09-30T17:00:00Z`, jadi
+  // pada peramban di UTC seluruh bloknya terbaca maju sehari. Konversi zona
+  // kini hanya terjadi sekali, di sini, di tempat zonanya diketahui.
+  //
+  // Namanya `sampaiEksklusif` supaya tidak bisa disalahbaca lagi: `endDate` di
+  // database adalah batas eksklusif — `booking/create` memakai
+  // `endDate: { gt: startDate }` dan constraint `booking_tanpa_tumpang_tindih`
+  // sepakat dengannya. Rumus lama menandai hari itu terpakai, sehingga satu
+  // hari yang masih bisa dijual hilang dari kalender pada setiap pesanan.
+  const bookedDates = rawData.bookings.map((b) => ({
+    mulai: kunciTanggal(b.startDate),
+    sampaiEksklusif: kunciTanggal(b.endDate),
   }));
 
   return (

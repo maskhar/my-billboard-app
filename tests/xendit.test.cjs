@@ -29957,3 +29957,365 @@ describe('kalender-ketersediaan: hari, segmen, dan jalur', () => {
     assert.doesNotMatch(kode, /useState|useEffect|useMemo|useRef|usePathname|useSearchParams/);
   });
 });
+
+// ===========================================================================
+// KALENDER KETERSEDIAAN PUBLIK: petak <-> kunci, dan endDate EKSKLUSIF
+// ===========================================================================
+const JALUR_PETAK = path.join(__dirname, '..', 'src', 'lib', 'petak-kalender.ts');
+const JALUR_KALENDER_PUBLIK = path.join(
+  __dirname, '..', 'src', 'components', 'AvailabilityCalendar.tsx'
+);
+const JALUR_DETAIL_PAGE = path.join(
+  __dirname, '..', 'src', 'app', 'billboard', '[slug]', 'page.tsx'
+);
+const JALUR_DETAIL_CLIENT = path.join(
+  __dirname, '..', 'src', 'app', 'billboard', '[slug]', 'BillboardDetailClient.tsx'
+);
+
+describe('petak-kalender: konversi petak react-calendar <-> kunci hari', () => {
+  const P = require(JALUR_PETAK);
+
+  /** Kode tanpa komentar: komentar modul ini menyebut sendiri pola yang salah. */
+  function kodeSajaPetak(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  // -------------------------------------------------------------------------
+  // kunciPetak
+  // -------------------------------------------------------------------------
+  it('kunciPetak membaca medan KALENDER LOKAL, bukan mengonversi zona', () => {
+    // Inilah bedanya dari 'kunciTanggal'. Petak react-calendar dibuat
+    // 'new Date(tahun, bulan, hari)', jadi medan lokalnya ADALAH jawabannya.
+    // Tes ini benar di zona proses mana pun justru karena kedua sisinya
+    // memakai konstruktor yang sama.
+    assert.equal(P.kunciPetak(new Date(2026, 9, 1)), '2026-10-01');
+    assert.equal(P.kunciPetak(new Date(2026, 0, 5)), '2026-01-05');
+    assert.equal(P.kunciPetak(new Date(2026, 11, 31)), '2026-12-31');
+  });
+
+  it('bulan dan hari satu angka diberi nol di depan', () => {
+    // Tanpa padStart, '2026-1-5' akan dibandingkan sebagai teks dengan
+    // '2026-10-01' dan urutannya kacau -- seluruh perbandingan '<' dan '>='
+    // di kalender bersandar pada bentuk yang tetap.
+    assert.equal(P.kunciPetak(new Date(2026, 0, 1)), '2026-01-01');
+    assert.equal(P.kunciPetak(new Date(2026, 8, 9)), '2026-09-09');
+    assert.equal(P.kunciPetak(new Date(2026, 8, 9)).length, 10);
+  });
+
+  it('kunciPetak menjawab string kosong untuk Invalid Date', () => {
+    // Nilainya masuk ke URL lewat 'params.set'. 'NaN-NaN-NaN' di '?date='
+    // akan dikirim ke server sebagai tanggal.
+    assert.equal(P.kunciPetak(new Date('bukan tanggal')), '');
+    assert.equal(P.kunciPetak(new Date(NaN)), '');
+  });
+
+  // -------------------------------------------------------------------------
+  // petakDariKunci
+  // -------------------------------------------------------------------------
+  it('petakDariKunci menyusun tanggal kalender lokal, BUKAN tengah malam UTC', () => {
+    // 'new Date("2026-10-01")' dibaca tengah malam UTC. react-calendar lalu
+    // mencocokkan petak menurut tanggal LOKAL, jadi di setiap zona di
+    // belakang UTC tanggal terpilih disorot pada petak hari sebelumnya.
+    const petak = P.petakDariKunci('2026-10-01');
+    assert.ok(petak instanceof Date);
+    assert.equal(petak.getFullYear(), 2026);
+    assert.equal(petak.getMonth(), 9, 'bulan lokal harus Oktober');
+    assert.equal(petak.getDate(), 1, 'tanggal lokal harus 1, bukan 30 September');
+    assert.equal(petak.getHours(), 0);
+  });
+
+  it('kedua arah saling membalik untuk setiap hari satu tahun penuh', () => {
+    // Bolak-balik, bukan satu contoh: pasangan konversi yang menyimpang
+    // sebelah akan menggeser tanggal, dan pergeseran sehari adalah persis
+    // cacat yang dicari berkas ini.
+    let petak = new Date(2026, 0, 1);
+    for (let i = 0; i < 365; i += 1) {
+      const kunci = P.kunciPetak(petak);
+      const balik = P.petakDariKunci(kunci);
+      assert.ok(balik, 'kunci ' + kunci + ' tidak bisa dibalik');
+      assert.equal(P.kunciPetak(balik), kunci);
+      assert.equal(balik.getTime(), petak.getTime(), 'bolak-balik menggeser ' + kunci);
+      petak = new Date(2026, 0, 1 + i + 1);
+    }
+  });
+
+  it('bentuk yang salah dijawab null, bukan Invalid Date', () => {
+    // '?date=' diisi pengunjung dan bisa berisi apa pun. 'Invalid Date'
+    // yang lolos ke react-calendar melempar saat render.
+    for (const buruk of [
+      'besok', '', '2026-10', '2026-1-1', '2026/10/01', '26-10-01',
+      '2026-10-01T00:00:00Z', '2026-10-01 ', ' 2026-10-01', null, undefined,
+    ]) {
+      assert.equal(P.petakDariKunci(buruk), null, 'menerima ' + String(buruk));
+    }
+  });
+
+  it('tanggal yang BERGULIR ditolak, bukan diterima sebagai hari lain', () => {
+    // 'new Date(2026, 12, 40)' tidak melempar, ia bergulir ke 2027-02-09 --
+    // dan hari itu lalu tampak sengaja dipilih pengunjung, lalu dikirim ke
+    // 'booking/create'. Pembacaan ulang di modulnya yang menangkap ini.
+    assert.equal(P.petakDariKunci('2026-13-01'), null, 'bulan 13');
+    assert.equal(P.petakDariKunci('2026-00-01'), null, 'bulan 00');
+    assert.equal(P.petakDariKunci('2026-10-32'), null, 'tanggal 32');
+    assert.equal(P.petakDariKunci('2026-10-00'), null, 'tanggal 00');
+    assert.equal(P.petakDariKunci('2026-02-30'), null, '30 Februari');
+
+    // Tahun kabisat tetap benar: 2028 kabisat, 2026 tidak.
+    assert.equal(P.petakDariKunci('2026-02-29'), null, '2026 bukan kabisat');
+    assert.ok(P.petakDariKunci('2028-02-29'), '2028 kabisat');
+  });
+
+  it('modul ini tidak mengimpor apa pun', () => {
+    // Dipakai dari Client Component. Satu impor 'server-only' atau 'prisma'
+    // di sini akan menariknya ke bundel browser atau menggagalkan build.
+    const kode = kodeSajaPetak(JALUR_PETAK);
+    assert.doesNotMatch(kode, /\bimport\b/);
+    assert.doesNotMatch(kode, /\brequire\(/);
+  });
+
+  it('kunciTanggal tidak pernah dipakai untuk petak, dan sebaliknya', () => {
+    // Gerbang regresi atas cacat yang baru saja ditutup: 'handleDateSelect'
+    // melewatkan petak react-calendar ke 'kunciTanggal()' -- yaitu
+    // "instan ini jatuh pada hari apa di Jakarta" atas objek yang instannya
+    // sendiri artefak zona peramban. Pada peramban di offset > +07:00
+    // (Auckland +13) pengunjung mengeklik 1 Oktober dan URL, kartu harga,
+    // serta tautan checkout semuanya bertuliskan 30 September.
+    const kode = kodeSajaPetak(JALUR_DETAIL_CLIENT);
+    assert.doesNotMatch(
+      kode, /kunciTanggal\s*\(/,
+      'BillboardDetailClient tidak boleh mengonversi petak lewat kunciTanggal'
+    );
+    assert.match(kode, /kunciPetak\(date\)/);
+    assert.match(kode, /petakDariKunci\(selectedDate\)/);
+
+    // Dan pasangannya tinggal di satu modul, bukan ditulis ulang per berkas.
+    for (const jalur of [JALUR_DETAIL_CLIENT, JALUR_KALENDER_PUBLIK]) {
+      const isi = kodeSajaPetak(jalur);
+      assert.match(isi, /from '@\/lib\/petak-kalender'/, jalur + ' tidak mengimpor modulnya');
+      assert.doesNotMatch(
+        isi, /function (kunciPetak|petakDariKunci)/,
+        jalur + ' menulis ulang salah satu arah konversi'
+      );
+    }
+  });
+});
+
+describe('AvailabilityCalendar: endDate EKSKLUSIF dan batas hari WIB', () => {
+  const P = require(JALUR_PETAK);
+
+  function kodeSajaKalender(jalur) {
+    return fs
+      .readFileSync(jalur, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+      .split(/\r?\n/)
+      .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+      .join('\n');
+  }
+
+  /**
+   * 'tileDisabled' komponennya, dijalankan atas petak.
+   *
+   * Rumusnya TIDAK disalin ke sini. Salinan yang tetap benar sementara yang
+   * dirender berubah adalah test yang melaporkan hijau atas kode yang salah,
+   * dan itu terukur: dengan rumus yang disalin, mutasi '<' -> '<=' pada
+   * komponennya tidak membunuh satu pun test dari 2139 yang ada. Karena itu
+   * rumusnya dipindahkan ke 'petakTerpakai' di modul ini, dan komponennya
+   * sekarang hanya meneruskan ke sana.
+   */
+  const petakMati = (bookedDates, kunciHariIni) => (petak) =>
+    P.petakTerpakai(bookedDates, kunciHariIni, P.kunciPetak(petak));
+
+  it('hari pada sampaiEksklusif MASIH BISA DIPILIH', () => {
+    // Ini cacat pendapatan yang ditutup: rumus lamanya
+    // 'end.setHours(23,59,59,999)' lalu 'date <= end', padahal
+    // 'booking/create' memakai 'endDate: { gt: startDate }' dan constraint
+    // 'booking_tanpa_tumpang_tindih' sepakat dengannya. Satu hari yang masih
+    // bisa dijual ditandai penuh, sekali per pesanan, selamanya, tanpa galat.
+    const mati = petakMati(
+      [{ mulai: '2026-10-01', sampaiEksklusif: '2026-10-11' }],
+      '2026-09-01'
+    );
+
+    assert.equal(mati(new Date(2026, 9, 1)), true, 'hari pertama terpakai');
+    assert.equal(mati(new Date(2026, 9, 10)), true, 'hari terakhir terpakai');
+    assert.equal(mati(new Date(2026, 9, 11)), false, 'tanggal 11 masih dijual');
+    assert.equal(mati(new Date(2026, 8, 30)), false, 'sehari sebelum mulai bebas');
+  });
+
+  it('dua pesanan berdempet tidak menyisakan lubang di tengah', () => {
+    // 'endDate' lama === 'startDate' baru adalah keadaan SAH: gerbangnya
+    // memakai 'lt'/'gt'. Rumus yang mengecualikan 'sampaiEksklusif' tanpa
+    // memasukkan 'mulai' akan menunjukkan satu hari kosong yang sebenarnya
+    // terjual, dan pengunjung yang memilihnya ditolak 409 di checkout.
+    const mati = petakMati(
+      [
+        { mulai: '2026-10-01', sampaiEksklusif: '2026-10-11' },
+        { mulai: '2026-10-11', sampaiEksklusif: '2026-10-21' },
+      ],
+      '2026-09-01'
+    );
+
+    for (let h = 1; h <= 20; h += 1) {
+      assert.equal(mati(new Date(2026, 9, h)), true, 'tanggal ' + h + ' harus terpakai');
+    }
+    assert.equal(mati(new Date(2026, 9, 21)), false, 'tanggal 21 bebas kembali');
+  });
+
+  it('rentang sehari mematikan tepat satu hari', () => {
+    const mati = petakMati(
+      [{ mulai: '2026-10-05', sampaiEksklusif: '2026-10-06' }],
+      '2026-09-01'
+    );
+    assert.equal(mati(new Date(2026, 9, 4)), false);
+    assert.equal(mati(new Date(2026, 9, 5)), true);
+    assert.equal(mati(new Date(2026, 9, 6)), false);
+  });
+
+  it('rentang kosong (mulai === sampaiEksklusif) tidak mematikan apa pun', () => {
+    // Nol hari bukan pesanan. Rumus dengan '<=' akan mematikan satu hari di
+    // sini padahal tidak ada yang membelinya.
+    const mati = petakMati(
+      [{ mulai: '2026-10-05', sampaiEksklusif: '2026-10-05' }],
+      '2026-09-01'
+    );
+    assert.equal(mati(new Date(2026, 9, 5)), false);
+  });
+
+  it('kunci kosong (Invalid Date) dimatikan, bukan diloloskan', () => {
+    // 'kunciPetak' menjawab '' untuk Invalid Date, dan '' < kunciHariIni
+    // secara kebetulan sudah true -- tapi kebetulan bukan jaminan: pada
+    // 'kunciHariIni' yang juga kosong perbandingannya false, dan petak tanpa
+    // nama lolos ke 'onDateSelect' lalu ke '?date=' yang kosong.
+    const P2 = require(JALUR_PETAK);
+    assert.equal(P2.petakTerpakai([], '2026-10-01', ''), true);
+    assert.equal(P2.petakTerpakai([], '', ''), true, 'kedua sisi kosong');
+  });
+
+  it('satu rentang yang memuat hari itu sudah cukup: some, bukan every', () => {
+    // 'every' akan membuat hari yang benar-benar terjual tampak kosong begitu
+    // ada pesanan KEDUA yang tidak memuatnya -- dan pesanan kedua adalah
+    // keadaan normal pada billboard yang laku.
+    const mati = petakMati(
+      [
+        { mulai: '2026-10-01', sampaiEksklusif: '2026-10-05' },
+        { mulai: '2026-11-01', sampaiEksklusif: '2026-11-05' },
+      ],
+      '2026-09-01'
+    );
+    assert.equal(mati(new Date(2026, 9, 2)), true, 'terjual di rentang pertama');
+    assert.equal(mati(new Date(2026, 10, 2)), true, 'terjual di rentang kedua');
+    assert.equal(mati(new Date(2026, 9, 20)), false, 'di antara keduanya bebas');
+  });
+
+  it('hari yang lewat diukur dari WIB, bukan dari zona peramban', () => {
+    // 'kunciHariIni' datang dari 'kunciTanggal(new Date())', yaitu hari WIB.
+    // Hari itu sendiri HARUS tetap bisa dipilih: '<' bukan '<='.
+    const mati = petakMati([], '2026-10-01');
+    assert.equal(mati(new Date(2026, 8, 30)), true, '30 September sudah lewat');
+    assert.equal(mati(new Date(2026, 9, 2)), false);
+
+    // Hari ini SENDIRI masih bisa dipesan: 'booking/create' menerimanya, dan
+    // mematikannya di sini menolak penjualan yang sah. Ini satu-satunya kasus
+    // yang membedakan '<' dari '<=' pada gerbang itu.
+    assert.equal(mati(new Date(2026, 9, 1)), false, 'hari ini masih bisa dipilih');
+  });
+
+  it('batas navigasi sama dengan hari WIB, bukan new Date() peramban', () => {
+    // 'minDate' menyaring LEBIH DULU daripada 'tileDisabled', jadi
+    // 'minDate={new Date()}' pada peramban yang sudah lewat tengah malam
+    // sementara Jakarta belum menghapus satu hari yang masih dijual, dan
+    // 'tileDisabled' tidak bisa mengembalikannya.
+    const batas = P.petakDariKunci('2026-10-01');
+    assert.ok(batas);
+    assert.equal(batas.getDate(), 1);
+    assert.equal(batas.getMonth(), 9);
+    assert.equal(batas.getHours(), 0, 'tengah malam lokal supaya tanggalnya sendiri lolos');
+
+    // Dan fungsinya sendiri: 'new Date()' di sini akan lolos gerbang JSX
+    // di bawah sambil tetap memakai hari peramban.
+    assert.equal(P.batasBawahNavigasi('2026-10-01').getTime(), batas.getTime());
+
+    const kode = kodeSajaKalender(JALUR_KALENDER_PUBLIK);
+    assert.doesNotMatch(
+      kode, /minDate=\{new Date\(\)\}/,
+      'minDate tidak boleh memakai hari peramban'
+    );
+    const pakai = [...kode.matchAll(/minDate=\{batasBawah\}/g)];
+    assert.equal(pakai.length, 2, 'kedua <Calendar> harus memakai batasBawah');
+  });
+
+  it('komponen tidak lagi mengubah instan menjadi hari sendiri', () => {
+    // Gerbang regresi atas cacat kedua: 'new Date(iso).setHours(0,0,0,0)'
+    // adalah tengah malam LOKAL PERAMBAN. Pesanan yang mulai 1 Oktober WIB
+    // tersimpan '2026-09-30T17:00:00Z', jadi pada peramban di UTC seluruh
+    // bloknya terbaca maju sehari. Konversi zona kini hanya terjadi di
+    // server, tempat zonanya diketahui.
+    const kode = kodeSajaKalender(JALUR_KALENDER_PUBLIK);
+    assert.doesNotMatch(kode, /setHours\(/, 'setHours berarti batas hari zona peramban');
+    assert.doesNotMatch(kode, /toISOString\(/);
+    assert.doesNotMatch(kode, /getTimezoneOffset\(/);
+    assert.doesNotMatch(kode, /new Date\([^)]*\.mulai/);
+  });
+
+  it('komponen MENERUSKAN ke petakTerpakai, tidak menulis rumusnya sendiri', () => {
+    // Bukan soal gaya. Selama rumusnya hidup sebagai closure di dalam komponen
+    // ber-JSX-dan-hook, satu-satunya cara mengujinya adalah menyalinnya --
+    // dan salinan tidak menjaga apa pun. Gerbang ini menjaga rumusnya tetap
+    // berada di tempat yang bisa di-require, supaya mutasi pada perbandingannya
+    // membunuh test.
+    const kode = kodeSajaKalender(JALUR_KALENDER_PUBLIK);
+
+    assert.match(kode, /petakTerpakai\(bookedDates, kunciHariIni, kunciPetak\(date\)\)/);
+    assert.match(kode, /batasBawahNavigasi\(kunciHariIni\)/);
+
+    // Tidak satu pun perbandingan kunci tersisa di komponennya.
+    assert.doesNotMatch(kode, /range\.sampaiEksklusif/);
+    assert.doesNotMatch(kode, /kunciHariIni\s*[<>]/);
+    assert.doesNotMatch(kode, /[<>]=?\s*kunciHariIni/);
+    assert.doesNotMatch(kode, /\.some\(|\.every\(/);
+  });
+
+  it('propnya bernama sampaiEksklusif, bukan end', () => {
+    // Nama 'end' tidak mengatakan apakah hari itu ikut terpakai, dan
+    // ketidakjelasan itulah yang melahirkan cacatnya. Nama yang memuat
+    // semantiknya membuat kesalahan yang sama tidak bisa ditulis diam-diam.
+    const kode = kodeSajaKalender(JALUR_PETAK);
+    assert.match(kode, /export type RentangTerpakai/);
+    assert.match(kode, /sampaiEksklusif: string/);
+    assert.match(kode, /mulai: string/);
+    assert.doesNotMatch(kode, /\bend: (string|Date)/);
+    assert.doesNotMatch(kode, /\bstart: (string|Date)/);
+
+    // Diteruskan dari komponennya supaya pemanggil tidak perlu tahu modul mana
+    // yang memiliki tipenya -- tapi TIDAK didefinisikan ulang di sana.
+    const komponen = kodeSajaKalender(JALUR_KALENDER_PUBLIK);
+    assert.match(komponen, /export type \{ RentangTerpakai \}/);
+    assert.doesNotMatch(komponen, /export type RentangTerpakai =/);
+  });
+
+  it('server mengirim KUNCI WIB, bukan instan ISO', () => {
+    // Satu tempat konversi, di tempat zonanya diketahui. 'toISOString()'
+    // di sini berarti peramban yang menafsirkannya kembali menjadi hari.
+    const kode = kodeSajaKalender(JALUR_DETAIL_PAGE);
+    const potong = kode.slice(kode.indexOf('const bookedDates'), kode.indexOf('return ('));
+    assert.ok(potong.length > 0);
+    assert.match(potong, /mulai: kunciTanggal\(b\.startDate\)/);
+    assert.match(potong, /sampaiEksklusif: kunciTanggal\(b\.endDate\)/);
+    assert.doesNotMatch(potong, /toISOString\(/);
+  });
+
+  it('tipe propnya dibagi, tidak ditulis dua kali', () => {
+    // Bentuk yang ditulis dua kali akan menyimpang, dan penyimpangannya di
+    // sini berarti satu sisi kembali membaca 'end'.
+    const kode = kodeSajaKalender(JALUR_DETAIL_CLIENT);
+    assert.match(kode, /type RentangTerpakai.*from '@\/components\/AvailabilityCalendar'/s);
+    assert.match(kode, /bookedDates: RentangTerpakai\[\]/);
+  });
+});
