@@ -4,6 +4,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
+import { peranBoleh, PERAN_UNGGAH_STAF } from "@/lib/gerbang-peran";
 import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
@@ -119,7 +120,7 @@ export async function POST(req: Request) {
           });
           if (!booking) return NextResponse.json({ message: "Order tidak ditemukan" }, { status: 404 });
 
-          const isStaf = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR'].includes(session.user.role);
+          const isStaf = peranBoleh(PERAN_UNGGAH_STAF, session.user.role);
           if (!isStaf && booking.userId !== session.user.id) {
               return NextResponse.json({ message: "Forbidden" }, { status: 403 });
           }

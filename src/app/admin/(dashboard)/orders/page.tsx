@@ -8,7 +8,7 @@ import {
   tenggatPelunasanLewat,
   uangMasuk,
 } from '@/lib/pembayaran';
-import { PaymentStatus, PaymentTujuan, Prisma } from '@prisma/client';
+import { PaymentStatus, PaymentTujuan, Prisma, Role } from '@prisma/client';
 import TransactionClient, { type TransaksiUntukClient } from './TransactionClient';
 import Link from 'next/link';
 import { getServerSession } from "next-auth";
@@ -45,7 +45,17 @@ export default async function AdminTransactionsPage({
 }) {
   const paramsQuery = await searchParams;
   const session = await getServerSession(authOptions);
-  const currentUserRole = session?.user?.role || 'USER';
+  // `?? Role.USER`, bukan `|| 'USER'`. Dua bedanya:
+  //
+  // 1. Nilai bakunya diambil dari enum Prisma, jadi salah tulis ditolak
+  //    compiler. Teks `'USER'` di sini melebar menjadi `string`, dan `string`
+  //    yang diteruskan ke prop bertipe `Role` baru terasa sebagai gerbang yang
+  //    selalu tertutup — tanpa satu pun galat kompilasi. Lihat
+  //    `src/lib/gerbang-peran.ts` untuk cacat yang sama di 25 route.
+  // 2. `??` hanya menangkap `null`/`undefined`. `||` juga menangkap teks
+  //    kosong — yang kebetulan tidak bisa terjadi pada enum, tapi menyamarkan
+  //    maksudnya: yang ditangani di sini adalah sesi yang tidak ada.
+  const currentUserRole: Role = session?.user?.role ?? Role.USER;
 
   const filterStatus = paramsQuery.status || 'ALL';
 

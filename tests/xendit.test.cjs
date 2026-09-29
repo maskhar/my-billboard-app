@@ -8161,10 +8161,68 @@ describe('gerbang peran admin tidak mengunci SUPER_ADMIN', () => {
     it(nama + ' menerima ADMIN dan SUPER_ADMIN', () => {
       const jalur = path.join(AKAR_API, ...bagian, 'route.ts');
       const kode = fs.readFileSync(jalur, 'utf8');
-      assert.match(kode, /SUPER_ADMIN/, nama + ' tidak menyebut SUPER_ADMIN');
-      assert.match(kode, /\[\s*['"]ADMIN['"]\s*,\s*['"]SUPER_ADMIN['"]\s*\]/, nama + ' bukan daftar peran');
+
+      // Bentuknya pindah dari array literal di tempat ke konstanta bertipe di
+      // `src/lib/gerbang-peran.ts`, dan uji ini mengikutinya. Yang dijaga tetap
+      // sama: SUPER_ADMIN tidak boleh terkunci dari route yang paling ia kuasai.
+      //
+      // Justru array literal itulah yang membuat penjagaan ini rapuh:
+      // `['ADMIN', 'SUPER_ADMINN'].includes(role)` LOLOS kompilasi karena
+      // TypeScript melebarkannya menjadi `string[]`, jadi salah tulis satu huruf
+      // mengunci peran itu tanpa satu pun galat. Konstanta `readonly Role[]`
+      // menolak teks yang bukan anggota `Role`, sehingga penjagaannya pindah dari
+      // uji ini ke compiler — yang jauh lebih sulit dilewati.
+      assert.match(
+        kode,
+        /peranBoleh\(\s*PERAN_PENGELOLA\s*,\s*session\.user\.role\s*\)/,
+        nama + ' tidak memakai gerbang PERAN_PENGELOLA'
+      );
+      assert.match(
+        kode,
+        /from ['"]@\/lib\/gerbang-peran['"]/,
+        nama + ' tidak mengimpor gerbang peran'
+      );
     });
   }
+
+  it('PERAN_PENGELOLA memuat ADMIN dan SUPER_ADMIN, dan bertipe Role', () => {
+    // Kalau isi konstantanya sendiri salah, seluruh route yang memakainya salah
+    // sekaligus — jadi isinya diperiksa di satu tempat, di sini.
+    const kode = fs.readFileSync(
+      path.join(__dirname, '..', 'src', 'lib', 'gerbang-peran.ts'),
+      'utf8'
+    );
+    assert.match(
+      kode,
+      /PERAN_PENGELOLA:\s*readonly Role\[\]\s*=\s*\[Role\.ADMIN,\s*Role\.SUPER_ADMIN\]/,
+      'PERAN_PENGELOLA bukan [Role.ADMIN, Role.SUPER_ADMIN] bertipe readonly Role[]'
+    );
+    // Parameternya wajib `Role`, bukan `string`: itulah yang membuat salah tulis
+    // tertangkap compiler.
+    assert.match(
+      kode,
+      /daftar:\s*readonly Role\[\]/,
+      'peranBoleh menerima daftar yang tidak bertipe Role[]'
+    );
+  });
+
+  it('nol gerbang peran yang masih memakai array literal di tempat', () => {
+    // Regresi yang dijaga: satu route baru yang menyalin pola lama mengembalikan
+    // seluruh kelas bug ini, karena literalnya tidak divalidasi compiler.
+    const pelanggar = [];
+    for (const jalur of berkasRoute(AKAR_API)) {
+      const kode = fs
+        .readFileSync(jalur, 'utf8')
+        .replace(/\/\*[\s\S]*?\*\//g, '')
+        .split(/\r?\n/)
+        .filter((baris) => !/^\s*(\/\/|\*)/.test(baris))
+        .join('\n');
+      if (/\[[^\]]*['"]SUPER_ADMIN['"][^\]]*\]\s*\.includes\(/.test(kode)) {
+        pelanggar.push(path.relative(AKAR_API, jalur));
+      }
+    }
+    assert.deepEqual(pelanggar, []);
+  });
 });
 
 describe('route unggah berkas dibatasi lajunya', () => {
@@ -13854,8 +13912,27 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
       !/from '.*TransactionClient'/.test(kode),
       'TransactionClient adalah pemanggilnya; mengimpor baliknya melingkar'
     );
-    // Dan komponen client ini tetap tidak boleh menarik runtime Prisma.
-    assert.ok(!/from '@prisma\/client'/.test(kode));
+    // Dan komponen client ini tetap tidak boleh menarik RUNTIME Prisma.
+    //
+    // Yang dijaga adalah impor NILAI. `import type { Role } from
+    // '@prisma/client'` terhapus seluruhnya saat build — nol byte Prisma di
+    // bundle browser — dan justru itu yang membuat prop `currentUserRole`
+    // bertipe `Role`, bukan `string`. Pola yang sama dipakai
+    // `TransactionClient.tsx`. Uji ini dulu menolak SETIAP penyebutan
+    // `@prisma/client`, jadi ia menolak satu-satunya bentuk yang aman
+    // sekaligus memaksa gerbang perannya tetap `string`.
+    // Diperiksa per PERNYATAAN, bukan lewat satu regex lintas baris: pola
+    // `import\s+([\s\S]*?)from '@prisma/client'` terlihat benar tapi cocok
+    // mulai dari impor PERTAMA di berkas sampai `@prisma/client` yang terakhir,
+    // jadi yang tertangkap adalah sepuluh impor sekaligus dan bukan yang dicari.
+    for (const pernyataan of kode.split(';')) {
+      if (!pernyataan.includes("'@prisma/client'")) continue;
+      assert.match(
+        pernyataan,
+        /import\s+type\s/,
+        'impor nilai dari @prisma/client menarik runtime Prisma ke bundle client'
+      );
+    }
   });
 
   it('extraData bertipe daftar kolom yang benar-benar diterima update-order', () => {
@@ -13949,7 +14026,25 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
 
   it('currentUserRole dipakai, bukan diterima lalu dibuang', () => {
     const kode = kodeSajaA1c(JALUR_AKSI);
-    assert.match(kode, /const ROLE_BOLEH_UBAH = \['ADMIN', 'SUPER_ADMIN'\]/);
+    // Anotasi `readonly Role[]`, BUKAN array teks polos. Tanpa anotasi itu
+    // TypeScript melebarkan daftarnya menjadi `string[]`, dan
+    // `string[].includes()` menerima teks apa pun — salah tulis satu huruf
+    // lolos kompilasi dan tombolnya hilang untuk peran yang seharusnya boleh.
+    assert.match(
+      kode,
+      /const ROLE_BOLEH_UBAH: readonly Role\[\] = \['ADMIN', 'SUPER_ADMIN'\]/
+    );
+    // `import type`, bukan impor nilai: komponen ini `'use client'`, jadi
+    // menarik nilai dari `@prisma/client` akan membawa Prisma ke bundle browser.
+    assert.match(kode, /import type \{ Role \} from '@prisma\/client'/);
+    assert.match(kode, /currentUserRole: Role;/);
+    // `as const` TIDAK boleh dipakai di sini: ia menyempitkan tuple-nya
+    // sehingga parameter `includes()` menjadi `'ADMIN' | 'SUPER_ADMIN'` dan
+    // justru MENOLAK `Role` umum. Anotasinya yang memberi validasi.
+    assert.ok(
+      !/ROLE_BOLEH_UBAH = \[[^\]]*\] as const/.test(kode),
+      '`as const` menyempitkan parameter includes() dan membuat tsc menolak Role'
+    );
     assert.match(kode, /ROLE_BOLEH_UBAH\.includes\(currentUserRole\)/);
     // Tombol pencatatan setoran juga ikut gerbang itu.
     assert.match(kode, /const bolehCatatSetoran =\s*\n?\s*bolehUbah &&/);
@@ -13960,7 +14055,9 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
     // menolak mereka. Kalau daftarnya menyimpang, tombolnya kembali muncul
     // untuk orang yang pasti ditolak setelah confirm() disetujui.
     const kode = kodeSajaA1c(JALUR_AKSI);
-    const daftar = kode.match(/const ROLE_BOLEH_UBAH = \[([^\]]+)\]/);
+    const daftar = kode.match(
+      /const ROLE_BOLEH_UBAH: readonly Role\[\] = \[([^\]]+)\]/
+    );
     assert.ok(daftar);
     const peran = [...daftar[1].matchAll(/'(\w+)'/g)].map((m) => m[1]).sort();
     assert.deepEqual(peran, ['ADMIN', 'SUPER_ADMIN']);
@@ -13972,8 +14069,17 @@ describe('pembacaan jawaban server terpusat dan komponen aksi bertipe', () => {
       const isi = fs.readFileSync(path.join(__dirname, '..', rute), 'utf8');
       assert.match(
         isi,
-        /\['ADMIN', 'SUPER_ADMIN'\]\.includes\(session\.user\.role\)/,
+        /peranBoleh\(\s*PERAN_PENGELOLA\s*,\s*session\.user\.role\s*\)/,
         `${rute} tidak lagi memakai gerbang yang sama`
+      );
+      // Kedua route memakai `PERAN_PENGELOLA` dari `src/lib/gerbang-peran.ts`,
+      // yang isinya dipastikan suite gerbang peran. Sebelumnya test ini
+      // mencocokkan array literal di kedua route — dan literal itulah cacatnya,
+      // karena `['ADMIN','SUPER_ADMINN']` pun cocok dengan pola bentuk apa pun.
+      assert.match(
+        isi,
+        /from ['"]@\/lib\/gerbang-peran['"]/,
+        `${rute} tidak mengimpor gerbang peran bersama`
       );
     }
   });

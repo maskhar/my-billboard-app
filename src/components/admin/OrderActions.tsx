@@ -12,6 +12,8 @@ import { rupiah } from '@/lib/money';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
 import { useKonfirmasi } from '@/components/ui/Konfirmasi';
+// Tipe saja — terhapus saat build, jadi tidak ada Prisma di client bundle.
+import type { Role } from '@prisma/client';
 
 /**
  * Kolom pesanan yang benar-benar dibaca komponen ini.
@@ -63,8 +65,20 @@ type DataTambahan = {
  * penekanan berakhir 403 setelah `confirm()` yang menakutkan ("status REFUNDED
  * tidak bisa dibatalkan") sudah disetujui. Yang lebih buruk, `prompt()` alasan
  * pembatalan sudah terisi dan hilang bersama penolakannya.
+ *
+ * BENTUKNYA DIVALIDASI COMPILER, DAN ITU BUKAN KERAPIAN
+ * ------------------------------------------------------
+ * Daftar ini dulu `['ADMIN', 'SUPER_ADMIN']` polos dan `currentUserRole`
+ * bertipe `string`. Dua-duanya membuat salah tulis **lolos kompilasi**: TypeScript
+ * melebarkan array literal menjadi `string[]`, dan `string[].includes(string)`
+ * menerima apa pun. Jadi `'SUPER_ADMINN'` tidak menghasilkan satu pun galat —
+ * tombolnya sekadar berhenti muncul untuk peran itu, tanpa ada yang tahu.
+ *
+ * Anotasi `readonly Role[]` menutupnya tanpa mengimpor NILAI dari
+ * `@prisma/client`: `import type` terhapus saat build, jadi client bundle tetap
+ * bersih. Pola yang sama sudah dipakai `TransactionClient.tsx`.
  */
-const ROLE_BOLEH_UBAH = ['ADMIN', 'SUPER_ADMIN'];
+const ROLE_BOLEH_UBAH: readonly Role[] = ['ADMIN', 'SUPER_ADMIN'];
 
 export default function OrderActions({
   order,
@@ -75,7 +89,7 @@ export default function OrderActions({
 }: {
   order: PesananUntukAksi;
   /** Role sesi, dari server. Menentukan apakah tombol pengubah dirender. */
-  currentUserRole: string;
+  currentUserRole: Role;
   /**
    * Apakah pesanan ini punya `Payment PAID` pokok — dihitung server dari ledger.
    *

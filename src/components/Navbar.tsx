@@ -38,6 +38,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Menu, X, User, LogOut, ChevronDown, LayoutDashboard } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
+import type { Role } from '@prisma/client';
 
 const Navbar = () => {
   const [isOpen, setIsOpen] = useState(false); // State untuk Menu Mobile
@@ -79,10 +80,15 @@ const Navbar = () => {
   // role itu, dan tidak ada kode yang menuliskannya. CS ditambahkan — ia
   // memang punya halaman sendiri di /admin dan sebelumnya tidak melihat
   // tautan menuju ke sana.
-  const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
+  //
+  // Anotasi `readonly Role[]` bukan hiasan: tanpanya daftar ini melebar menjadi
+  // `string[]`, `includes()` menerima teks apa pun, dan salah tulis satu huruf
+  // membuat tautan /admin hilang untuk peran itu tanpa satu pun galat tsc.
+  // `import type` terhapus saat build, jadi tidak ada Prisma di bundle client.
+  const adminRoles: readonly Role[] = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
   const isAdmin = session?.user?.role && adminRoles.includes(session.user.role);
 
-  const getRoleClass = (role: string | undefined | null) => {
+  const getRoleClass = (role: Role | undefined | null) => {
     if (!role) return 'bg-gray-200 text-gray-600';
     switch (role) {
       case 'SUPER_ADMIN':

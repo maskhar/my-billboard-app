@@ -3,15 +3,15 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { peranBoleh, PERAN_CHAT } from "@/lib/gerbang-peran";
 
 // Peran yang boleh membaca data percakapan pelanggan.
-const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
 
 export async function GET(req: Request) {
     // ChatSession memuat guestName, guestEmail, dan guestPhone. Tanpa gate,
     // identitas tiap pengunjung bisa diambil siapa pun yang tahu id sesinya.
     const session = await getServerSession(authOptions);
-    if (!session || !CHAT_ROLES.includes(session.user.role)) {
+    if (!session || !peranBoleh(PERAN_CHAT, session.user.role)) {
         return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 

@@ -13,6 +13,7 @@ import {
 } from '@/lib/pembayaran';
 import { PaymentStatus, PaymentTujuan } from '@prisma/client';
 import { tanggalRingkas } from '@/lib/tanggal';
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 /**
  * Kolom Payment yang cukup untuk menyusun riwayat pembayaran di invoice.
@@ -71,7 +72,7 @@ export default async function InvoicePage(props: Props) {
   // Hanya pemilik order atau admin yang boleh lihat.
   // SUPER_ADMIN sebelumnya terlewat dari daftar role, sehingga super admin
   // justru tidak bisa membuka invoice.
-  if (order.userId !== session.user.id && !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (order.userId !== session.user.id && !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
       return <div className="text-center p-10 font-bold text-red-500">Anda tidak berhak melihat invoice ini.</div>;
   }
 

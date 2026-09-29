@@ -5,6 +5,7 @@ import { useState } from 'react';
 import { signIn, signOut, getSession } from 'next-auth/react'; 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import type { Role } from '@prisma/client';
 import Navbar from '@/components/Navbar';
 // `Chrome` dari lucide dibuang: tombol Google di bawah memakai SVG logo
 // Google empat warna yang ditulis langsung di JSX, bukan ikon ini. Logo
@@ -57,7 +58,13 @@ export default function LoginPage() {
         // dan tidak pernah tertulis ke database. 'CS' ditambahkan: tanpa itu,
         // petugas CS bisa masuk lewat pintu pelanggan dan tidak pernah
         // diarahkan ke portal admin.
-        const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
+        //
+        // Anotasi `readonly Role[]`: tanpanya daftar ini `string[]`, dan salah
+        // tulis satu huruf membuat admin lolos lewat pintu pelanggan tanpa
+        // pernah diarahkan ke portal admin — dan tanpa galat kompilasi. Arah
+        // salahnya di SINI berbeda dari gerbang route: gerbang route yang rusak
+        // menutup terlalu rapat, sedangkan yang ini GAGAL mengalihkan.
+        const adminRoles: readonly Role[] = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
 
         if (userRole && adminRoles.includes(userRole)) {
             await signOut({ redirect: false });

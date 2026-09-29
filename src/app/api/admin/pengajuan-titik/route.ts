@@ -33,6 +33,7 @@ import { prisma } from '@/lib/prisma';
 import { daftarNilai, nilaiEnumSah } from '@/lib/enum-guard';
 import { StatusPengajuanTitik } from '@prisma/client';
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 // Batas panjangnya sama dengan `catatan` di formulir publik. Kolomnya `TEXT`,
 // jadi tanpa batas di sini satu permintaan bisa menyimpan megabyte teks yang
@@ -48,7 +49,7 @@ export async function POST(req: Request) {
   // `/api/admin/*` (ADMIN_ROLES di sana memuat empat role), jadi tanpa gerbang
   // kedua di sini mereka bisa menutup pengajuan sebagai `DITOLAK`. Menolak
   // penawaran lahan adalah keputusan komersial, bukan penanganan percakapan.
-  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 

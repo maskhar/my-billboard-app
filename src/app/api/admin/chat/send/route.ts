@@ -6,16 +6,16 @@ import { prisma } from "@/lib/prisma";
 import { bacaBodyJson } from "@/lib/body-json";
 import { idDariBody } from "@/lib/id-dari-body";
 import { teksPesanChat } from "@/lib/pesan-chat";
+import { peranBoleh, PERAN_CHAT } from "@/lib/gerbang-peran";
 
 // Peran yang boleh mengelola percakapan pelanggan.
-const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
 
 export async function POST(req: Request) {
   // Handler ini berada di bawah /api/admin sehingga hanya boleh dipakai staf.
   // Tanpa gate, siapa pun bisa menyisipkan pesan atas nama pengunjung ke sesi
   // mana pun dan membuka kembali sesi yang sudah ditutup.
   const session = await getServerSession(authOptions);
-  if (!session || !CHAT_ROLES.includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_CHAT, session.user.role)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

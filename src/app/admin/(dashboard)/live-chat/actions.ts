@@ -4,6 +4,7 @@
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { peranBoleh, PERAN_CHAT } from '@/lib/gerbang-peran';
 import type { HalamanPesanChat, PesanChat, SesiChat, SesiChatLengkap } from '@/lib/tipe-chat';
 import {
   PESAN_PER_HALAMAN,
@@ -15,8 +16,10 @@ import {
   urutanTerbaruDulu,
 } from '@/lib/riwayat-chat';
 
-// Peran yang boleh membaca percakapan pelanggan.
-const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
+// Peran yang boleh membaca percakapan pelanggan: `PERAN_CHAT` di
+// `src/lib/gerbang-peran.ts`, sama dengan yang dipakai keenam route
+// `api/admin/chat/*`. Sebelumnya daftar ini ditulis ulang di sini, jadi kedua
+// salinannya harus dijaga sepakat dengan tangan.
 
 /**
  * Sesi terbaru yang dimuat ke kotak masuk sekaligus.
@@ -82,7 +85,7 @@ function keTeksPesan(baris: BarisPesan): PesanChat {
 // yang memanggil endpoint action-nya langsung.
 async function pastikanBolehLihatChat() {
   const session = await getServerSession(authOptions);
-  if (!session || !CHAT_ROLES.includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_CHAT, session.user.role)) {
     throw new Error('Unauthorized');
   }
 }

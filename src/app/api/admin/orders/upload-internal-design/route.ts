@@ -16,11 +16,12 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { urlBuktiSah } from "@/lib/url-bukti";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_DESAIN_INTERNAL } from "@/lib/gerbang-peran";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session || !['ADMIN', 'SUPER_ADMIN', 'OPERATOR'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_DESAIN_INTERNAL, session.user.role)) {
       return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 

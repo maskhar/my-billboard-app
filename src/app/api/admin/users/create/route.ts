@@ -13,11 +13,12 @@ import { Role, daftarNilai, sahRole } from '@/lib/enum-guard';
 import { adalahDuplikatUnik } from '@/lib/db-error';
 import { BIAYA_HASH_SANDI, periksaSandiBaru } from '@/lib/sandi';
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session?.user || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 

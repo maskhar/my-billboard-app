@@ -43,6 +43,7 @@ import {
 import { judulSurat, sendEmail } from "@/lib/mail";
 import { nomorPesanan } from "@/lib/nomor-pesanan";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
 
 /** Penolakan yang sudah punya status HTTP-nya, dilempar dari dalam transaksi. */
 class GalatCatatPembayaran extends Error {
@@ -58,7 +59,7 @@ class GalatCatatPembayaran extends Error {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
     return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 

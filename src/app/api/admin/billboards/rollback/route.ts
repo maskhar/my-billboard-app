@@ -9,13 +9,14 @@ import { sahPublishStatus, daftarNilai, PublishStatus } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
 import { adalahDuplikatUnik } from "@/lib/db-error";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
     // Syaratnya dulu `role !== 'ADMIN'`, yang MENOLAK `SUPER_ADMIN` — sama
     // dengan kesalahan yang sudah diperbaiki di `admin/users/delete` dan
     // `admin/billboards/create`.
-    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+    if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 

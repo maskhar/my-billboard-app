@@ -6,6 +6,7 @@ import { BookingStatus, PaymentStatus, Prisma } from '@prisma/client';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { jumlah, keAngka, kurang } from '@/lib/money';
+import { peranBoleh, PERAN_OMZET } from '@/lib/gerbang-peran';
 
 // Mendefinisikan tipe data yang akan dikembalikan.
 //
@@ -22,8 +23,11 @@ export type ChartData = {
   total: number;
 };
 
-// Peran yang boleh melihat data keuangan perusahaan.
-const REVENUE_ROLES = ['ADMIN', 'SUPER_ADMIN'];
+// Peran yang boleh melihat data keuangan perusahaan: `PERAN_OMZET` di
+// `src/lib/gerbang-peran.ts`. Daftarnya dulu ditulis di sini sebagai
+// `['ADMIN', 'SUPER_ADMIN']` — array teks yang melebar menjadi `string[]`,
+// sehingga `SUPER_ADMINN` pun lolos kompilasi dan gerbangnya diam-diam
+// tertutup selamanya.
 
 // Penjaga akses untuk Server Action.
 //
@@ -33,7 +37,7 @@ const REVENUE_ROLES = ['ADMIN', 'SUPER_ADMIN'];
 // memanggilnya langsung. Karena itu tiap action harus memeriksa sesinya sendiri.
 async function pastikanBolehLihatOmzet() {
   const session = await getServerSession(authOptions);
-  if (!session || !REVENUE_ROLES.includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_OMZET, session.user.role)) {
     throw new Error('Unauthorized');
   }
 }

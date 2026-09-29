@@ -4,7 +4,7 @@
 
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import type { PaymentStatus, PaymentTujuan } from '@prisma/client';
+import type { PaymentStatus, PaymentTujuan, Role } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
 import { arrayDariJson } from '@/lib/safe-json';
@@ -75,7 +75,12 @@ export type TransaksiUntukClient = {
 
 interface Props {
   transactions: TransaksiUntukClient[];
-  currentUserRole: string;
+  // `Role`, bukan `string`. Prop ini diteruskan apa adanya ke
+  // `OrderActions`, yang memakainya sebagai gerbang tombol ubah status. Sebagai
+  // `string` ia menerima teks apa pun — termasuk salah tulis — dan gerbangnya
+  // diam-diam selalu tertutup. `import type` terhapus saat build, jadi tidak
+  // ada Prisma yang ikut ke bundle client.
+  currentUserRole: Role;
 }
 
 const LABEL_TUJUAN: Record<string, string> = {

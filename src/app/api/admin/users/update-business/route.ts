@@ -10,6 +10,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 // Hanya data profil bisnis. `role`, `password`, `email`, `isVerified`, dan
 // kolom OTP sengaja tidak ada di daftar ini.
@@ -38,7 +39,7 @@ const SELECT_AMAN = {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session?.user || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 

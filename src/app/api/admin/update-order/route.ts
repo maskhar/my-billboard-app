@@ -12,6 +12,7 @@ import { masihAdaSisa, mengandaikanUangMasuk, sisaTagihan, uangMasuk } from "@/l
 import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
 import { urlBuktiSah } from "@/lib/url-bukti";
 import { Prisma } from "@prisma/client";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
 
 /**
  * Kolom Payment yang cukup untuk menjawab "berapa uang yang sudah masuk".
@@ -25,7 +26,7 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   
   // 1. Cek Admin
-  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 

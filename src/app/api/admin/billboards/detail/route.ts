@@ -8,13 +8,13 @@ import { NextResponse } from 'next/server';
 import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
+import { peranBoleh, PERAN_PEMBACA_PANEL } from '@/lib/gerbang-peran';
 
-const ROLE_ADMIN = ['ADMIN', 'SUPER_ADMIN', 'CS', 'OPERATOR'];
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user || !ROLE_ADMIN.includes(session.user.role)) {
+  if (!session?.user || !peranBoleh(PERAN_PEMBACA_PANEL, session.user.role)) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 

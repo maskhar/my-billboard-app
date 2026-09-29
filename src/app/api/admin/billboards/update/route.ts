@@ -16,11 +16,13 @@ import {
   sahPublishStatus,
 } from "@/lib/enum-guard";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
+import { adalahDuplikatUnik } from "@/lib/db-error";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   
-  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
       return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 
@@ -239,6 +241,19 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Update Sukses!" });
 
   } catch (error) {
+      // `findFirst` di atas menangkap kasus biasa dan bisa menyebut bidangnya,
+      // tapi tidak menangkap balapan: dua admin menyimpan slug yang sama dan
+      // kedua pemeriksaan lolos sebelum salah satunya menulis. Hanya database
+      // yang melihat keduanya. Tanpa cabang ini, penolakan yang sah itu jatuh
+      // jadi "Gagal Update" 500 — admin menyangka server rusak, padahal pesan
+      // yang benar sudah ditulis di atas, hanya tidak pernah sampai.
+      if (adalahDuplikatUnik(error, "slug")) {
+          return NextResponse.json(
+              { message: "Link URL (Slug) sudah dipakai billboard lain!" },
+              { status: 409 }
+          );
+      }
+
       console.error(error);
       return NextResponse.json({ message: "Gagal Update" }, { status: 500 });
   }

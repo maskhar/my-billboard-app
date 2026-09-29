@@ -20,6 +20,8 @@ import {
   sahPublishStatus,
 } from "@/lib/enum-guard";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
+import { adalahDuplikatUnik } from "@/lib/db-error";
 
 export async function POST(req: Request) {
   try {
@@ -31,7 +33,7 @@ export async function POST(req: Request) {
     // bentuk daftar di bawah — kesalahan yang sama pernah diperbaiki di
     // `admin/users/delete/route.ts`.
     const session = await getServerSession(authOptions);
-    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+    if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 
@@ -139,13 +141,47 @@ export async function POST(req: Request) {
     const type = teksBillboard(body.type) ?? "Baliho";
     const mainImage = teksBillboard(body.mainImage) ?? "";
     const smartsucoUrl = teksBillboard(body.smartsucoUrl);
-    const slug = teksBillboard(body.slug) ?? `billboard-${Date.now()}`;
+
+    // SLUG: KOLOM UNIK, DAN SATU-SATUNYA DI SINI YANG BISA BENTROK
+    //
+    // `slug` punya `@unique` di schema. Route ini tidak pernah memeriksanya —
+    // tidak seperti `update/route.ts` yang punya `findFirst` — jadi slug yang
+    // sudah dipakai billboard lain jatuh ke `catch` umum dan admin membaca
+    // "Gagal menyimpan data" setelah mengisi seluruh form. Ia tidak diberi tahu
+    // bidang mana yang bermasalah, sehingga menekan Simpan berulang kali.
+    //
+    // Nilai bakunya juga salah. `billboard-${Date.now()}` bertumpu pada jam
+    // dinding dengan ketelitian milidetik: dua permintaan dalam milidetik yang
+    // sama menghasilkan slug identik, dan yang kedua ditolak database. Lebih
+    // penting, jam yang diputar mundur (koreksi NTP, container yang di-restore)
+    // bisa menghasilkan nilai yang SUDAH terpakai. Kolomnya sendiri sudah punya
+    // `@default(cuid())` — jadi cara yang benar adalah tidak mengirim apa pun
+    // dan membiarkan default itu bekerja.
+    const slug = teksBillboard(body.slug);
+
+    // Periksa lebih dulu bila admin memang mengirim slug, supaya pesannya
+    // menyebut bidang yang salah. Balapan yang lolos pemeriksaan ini ditangkap
+    // `catch` di bawah — dua penulis bersamaan hanya bisa dipisahkan database.
+    if (slug !== null) {
+        const slugTerpakai = await prisma.billboard.findUnique({
+            where: { slug },
+            select: { id: true },
+        });
+        if (slugTerpakai) {
+            return NextResponse.json(
+                { message: "Link URL (Slug) sudah dipakai billboard lain!" },
+                { status: 409 }
+            );
+        }
+    }
 
     // 5. SIMPAN KE DATABASE
     const newBillboard = await prisma.billboard.create({
         data: {
             title,
-            slug,
+            // `undefined` membuat Prisma memakai `@default(cuid())`; `null`
+            // akan ditolak karena kolomnya non-null.
+            ...(slug !== null ? { slug } : {}),
             sku,
             address,
             type,
@@ -181,6 +217,19 @@ export async function POST(req: Request) {
     return NextResponse.json({ message: "Billboard Berhasil Dibuat", id: newBillboard.id });
 
   } catch (error) {
+      // Balapan slug: pemeriksaan di atas lolos, lalu permintaan lain menyimpan
+      // slug yang sama sebelum yang ini sampai. Hanya database yang melihat
+      // keduanya, jadi hanya database yang bisa menolak yang kedua — dan
+      // penolakan itu adalah jawaban yang SAH, bukan server rusak. Tanpa cabang
+      // ini admin membaca "Gagal menyimpan data" untuk sesuatu yang punya pesan
+      // tepat dan bisa ia perbaiki sendiri.
+      if (adalahDuplikatUnik(error, "slug")) {
+          return NextResponse.json(
+              { message: "Link URL (Slug) sudah dipakai billboard lain!" },
+              { status: 409 }
+          );
+      }
+
       console.error("Create Error:", error);
       return NextResponse.json({ message: "Gagal menyimpan data" }, { status: 500 });
   }

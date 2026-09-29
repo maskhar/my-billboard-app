@@ -6,9 +6,9 @@ import { prisma } from "@/lib/prisma";
 import { rateLimit, rateLimitHeaders } from "@/lib/rate-limit";
 import { dekripsi } from "@/lib/rahasia";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_CHAT } from "@/lib/gerbang-peran";
 
 // Peran yang boleh memakai bantuan AI di inbox percakapan.
-const CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
 
 // Tiap panggilan endpoint ini meneruskan permintaan ke Gemini API dan
 // menghabiskan kuota berbayar. Batas dipasang per pengguna, bukan per IP,
@@ -23,7 +23,7 @@ export async function POST(req: Request) {
         // menguras kuota berbayar sekaligus membaca isi percakapan pelanggan
         // lewat konteks yang dikembalikan.
         const session = await getServerSession(authOptions);
-        if (!session || !CHAT_ROLES.includes(session.user.role)) {
+        if (!session || !peranBoleh(PERAN_CHAT, session.user.role)) {
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 

@@ -5,6 +5,7 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { idDariBody } from "@/lib/id-dari-body";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
@@ -13,7 +14,7 @@ export async function POST(req: Request) {
   // tetapi syaratnya `role !== 'ADMIN'` — yang justru MENOLAK SUPER_ADMIN.
   // Pemegang peran tertinggi tidak bisa menghapus siapa pun, dan pesan yang
   // ia terima hanya "Akses Ditolak".
-  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
       return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 

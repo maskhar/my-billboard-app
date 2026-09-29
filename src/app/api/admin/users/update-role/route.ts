@@ -6,12 +6,13 @@ import { prisma } from "@/lib/prisma";
 import { Role, daftarNilai, sahRole } from "@/lib/enum-guard";
 import { idDariBody } from "@/lib/id-dari-body";
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from "@/lib/gerbang-peran";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
 
     // Cek Keamanan: Hanya Admin/SuperAdmin yang boleh akses
-    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+    if (!session || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
         return NextResponse.json({ message: "Access Denied" }, { status: 403 });
     }
 

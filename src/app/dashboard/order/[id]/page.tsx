@@ -9,6 +9,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { angkaRupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 type Props = {
   params: Promise<{ id: string }>
@@ -32,7 +33,7 @@ export default async function OrderDetailPage(props: Props) {
   //
   // Sengaja memakai notFound(), bukan pesan "tidak berhak": pesan error akan
   // membocorkan bahwa id tersebut memang ada di database.
-  const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(session.user.role);
+  const isAdmin = peranBoleh(PERAN_PENGELOLA, session.user.role);
   if (order.userId !== session.user.id && !isAdmin) notFound();
 
   // --- HELPER FORMAT ---

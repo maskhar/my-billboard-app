@@ -11,6 +11,7 @@ import { getServerSession } from 'next-auth';
 import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { bacaBodyJson } from "@/lib/body-json";
+import { peranBoleh, PERAN_PENGELOLA } from '@/lib/gerbang-peran';
 
 // Field yang boleh diubah lewat route ini. Sengaja ditulis eksplisit:
 // `role`, `password`, `email`, `isVerified`, dan kolom OTP TIDAK ada di sini.
@@ -32,7 +33,7 @@ const SELECT_AMAN = {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
 
-  if (!session?.user || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+  if (!session?.user || !peranBoleh(PERAN_PENGELOLA, session.user.role)) {
     return NextResponse.json({ message: 'Unauthorized' }, { status: 401 });
   }
 

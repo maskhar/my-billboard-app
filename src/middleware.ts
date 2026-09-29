@@ -13,13 +13,29 @@
 
 import { withAuth } from 'next-auth/middleware';
 import { NextResponse } from 'next/server';
+import type { Role } from '@prisma/client';
 
-const ADMIN_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS', 'OPERATOR'];
+// SENGAJA BUKAN `peranBoleh` DARI `src/lib/gerbang-peran.ts`
+//
+// Modul itu mengimpor `Role` sebagai NILAI (`Role.ADMIN`), dan nilai enum
+// Prisma ikut menarik client Prisba-nya. Berkas ini berjalan di Edge runtime,
+// yang tidak menjalankan Prisma. Jadi di sini `Role` diimpor sebagai TIPE saja
+// — terhapus seluruhnya saat build — dan daftarnya diberi anotasi.
+//
+// Anotasi `readonly Role[]` itu yang penting, bukan sekadar kerapian: tanpanya
+// TypeScript melebarkan array ini menjadi `string[]`, dan `string[].includes()`
+// menerima teks apa pun. Salah tulis satu huruf (`'SUPER_ADMINN'`) lolos
+// kompilasi, gerbangnya menjadi selalu `false`, dan seluruh area /admin
+// terkunci untuk peran itu tanpa satu pun galat.
+const ADMIN_ROLES: readonly Role[] = ['ADMIN', 'SUPER_ADMIN', 'CS', 'OPERATOR'];
 
 export default withAuth(
   function middleware(req) {
     const { pathname } = req.nextUrl;
-    const role = req.nextauth.token?.role as string | undefined;
+    // `as Role | undefined`, bukan `as string | undefined`. Keduanya sama-sama
+    // cast (token JWT tidak bisa diperiksa compiler), tapi yang ini membuat
+    // `ADMIN_ROLES.includes(role)` di bawah benar-benar tervalidasi tipe.
+    const role = req.nextauth.token?.role as Role | undefined;
 
     const isAdminArea =
       pathname.startsWith('/admin') || pathname.startsWith('/api/admin');
