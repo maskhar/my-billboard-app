@@ -384,6 +384,38 @@ Jadi keluhan "RLS berantakan" perlu dirumuskan ulang: **RLS tidak berantakan —
 
 ### 4.3 Eksposur nyata: PostgREST + kunci `anon`
 
+> **VERIFIKASI 29 Sep 2026 — eksposur ini TIDAK berlaku pada kondisi hari ini.**
+> Bagian 4.3 di bawah ditulis saat status Supabase belum terverifikasi (lihat
+> poin 4-nya sendiri: "audit ini tidak melakukan panggilan jaringan"). Panggilan
+> itu sekarang sudah dilakukan, dan hasilnya membalik kesimpulannya:
+>
+> 1. **Proyek Supabase-nya sudah tidak ada.** Hostname `SUPABASE_URL` menjawab
+>    `ENOTFOUND` sementara `supabase.co` sendiri resolve normal — jadi proyeknya
+>    terhapus, bukan jaringannya yang terganggu. Tidak ada PostgREST untuk
+>    dihubungi dan tidak ada tabel untuk dibaca siapa pun.
+> 2. **`SUPABASE_API_KEY` bukan kunci Supabase.** Nilainya 46 karakter satu
+>    segmen, bukan JWT tiga segmen. Kunci `anon`/`service_role` Supabase selalu
+>    JWT, jadi nilai ini tidak dapat dipakai PostgREST sekali pun endpoint-nya
+>    hidup.
+> 3. **Nol pembaca di kode.** Tidak satu berkas pun di `src/`, `chat-server/`,
+>    atau `prisma/` menyebut Supabase, dan tidak ada paket `@supabase/*` maupun
+>    PostgREST di `package.json`. Keenam var `SUPABASE_*` murni menganggur.
+> 4. **Database yang sungguh dipakai bukan Supabase.** `DATABASE_URL` menunjuk
+>    `localhost:15436/utero-cloud-db`. Di sana: 12 tabel, `rowsecurity` nol,
+>    policy nol — tetapi juga **role `anon`/`authenticated` tidak ada**, dan
+>    satu-satunya grantee adalah role login aplikasi itu sendiri (84 hak).
+>    Tidak ada role publik yang bisa mencabut apa pun darinya.
+>
+> Yang masih benar dan belum dilunasi: role aplikasinya **superuser dengan
+> `rolbypassrls`**, sehingga RLS tidak akan pernah berlaku atasnya. Itu utang
+> nyata, tetapi perbaikannya adalah memindahkan Prisma ke role non-superuser —
+> butuh migration dan rotasi kredensial, bukan skrip Bagian 6. Lihat peringatan
+> di kepala Bagian 6.
+>
+> Konsekuensi untuk pembaca: **jangan menjalankan skrip Bagian 6 pada database
+> ini.** Alasannya ada di Bagian 6.
+
+
 Nama variabel di `.env` (nilai diredaksi seluruhnya):
 
 ```
@@ -678,7 +710,33 @@ datasource db {
 
 ---
 
-## 6. Skrip Hardening RLS — siap jalan
+## 6. Skrip Hardening RLS — **JANGAN DIJALANKAN pada database saat ini**
+
+> **STATUS 29 Sep 2026: skrip ini tidak dapat dipakai, dan menjalankannya akan
+> memutus aplikasi.** Ia ditulis untuk proyek Supabase; database yang sungguh
+> dipakai bukan Supabase (lihat kotak verifikasi di §4.3). Tiga alasan konkret:
+>
+> 1. **Langkah 2 tidak punya sasaran.** `REVOKE ... FROM anon, authenticated`
+>    gagal karena kedua role itu **tidak ada** di database ini. Di Postgres,
+>    `REVOKE` kepada role yang tidak ada adalah galat, dan karena seluruh skrip
+>    ada di dalam satu `BEGIN`, galat itu me-rollback semuanya — termasuk
+>    langkah 1 yang sudah berjalan.
+> 2. **Langkah 3 memutus aplikasi bila skripnya "diperbaiki" agar lolos.**
+>    Ia membuat role baru `app_prisma` dan memberinya policy penuh, sementara
+>    `.env` masih menunjuk role yang lama. Langkah 1 memasang
+>    `FORCE ROW LEVEL SECURITY`, yang berlaku juga bagi pemilik tabel — jadi
+>    begitu Prisma dipindahkan ke role non-superuser tanpa policy untuknya,
+>    **setiap query ditolak**. Kata sandinya pun masih literal
+>    `'REPLACE_WITH_STRONG_SECRET'`.
+> 3. **Langkah 4 tidak ada gunanya.** `COMMENT ON SCHEMA public IS NULL` adalah
+>    cara menyembunyikan schema dari PostgREST. Tidak ada PostgREST di sini.
+>
+> Yang sah tersisa dari butir ini — memindahkan Prisma dari role superuser
+> `rolbypassrls` ke role biasa, dengan RLS sebagai pertahanan berlapis — **butuh
+> migration dan rotasi kredensial**, jadi harus diangkat sebagai fasenya sendiri
+> bersama 3.22 dan 6.22. Skrip di bawah dibiarkan utuh sebagai rujukan bila
+> proyek ini kelak benar-benar pindah ke Supabase; jangan menyalinnya apa adanya
+> ke database non-Supabase.
 
 Jalankan di **Supabase SQL Editor** (sebagai `postgres`). Skrip bersifat idempoten dan **tidak akan memutus Prisma**, karena role `postgres` mem-bypass RLS.
 

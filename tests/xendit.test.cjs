@@ -25162,3 +25162,131 @@ describe('booking/create menjaga durasi dan rentang tanggal', () => {
     assert.equal(fake.jumlahFindFirst(), 0, 'transaksi dibuka untuk billboard tertutup');
   });
 });
+
+
+// ---------------------------------------------------------------------------
+// Butir audit 3.21: eksposur PostgREST Supabase.
+//
+// Laporan `[02]` Bagian 4.3 menilai ini CRITICAL: dengan nol policy RLS, siapa
+// pun yang tahu `SUPABASE_URL` bisa menarik seluruh tabel `User` lewat
+// PostgREST — termasuk hash bcrypt, `otpCode` (jalan pengambilalihan akun),
+// `ktp`, `npwp`, dan seluruh `SystemSetting` berisi API key plaintext.
+//
+// Verifikasi 29 Sep 2026 membalik kesimpulan itu: proyek Supabase-nya sudah
+// tidak ada (hostname `ENOTFOUND` sementara `supabase.co` resolve normal),
+// `SUPABASE_API_KEY` bukan JWT sehingga tidak bisa dipakai PostgREST, dan nol
+// berkas di repo menyebut Supabase.
+//
+// Test di bawah TIDAK mengulang verifikasi itu — memeriksa DNS atau `.env`
+// dalam test berarti test yang gagal di mesin orang lain dan membaca berkas
+// rahasia. Yang dijaganya adalah satu-satunya bagian dari kesimpulan itu yang
+// bisa berubah tanpa disadari: **nol pembaca Supabase di kode**. Begitu ada
+// yang memasang `@supabase/supabase-js` lalu memanggilnya dari halaman publik,
+// seluruh penilaian 3.21 batal dan hash password kembali terbuka — dan tidak ada
+// apa pun hari ini yang akan mengabarkannya. Test inilah yang mengabarkan.
+describe('audit 3.21 — tidak ada klien Supabase yang masuk kembali diam-diam', () => {
+  const AKAR = path.join(__dirname, '..');
+
+  function berkasSumber() {
+    const hasil = [];
+    const lewati = new Set(['node_modules', '.next', '.git', 'dist', 'build', '.claude']);
+
+    function jelajah(dir) {
+      let isi;
+      try {
+        isi = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const entri of isi) {
+        if (lewati.has(entri.name)) continue;
+        const penuh = path.join(dir, entri.name);
+        if (entri.isDirectory()) {
+          jelajah(penuh);
+        } else if (/\.(ts|tsx|js|jsx|cjs|mjs)$/.test(entri.name)) {
+          hasil.push(penuh);
+        }
+      }
+    }
+
+    for (const sub of ['src', 'chat-server', 'prisma']) {
+      jelajah(path.join(AKAR, sub));
+    }
+    return hasil;
+  }
+
+  it('nol dependensi Supabase atau PostgREST di package.json', () => {
+    const pkg = JSON.parse(fs.readFileSync(path.join(AKAR, 'package.json'), 'utf8'));
+    const semua = Object.keys({
+      ...(pkg.dependencies || {}),
+      ...(pkg.devDependencies || {}),
+      ...(pkg.peerDependencies || {}),
+      ...(pkg.optionalDependencies || {}),
+    });
+
+    const tersangka = semua.filter((nama) => /supabase|postgrest/i.test(nama));
+    assert.deepEqual(
+      tersangka,
+      [],
+      'paket Supabase/PostgREST terpasang — penilaian audit 3.21 ("nol pembaca ' +
+        'Supabase") batal, dan eksposur hash password di [02] §4.3 kembali ' +
+        'berlaku. Verifikasi ulang RLS sebelum menghapus test ini: ' +
+        tersangka.join(', ')
+    );
+  });
+
+  it('nol berkas sumber mengimpor atau memanggil Supabase', () => {
+    const pelanggar = [];
+
+    for (const berkas of berkasSumber()) {
+      const isi = fs.readFileSync(berkas, 'utf8');
+      // Bukan sekadar kata "supabase": yang berbahaya adalah IMPOR klien dan
+      // pemanggilan REST-nya. Pencocokan kata lepas akan tersandung komentar
+      // yang justru menjelaskan kenapa Supabase tidak dipakai.
+      const pola = [
+        /from\s+['"]@supabase\//,
+        /require\(\s*['"]@supabase\//,
+        /createClient\s*\(\s*process\.env\.SUPABASE/,
+        /supabase\.co\/rest\/v1/,
+      ];
+      if (pola.some((p) => p.test(isi))) {
+        pelanggar.push(path.relative(AKAR, berkas));
+      }
+    }
+
+    assert.deepEqual(
+      pelanggar,
+      [],
+      'klien Supabase dipakai di berkas berikut. Keamanan tabel di Supabase ' +
+        'sepenuhnya bergantung pada RLS, dan repo ini punya nol CREATE POLICY ' +
+        '(lihat audit 3.20) — jadi pemakaian ini membuka seluruh tabel User ' +
+        'termasuk hash password kepada siapa pun yang punya anon key: ' +
+        pelanggar.join(', ')
+    );
+  });
+
+  it('nol var SUPABASE_* berawalan NEXT_PUBLIC_ di berkas contoh env', () => {
+    // `.env` asli tidak dibaca test ini — berkas itu rahasia dan berbeda di
+    // tiap mesin. `.env.example` yang di-commit adalah kontrak konfigurasinya,
+    // dan di situlah kebocoran ke bundel klien akan pertama kali muncul:
+    // Next.js meng-inline setiap `NEXT_PUBLIC_*` ke JavaScript yang dikirim ke
+    // browser, jadi kunci apa pun dengan awalan itu bukan lagi rahasia.
+    const contoh = path.join(AKAR, '.env.example');
+    if (!fs.existsSync(contoh)) return;
+
+    const nama = fs
+      .readFileSync(contoh, 'utf8')
+      .split(/\r?\n/)
+      .map((baris) => (baris.match(/^\s*([A-Za-z0-9_]+)\s*=/) || [])[1])
+      .filter(Boolean);
+
+    const bocor = nama.filter((n) => /^NEXT_PUBLIC_.*(SUPABASE|ANON_KEY)/i.test(n));
+    assert.deepEqual(
+      bocor,
+      [],
+      'kunci Supabase berawalan NEXT_PUBLIC_ akan di-inline ke bundel browser ' +
+        'oleh Next.js, jadi nilainya terbaca siapa pun yang membuka situs: ' +
+        bocor.join(', ')
+    );
+  });
+});
