@@ -52,7 +52,7 @@ const Navbar = () => {
           {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas) */}
           <div className="hidden md:flex items-center space-x-8">
               <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Home</Link>
-              <Link href="/list" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
+              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
               <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
           </div>
 
@@ -152,7 +152,7 @@ const Navbar = () => {
 
                 {/* Link Navigasi Biasa */}
                 <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏠 Home</Link>
-                <Link href="/list" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
+                <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
                 <Link href="/about" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏢 Tentang Kami</Link>
                 
                 {/* Tombol CTA dipindah kesini untuk mobile */}
