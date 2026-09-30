@@ -43,6 +43,32 @@ export default function BookingCard({ order }: { order: any }) {
 
   // LOGIKA 2: HANDLING TOMBOL UTAMA
 
+  // Helper POST JSON: cek res.ok, kembalikan true hanya kalau server sukses.
+  const postJson = async (endpoint: string, payload: object, actionLabel: string): Promise<boolean> => {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      // Endpoint diawali '/' diarahkan ke Next.js API route (server-side),
+      // selain itu diteruskan langsung ke backend.
+      const url = endpoint.startsWith('/') ? endpoint : `${apiUrl}${endpoint}`;
+      try {
+          const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+          });
+
+          if (!res.ok) {
+              const data = await res.json().catch(() => null);
+              const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+              alert(`❌ Gagal ${actionLabel}: ${msg}`);
+              return false;
+          }
+          return true;
+      } catch (e) {
+          alert(`❌ Gagal ${actionLabel}: tidak bisa menghubungi server.`);
+          return false;
+      }
+  };
+
   // A. Upload File Desain ke Server
     const handleDesignSubmit = async (url: string) => {
     setLoading(true);
@@ -101,14 +127,11 @@ export default function BookingCard({ order }: { order: any }) {
   const handleCancelPending = async () => {
       if(!confirm("Yakin mau membatalkan pesanan?")) return;
       setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/cancel`, { 
-        method: 'POST', 
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ orderId: order.id }) 
-      });
+      const ok = await postJson('/api/booking/cancel', { orderId: order.id }, 'membatalkan pesanan');
       setLoading(false);
-      router.refresh(); 
+      if (!ok) return;
+      alert("✅ Pesanan berhasil dibatalkan.");
+      router.refresh();
   };
 
   // E. Simulasi Bayar
@@ -116,19 +139,12 @@ export default function BookingCard({ order }: { order: any }) {
        const confirmed = confirm(`[SIMULASI XENDIT]\n\nBayar tagihan sebesar Rp ${order.totalPrice.toLocaleString('id-ID')}?`);
        if (!confirmed) return;
        setLoading(true);
-              const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-       try {
-        const res = await fetch(`${apiUrl}/api/payments/notify`, { 
-          method: 'POST', 
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id }) 
-        });
-        if(res.ok) {
-            alert("Pembayaran Diterima! Status menunggu verifikasi Admin.");
-            router.refresh();
-        }
-       } catch(e) {}
+       // lewat Next.js API route supaya PAYMENT_WEBHOOK_SECRET tidak pernah masuk browser
+       const ok = await postJson('/api/payment/notify', { orderId: order.id }, 'memproses pembayaran');
        setLoading(false);
+       if (!ok) return;
+       alert("✅ Pembayaran Diterima! Status menunggu verifikasi Admin.");
+       router.refresh();
   };
 
   // F. Submit Alasan Refund
@@ -136,14 +152,10 @@ export default function BookingCard({ order }: { order: any }) {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/request-refund`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ step: 'reason', orderId: order.id, reason: form.get("reason") })
-      });
-      alert("Permintaan dikirim. Menunggu persetujuan Admin.");
+      const ok = await postJson('/api/booking/request-refund', { step: 'reason', orderId: order.id, reason: form.get("reason") }, 'mengirim alasan pembatalan');
       setLoading(false);
+      if (!ok) return;
+      alert("✅ Permintaan dikirim. Menunggu persetujuan Admin.");
       setModalType('NONE');
       router.refresh();
   }
@@ -153,19 +165,15 @@ export default function BookingCard({ order }: { order: any }) {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/bookings/request-refund`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ 
-              step: 'bank', 
-              orderId: order.id, 
-              bankName: form.get("bankName"), 
-              bankAccount: form.get("bankAccount") 
-          })
-      });
-      alert("Rekening disimpan. Dana diproses Admin.");
+      const ok = await postJson('/api/booking/request-refund', {
+          step: 'bank',
+          orderId: order.id,
+          bankName: form.get("bankName"),
+          bankAccount: form.get("bankAccount")
+      }, 'menyimpan nomor rekening');
       setLoading(false);
+      if (!ok) return;
+      alert("✅ Rekening disimpan. Dana diproses Admin.");
       setModalType('NONE');
       router.refresh();
   }
