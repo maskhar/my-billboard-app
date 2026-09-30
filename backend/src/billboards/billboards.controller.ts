@@ -1,27 +1,23 @@
 // backend/src/billboards/billboards.controller.ts
-import { Controller, Get, Param, NotFoundException, Patch, Body, Post, Delete, UseGuards, Req } from '@nestjs/common';
+import { Controller, Get, Param, NotFoundException, Patch, Body, Post, Delete } from '@nestjs/common';
 import { BillboardsService } from './billboards.service';
 import { CreateBillboardDto } from './dto/create-billboard.dto';
 import { UpdateBillboardDto } from './dto/update-billboard.dto';
-import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Public } from '../auth/public.decorator';
 import { QuickUpdateBillboardDto } from './dto/quick-update-billboard.dto';
 
 @Controller('api/billboards')
-@UseGuards(JwtAuthGuard)
 export class BillboardsController {
   constructor(private readonly billboardsService: BillboardsService) {}
 
   @Post()
-  create(@Body() createBillboardDto: CreateBillboardDto, @Req() req: any) {
-    const userId = req.user.userId;
-    return this.billboardsService.create(createBillboardDto, userId);
+  create(@Body() createBillboardDto: CreateBillboardDto) {
+    return this.billboardsService.create(createBillboardDto);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @Body() updateBillboardDto: UpdateBillboardDto, @Req() req: any) {
-    const userId = req.user.userId;
-    return this.billboardsService.update(id, updateBillboardDto, userId);
+  update(@Param('id') id: string, @Body() updateBillboardDto: UpdateBillboardDto) {
+    return this.billboardsService.update(id, updateBillboardDto);
   }
 
   @Delete(':id')
@@ -67,15 +63,13 @@ export class BillboardsController {
   }
 
   @Post('rollback')
-  rollback(@Body('historyId') historyId: string, @Req() req: any) {
-    const userId = req.user.userId;
-    return this.billboardsService.rollback(historyId, userId);
+  rollback(@Body('historyId') historyId: string, @Body('adminEmail') adminEmail?: string) {
+    return this.billboardsService.rollback(historyId, adminEmail);
   }
 
   @Patch(':id/quick-update')
-  quickUpdate(@Param('id') id: string, @Body() quickUpdateDto: QuickUpdateBillboardDto, @Req() req: any) {
-    const userId = req.user.userId;
-    return this.billboardsService.quickUpdate(id, quickUpdateDto, userId);
+  quickUpdate(@Param('id') id: string, @Body() quickUpdateDto: QuickUpdateBillboardDto) {
+    return this.billboardsService.quickUpdate(id, quickUpdateDto);
   }
 }
 

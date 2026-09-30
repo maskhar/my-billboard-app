@@ -10,7 +10,10 @@ import { assertAdmin } from '../common/admin-check.helper';
 export class BillboardsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createBillboardDto: CreateBillboardDto, userId: string) {
+  async create(createBillboardDto: CreateBillboardDto) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    const admin = await assertAdmin(this.prisma, createBillboardDto.adminEmail);
+
     const {
       sizeH,
       sizeW,
@@ -20,7 +23,25 @@ export class BillboardsService {
       material,
       adminOptions,
       gallery,
-      ...rest
+    } = createBillboardDto;
+
+    // Whitelist: HANYA kolom yang benar-benar ada di model Billboard (prisma/schema.prisma).
+    // Jangan pakai spread ...rest — field asing (desc, adminEmail, createdBy, updatedBy, history)
+    // akan membuat Prisma error "Unknown argument".
+    const {
+      slug,
+      title,
+      sku,
+      address,
+      type,
+      price,
+      lat,
+      lng,
+      status,
+      publishStatus,
+      mainImage,
+      videoUrl,
+      smartsucoUrl,
     } = createBillboardDto;
 
     const packedSpecs = JSON.stringify([
@@ -41,23 +62,25 @@ export class BillboardsService {
     try {
       const newBillboard = await this.prisma.billboard.create({
         data: {
-          ...rest,
-          price: Number(rest.price),
-          lat: Number(rest.lat) || -7.9,
-          lng: Number(rest.lng) || 112.6,
-          slug: rest.slug || `billboard-${Date.now()}`,
-          sku: rest.sku || 'NO-SKU',
-          address: rest.address || 'Alamat belum diisi',
-          type: rest.type || 'Baliho',
-          status: rest.status || 'Available',
-          publishStatus: rest.publishStatus || 'DRAFT',
-          mainImage: rest.mainImage || '',
+          slug: slug || `billboard-${Date.now()}`,
+          title,
+          sku: sku || 'NO-SKU',
+          address: address || 'Alamat belum diisi',
+          type: type || 'Baliho',
+          price: Number(price),
+          lat: Number(lat) || -7.9,
+          lng: Number(lng) || 112.6,
+          status: status || 'Available',
+          publishStatus: publishStatus || 'DRAFT',
+          mainImage: mainImage || '',
+          videoUrl: videoUrl ?? null,
+          smartsucoUrl: smartsucoUrl ?? null,
           specs: packedSpecs,
           includes: JSON.stringify(includesList),
           excludes: JSON.stringify(excludesList),
           gallery: galleryJson,
-          createdById: userId,
-          updatedById: userId,
+          createdById: admin.id,
+          updatedById: admin.id,
         },
       });
       return { message: 'Billboard Berhasil Dibuat', id: newBillboard.id };
@@ -67,7 +90,10 @@ export class BillboardsService {
     }
   }
 
-  async update(id: string, updateBillboardDto: UpdateBillboardDto, userId: string) {
+  async update(id: string, updateBillboardDto: UpdateBillboardDto) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    const admin = await assertAdmin(this.prisma, updateBillboardDto.adminEmail);
+
     const {
       sizeH,
       sizeW,
@@ -77,13 +103,31 @@ export class BillboardsService {
       material,
       adminOptions,
       gallery,
-      ...rest
     } = updateBillboardDto;
 
-    if (rest.slug) {
+    // Whitelist: HANYA kolom yang benar-benar ada di model Billboard (prisma/schema.prisma).
+    // Jangan pakai spread ...rest — field asing (desc, adminEmail, createdBy, updatedBy, history)
+    // yang ikut di-spread dari response GET akan membuat Prisma error.
+    const {
+      slug,
+      title,
+      sku,
+      address,
+      type,
+      price,
+      lat,
+      lng,
+      status,
+      publishStatus,
+      mainImage,
+      videoUrl,
+      smartsucoUrl,
+    } = updateBillboardDto;
+
+    if (slug) {
       const existingSlug = await this.prisma.billboard.findFirst({
         where: {
-          slug: rest.slug,
+          slug: slug,
           NOT: { id: id },
         },
       });
@@ -108,9 +152,7 @@ export class BillboardsService {
 
     const options = Array.isArray(adminOptions) ? adminOptions : [];
     const includesList = options.filter((opt) => opt.included).map((opt) => opt.name);
-    // The original code calculated `excludesList` but didn't use it in `update`.
-    // For consistency with `create`, if `excludes` is needed in the update, it should be passed.
-    // For now, mirroring original `update` logic, it's not explicitly used in the `update` data object.
+    const excludesList = options.filter((opt) => !opt.included).map((opt) => opt.name);
     const galleryJson = JSON.stringify(gallery || []);
 
     try {
@@ -121,21 +163,31 @@ export class BillboardsService {
             title: oldData.title,
             price: oldData.price,
             status: oldData.status,
-            changedById: userId,
+            changedById: admin.id,
             snapshot: JSON.stringify({ ...oldData }),
           },
         }),
         this.prisma.billboard.update({
           where: { id: id },
           data: {
-            ...rest,
-            price: Number(rest.price),
-            lat: Number(rest.lat),
-            lng: Number(rest.lng),
+            slug,
+            title,
+            sku,
+            address,
+            type,
+            price: Number(price),
+            lat: Number(lat),
+            lng: Number(lng),
+            status,
+            publishStatus,
+            mainImage,
+            videoUrl: videoUrl ?? null,
+            smartsucoUrl: smartsucoUrl ?? null,
             specs: packedSpecs,
             includes: JSON.stringify(includesList),
+            excludes: JSON.stringify(excludesList),
             gallery: galleryJson,
-            updatedById: userId,
+            updatedById: admin.id,
           },
         }),
       ]);
@@ -212,7 +264,10 @@ export class BillboardsService {
       });
     }
 
-  async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto, userId: string) {
+  async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    const admin = await assertAdmin(this.prisma, quickUpdateBillboardDto.adminEmail);
+
     const { status, publishStatus } = quickUpdateBillboardDto;
 
     const dataToUpdate: { status?: string; publishStatus?: string } = {};
@@ -228,7 +283,7 @@ export class BillboardsService {
         where: { id: id },
         data: {
           ...dataToUpdate,
-          updatedById: userId,
+          updatedById: admin.id,
         },
       });
       return { message: 'Status berhasil diupdate!' };
@@ -300,7 +355,10 @@ export class BillboardsService {
     return parsedBillboard;
   }
 
-  async rollback(historyId: string, userId: string) {
+  async rollback(historyId: string, adminEmail?: string) {
+    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
+    const admin = await assertAdmin(this.prisma, adminEmail);
+
     const history = await this.prisma.billboardHistory.findUnique({
       where: { id: historyId },
     });
@@ -325,7 +383,7 @@ export class BillboardsService {
           lat: details.lat,
           lng: details.lng,
           slug: details.slug,
-          updatedById: userId,
+          updatedById: admin.id,
         },
       });
       return { message: 'Rollback Berhasil' };

@@ -1,6 +1,7 @@
 
 export class UpdateBillboardDto {
   title?: string;
+  adminEmail?: string;
   slug?: string;
   sku?: string;
   address?: string;
@@ -19,5 +20,6 @@ export class UpdateBillboardDto {
   material?: string;
   adminOptions?: any[];
   gallery?: string[];
+  videoUrl?: string;
   smartsucoUrl?: string;
 }

@@ -3,6 +3,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { Loader2 } from 'lucide-react';
 
 interface Props {
@@ -13,6 +14,7 @@ interface Props {
 
 export default function StatusChanger({ billboardId, currentStatus, currentPublishStatus }: Props) {
   const router = useRouter();
+  const { data: session } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -38,9 +40,15 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
 
     setLoading(true);
     setIsOpen(false);
-    
+
+    if (!session?.user?.email) {
+      alert('Gagal: sesi admin tidak ditemukan. Silakan login ulang.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const body = { [type]: value }; // Correctly set the key based on the 'type'
+      const body = { [type]: value, adminEmail: session.user.email }; // Correctly set the key based on the 'type'
       const res = await fetch(`/api/proxy/billboards/${billboardId}/status`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
@@ -50,11 +58,12 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
       if (res.ok) {
         router.refresh(); 
       } else {
-        const data = await res.json();
-        alert(`Gagal mengupdate status: ${data.message || 'Error tidak diketahui'}`);
+        const data = await res.json().catch(() => null);
+        const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+        alert(`Gagal mengupdate status: ${msg}`);
       }
     } catch (error) {
-      alert('Terjadi kesalahan pada server.');
+      alert('Terjadi kesalahan pada server. Pastikan backend sedang berjalan.');
     } finally {
         setTimeout(() => setLoading(false), 500);
     }

@@ -6,6 +6,7 @@ interface AdminOption {
 
 export class CreateBillboardDto {
   title!: string;
+  adminEmail?: string;
   slug?: string;
   sku?: string;
   address?: string;
@@ -24,5 +25,6 @@ export class CreateBillboardDto {
   material?: string;
   adminOptions?: AdminOption[];
   gallery?: string[];
+  videoUrl?: string;
   smartsucoUrl?: string;
 }

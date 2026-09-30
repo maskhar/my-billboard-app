@@ -3,6 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 // PERBAIKAN: Menambahkan 'Plus' di sini
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
@@ -10,6 +11,7 @@ import ImageUpload from '@/components/ImageUpload';
 export default function BillboardFormPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { data: session } = useSession();
   const billboardId = searchParams.get('id');
 
   const [loading, setLoading] = useState(false);
@@ -33,7 +35,7 @@ export default function BillboardFormPage() {
   const [form, setForm] = useState<any>({
       title: '', slug: '', sku: '', address: '', type: 'Videotron',
       price: 0, lat: -7.9666, lng: 112.6326, 
-      publishStatus: 'DRAFT', mainImage: '', desc: '',
+      publishStatus: 'DRAFT', mainImage: '',
       sizeH: '', sizeW: '', 
       orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
       smartsucoUrl: '',
@@ -109,22 +111,34 @@ export default function BillboardFormPage() {
   const removeGallery = (index: number) => setForm((p:any) => ({ ...p, gallery: p.gallery.filter((_:any, i:number) => i !== index) }));
   
   const handleRollback = async (historyItem: any) => {
-      if(!confirm(`Rollback data?`)) return;
+      if(!confirm("Rollback data?")) return;
+      if(!session?.user?.email) return alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
       setLoading(true);
       const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      await fetch(`${apiUrl}/api/billboards/rollback`, { 
+      const res = await fetch(`${apiUrl}/api/billboards/rollback`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ historyId: historyItem.id }) 
+        body: JSON.stringify({ historyId: historyItem.id, adminEmail: session.user.email }) 
       });
-      setLoading(false); window.location.reload(); 
+      setLoading(false);
+      if (res.ok) window.location.reload();
+      else {
+        const data = await res.json().catch(() => null);
+        alert("Gagal rollback: " + (Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`)));
+      }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-      setLoading(true);
-      
-      const packedSpecs = JSON.stringify([
+    e.preventDefault();
+
+    if(!session?.user?.email) {
+      alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
+      return;
+    }
+
+    setLoading(true);
+    
+    const packedSpecs = JSON.stringify([
           { label: "Ukuran", value: `${form.sizeH}m x ${form.sizeW}m` },
           { label: "Luas Area", value: `${(Number(form.sizeH) * Number(form.sizeW)).toFixed(1)} m²` },
           { label: "Layout / Orientasi", value: form.orientation },
@@ -136,7 +150,7 @@ export default function BillboardFormPage() {
       const excludesList = form.adminOptions.filter((o:any)=>!o.included).map((o:any)=>o.name);
 
       const payload = { 
-          ...form, id: billboardId,
+          ...form, id: billboardId, adminEmail: session.user.email,
           specs: packedSpecs, includes: JSON.stringify(includesList), excludes: JSON.stringify(excludesList), gallery: form.gallery
       };
 
@@ -151,8 +165,12 @@ export default function BillboardFormPage() {
               body: JSON.stringify(payload) 
           });
           if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
-          else { const msg = await res.json(); alert("Gagal: " + msg.message); }
-      } catch(err) { alert("Error Server"); }
+          else { 
+            const data = await res.json().catch(() => null);
+            const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+            alert("Gagal: " + msg); 
+          }
+      } catch(err) { alert("Error server. Pastikan backend sedang berjalan."); }
       setLoading(false);
   }
 
