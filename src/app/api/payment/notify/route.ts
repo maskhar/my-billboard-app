@@ -1,90 +1,74 @@
 // src/app/api/payment/notify/route.ts
 import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { sendEmail } from "@/lib/mail";
 
-// API NOTIFIKASI PEMBAYARAN MASUK
+// API NOTIFIKASI PEMBAYARAN MASUK (server-side only)
+//
+// Route ini adalah satu-satunya bridge browser -> backend untuk notifikasi bayar.
+// PAYMENT_WEBHOOK_SECRET TIDAK PERNAH dikirim ke client: secret dibaca dari
+// process.env di server lalu diteruskan sebagai header x-webhook-secret ke backend.
 export async function POST(req: Request) {
+  // 1. Wajib login
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+  }
+
+  // 2. Secret hanya boleh dibaca di server
+  const webhookSecret = process.env.PAYMENT_WEBHOOK_SECRET;
+  if (!webhookSecret) {
+    console.error("PAYMENT_WEBHOOK_SECRET belum dikonfigurasi di server.");
+    return NextResponse.json({ message: "Server error" }, { status: 500 });
+  }
+
+  const backendUrl = process.env.BACKEND_API_URL || "http://localhost:4001";
+
   try {
     const { orderId } = await req.json();
+    if (!orderId) {
+      return NextResponse.json({ message: "orderId wajib diisi" }, { status: 400 });
+    }
+
+    // 3. Order harus benar milik user yang sedang login
+    const userId = (session.user as unknown as { id: string }).id;
+    const order = await prisma.booking.findUnique({ where: { id: orderId } });
+    if (!order) {
+      return NextResponse.json({ message: "Order not found" }, { status: 404 });
+    }
+    if (order.userId !== userId) {
+      console.warn(`⛔ [NOTIFY] ${session.user.email} mencoba bayar order milik user lain: ${orderId}`);
+      return NextResponse.json({ message: "Order ini bukan milik Anda" }, { status: 403 });
+    }
+
     console.log("💰 [NOTIFY] Menerima sinyal bayar untuk order:", orderId);
 
-    // 1. Ambil Data
-    const order = await prisma.booking.findUnique({
-        where: { id: orderId },
-        include: { user: true, billboard: true }
+    // 4. Teruskan ke backend, secret lewat header saja
+    const res = await fetch(`${backendUrl}/api/payments/notify`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-webhook-secret": webhookSecret,
+      },
+      body: JSON.stringify({ orderId }),
+      cache: "no-store",
     });
 
-    if (!order) {
-        console.error("❌ Order tidak ditemukan!");
-        return NextResponse.json({ message: "Order not found" }, { status: 404 });
+    const data = await res.json().catch(() => null);
+
+    // 5. teruskan hasil backend apa adanya
+    if (!res.ok) {
+      const msg = Array.isArray(data?.message)
+        ? data.message.join(", ")
+        : data?.message || `Error tidak diketahui (HTTP ${res.status})`;
+      return NextResponse.json({ message: msg }, { status: res.status });
     }
 
-        // 2. Update Status & Catat Waktu Bayar
-    const nextStatus = order.designOption === 'service' ? 'IN_PRODUCTION' : 'DESIGN_RECEIVED';
-
-    await prisma.booking.update({
-        where: { id: orderId },
-        data: { 
-            status: nextStatus,
-            paidAt: new Date() // <-- PENGISIAN TIMESTAMP KUNCI
-        }
-    });
-    console.log(`✅ Status Updated: ${nextStatus} & Waktu bayar dicatat`);
-
-    // 3. LOGIKA KIRIM EMAIL (ADMIN FIRST)
-    
-    // PERHATIAN: Pastikan ADMIN_EMAIL ada isinya
-    const adminEmail = process.env.ADMIN_EMAIL;
-    console.log("📨 Target Email Admin:", adminEmail);
-
-    if (adminEmail) {
-        const successAdmin = await sendEmail({
-            to: adminEmail,
-            subject: `[LUNAS] Uang Masuk: Rp ${order.totalPrice.toLocaleString('id-ID')}`,
-            title: "Ada Pembayaran Masuk! 💰",
-            message: `User <b>${order.user.name}</b> sudah membayar lunas. Total: Rp ${order.totalPrice.toLocaleString('id-ID')}.<br/>Segera cek dashboard dan Klik Terima.`,
-            orderDetail: {
-                id: order.id,
-                billboardTitle: order.billboard.title,
-                billboardAddress: order.billboard.address,
-                duration: order.duration,
-                total: order.totalPrice,
-                status: "MENUNGGU VERIFIKASI ADMIN"
-            }
-        });
-        
-        if (!successAdmin) console.error("⚠️ Gagal kirim ke Admin!");
-    } else {
-        console.error("⚠️ ADMIN_EMAIL di file .env kosong/tidak terbaca!");
-    }
-
-    // Jeda 1 detik biar SMTP tidak ngambek (Rate Limit Prevention)
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    // 4. KIRIM EMAIL KE USER (CONFIRMATION)
-    if (order.user.email) {
-        await sendEmail({
-            to: order.user.email,
-            subject: `Pembayaran Berhasil! Order #${order.id.slice(-6).toUpperCase()}`,
-            title: "Dana Telah Diterima",
-            message: `Terima kasih! Dana sebesar Rp ${order.totalPrice.toLocaleString('id-ID')} sudah masuk ke sistem kami. Tim Admin akan memverifikasi dalam waktu singkat.`,
-            orderDetail: {
-                id: order.id,
-                billboardTitle: order.billboard.title,
-                billboardAddress: order.billboard.address,
-                duration: order.duration,
-                total: order.totalPrice,
-                status: "SEDANG DIVERIFIKASI"
-            }
-        });
-        console.log("📨 Konfirmasi terkirim ke User:", order.user.email);
-    }
-
-    return NextResponse.json({ status: 'ok' });
-
-  } catch (error: any) {
-    console.error("🔥 Server Error (Notify):", error.message);
+    return NextResponse.json(data ?? { status: "ok" });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("🔥 Server Error (Notify):", reason);
     return NextResponse.json({ message: "Server Error" }, { status: 500 });
   }
 }

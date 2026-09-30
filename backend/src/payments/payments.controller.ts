@@ -16,14 +16,17 @@ export class PaymentsController {
     // NOTE: Ini proteksi sementara untuk development (webhook simulasi Xendit).
     // Saat integrasi payment gateway sungguhan, ganti dengan signature verification
     // asli dari Xendit (mis. verifikasi header x-callback-token / signature HMAC).
-    const secret = paymentNotificationDto['secret'] || headerSecret;
+    //
+    // Secret HANYA boleh masuk lewat header x-webhook-secret (dibaca dari server
+    // Next.js via src/app/api/payment/notify/route.ts). Jalur lewat body sengaja
+    // dihapus supaya secret tidak pernah ter-expose di log.
     const expected = process.env.PAYMENT_WEBHOOK_SECRET;
 
     if (!expected) {
       throw new UnauthorizedException('PAYMENT_WEBHOOK_SECRET belum dikonfigurasi di server.');
     }
 
-    if (!secret || !this.safeEqual(String(secret), expected)) {
+    if (!headerSecret || !this.safeEqual(String(headerSecret), expected)) {
       throw new UnauthorizedException('Webhook secret tidak valid.');
     }
 
