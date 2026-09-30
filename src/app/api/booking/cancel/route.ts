@@ -3,43 +3,62 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { sendEmail } from "@/lib/mail";
 
+// API BATAL PESANAN (server-side only)
+//
+// Route ini adalah satu-satunya bridge browser -> backend untuk pembatalan.
+// Wajib login DAN order harus milik user yang sedang login, sehingga orderId
+// milik orang lain tidak bisa dibatalkan hanya karena diketahui.
 export async function POST(req: Request) {
+  // 1. Wajib login
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+  }
+
+  const backendUrl = process.env.BACKEND_API_URL || "http://localhost:4001";
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
-
     const { orderId } = await req.json();
-    const adminEmail = process.env.ADMIN_EMAIL;
-
-    // Update Database
-    const order = await prisma.booking.update({
-        where: { id: orderId },
-        data: { status: "CANCELLED" },
-        include: { billboard: true, user: true }
-    });
-
-    // KIRIM EMAIL KE ADMIN
-    if (adminEmail) {
-         await sendEmail({
-            to: adminEmail,
-            subject: `🚫 Order Dibatalkan User: #${order.id.slice(-6).toUpperCase()}`,
-            title: "Pesanan Batal",
-            message: `User <b>${order.user.name}</b> membatalkan pesanan (Fase Pending) untuk billboard <b>${order.billboard.title}</b>.`,
-            orderDetail: {
-                id: order.id,
-                total: order.totalPrice,
-                status: "CANCELLED",
-                billboardTitle: order.billboard.title,
-                billboardAddress: order.billboard.address,
-                duration: order.duration
-            }
-        });
+    if (!orderId) {
+      return NextResponse.json({ message: "orderId wajib diisi" }, { status: 400 });
     }
 
-    return NextResponse.json({ message: "Pesanan dibatalkan" });
+    // 2. Order harus benar milik user yang sedang login
+    const userId = (session.user as unknown as { id: string }).id;
+    const order = await prisma.booking.findUnique({ where: { id: orderId } });
+    if (!order) {
+      return NextResponse.json({ message: "Order not found" }, { status: 404 });
+    }
+    if (order.userId !== userId) {
+      console.warn(`⛔ [CANCEL] ${session.user.email} mencoba membatalkan order milik user lain: ${orderId}`);
+      return NextResponse.json({ message: "Order ini bukan milik Anda" }, { status: 403 });
+    }
+
+    console.log("🚫 [CANCEL] Menerima permintaan batal untuk order:", orderId);
+
+    // 3. Teruskan ke backend (logika bisnis tetap di backend)
+    const res = await fetch(`${backendUrl}/api/bookings/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ orderId }),
+      cache: "no-store",
+    });
+
+    const data = await res.json().catch(() => null);
+
+    // 4. teruskan hasil backend apa adanya
+    if (!res.ok) {
+      const msg = Array.isArray(data?.message)
+        ? data.message.join(", ")
+        : data?.message || `Error tidak diketahui (HTTP ${res.status})`;
+      return NextResponse.json({ message: msg }, { status: res.status });
+    }
+
+    return NextResponse.json(data ?? { message: "Pesanan dibatalkan" });
   } catch (error) {
-    return NextResponse.json({ message: "Gagal membatalkan" }, { status: 500 });
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("🔥 Server Error (Cancel):", reason);
+    return NextResponse.json({ message: "Server Error" }, { status: 500 });
   }
 }
