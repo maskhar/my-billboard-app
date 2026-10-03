@@ -1,22 +1,18 @@
-
+// backend/src/auth/auth.module.ts
 import { Module } from '@nestjs/common';
-import { PassportModule } from '@nestjs/passport';
-import { JwtModule } from '@nestjs/jwt';
-import { JwtStrategy } from './jwt.strategy';
+import { PrismaModule } from '../prisma/prisma.module';
+import { NextAuthSessionService } from './nextauth-session.service';
+import { NextAuthSessionGuard } from './nextauth-session.guard';
+import { RolesGuard } from './roles.guard';
 
+/**
+ * Autentikasi backend memverifikasi session NextAuth frontend secara langsung:
+ * backend membaca cookie `next-auth.session-token` (JWE) dan mendekodenya dengan
+ * NEXTAUTH_SECRET yang sama. Tidak ada sistem token terpisah.
+ */
 @Module({
-  imports: [
-    PassportModule,
-    // WARNING: Hardcoded secret for development purposes ONLY.
-    // In production, this MUST be replaced by a dynamic registration
-    // using a ConfigService to load the secret from environment variables.
-    JwtModule.register({
-      secret: 'a-temporary-secret-to-make-the-server-start',
-      signOptions: { expiresIn: '60m' },
-    }),
-  ],
-  providers: [JwtStrategy],
-  exports: [PassportModule],
+  imports: [PrismaModule],
+  providers: [NextAuthSessionService, NextAuthSessionGuard, RolesGuard],
+  exports: [NextAuthSessionService, NextAuthSessionGuard, RolesGuard],
 })
 export class AuthModule {}
-
