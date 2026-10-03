@@ -1,4 +1,6 @@
 // import { prisma } from '@/lib/prisma';
+import { cookies } from 'next/headers';
+import { buildNextAuthCookieHeader } from '@/lib/nextauth-cookie';
 import Link from 'next/link';
 import { Plus, MapPin, Tag, Edit, Eye, User, Clock } from 'lucide-react';
 import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn'; 
@@ -14,14 +16,22 @@ type BillboardWithUsers = Billboard & {
 
 async function getAdminBillboards(): Promise<BillboardWithUsers[]> {
   try {
-    // WARNING: This is now an unauthenticated call for debugging purposes.
+    // Endpoint ini dilindungi @Roles(...ADMIN_ROLES) di backend, jadi cookie
+    // session NextAuth wajib ikut diteruskan. Server Component tidak punya
+    // cookie browser, jadi dibaca manual lalu dikirim sebagai header `Cookie`.
     const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4001';
     const targetUrl = `${backendUrl}/api/billboards/admin`;
 
-    const res = await fetch(targetUrl, { cache: 'no-store' });
+    const cookieHeader = buildNextAuthCookieHeader(await cookies());
+
+    const res = await fetch(targetUrl, {
+      cache: 'no-store',
+      headers: cookieHeader ? { Cookie: cookieHeader } : {},
+    });
 
     if (!res.ok) {
       console.error("Gagal mengambil data admin billboards:", res.status, await res.text());
+      // 401 = session tidak diteruskan/kedaluwarsa, 403 = role bukan admin.
       return [];
     }
     

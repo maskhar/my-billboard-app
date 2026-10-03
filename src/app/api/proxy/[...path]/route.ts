@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { cookies } from 'next/headers';
+import { buildNextAuthCookieHeader } from '@/lib/nextauth-cookie';
 
-// WARNING: This proxy is unauthenticated.
-// It simply forwards requests to the backend to avoid CORS issues.
-// Do not use this in production without adding a proper authentication layer.
+// Proxy ke backend NestJS untuk menghindari CORS.
+//
+// Otorisasi TIDAK dilakukan di sini: proxy ini meneruskan header `Cookie`
+// apa adanya ke backend, dan backend yang memverifikasi session NextAuth
+// lewat global guard. Kalau cookie tidak diteruskan, backend membalas 401.
 
 async function handler(req: NextRequest) {
   try {
@@ -15,19 +19,25 @@ async function handler(req: NextRequest) {
     
     // Tambahkan query string jika ada
     const targetUrl = `${backendUrl}/api/${apiPath}${url.search}`;
+
+    // 2. Teruskan cookie session NextAuth supaya guard backend bisa memverifikasinya.
+    // `cookies()` dipakai (bukan req.cookies) agar ikut mengambil pecahan
+    // next-auth.session-token.0/.1 yang otomatis ikut terambil.
+    const cookieHeader = buildNextAuthCookieHeader(await cookies());
     
-    // 2. Forward the request to the backend
+    // 3. Forward the request to the backend
     const response = await fetch(targetUrl, {
       method: req.method,
       headers: {
         'Content-Type': 'application/json',
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
       body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : null,
       // @ts-ignore
       duplex: 'half',
     });
 
-    // 3. Return the response from the backend
+    // 4. Return the response from the backend
     return new NextResponse(response.body, {
       status: response.status,
       statusText: response.statusText,

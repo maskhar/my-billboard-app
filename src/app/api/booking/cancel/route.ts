@@ -1,8 +1,10 @@
 // src/app/api/booking/cancel/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { cookies } from "next/headers";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
+import { buildNextAuthCookieHeader } from "@/lib/nextauth-cookie";
 
 // API BATAL PESANAN (server-side only)
 //
@@ -37,10 +39,17 @@ export async function POST(req: Request) {
 
     console.log("🚫 [CANCEL] Menerima permintaan batal untuk order:", orderId);
 
-    // 3. Teruskan ke backend (logika bisnis tetap di backend)
+    // 3. Teruskan ke backend (logika bisnis tetap di backend).
+    // Cookie session NextAuth ikut diteruskan karena backend memverifikasi
+    // session-nya sendiri lewat global guard. Hanya cookie next-auth yang
+    // diteruskan, bukan seluruh cookie milik pengguna.
+    const cookieHeader = buildNextAuthCookieHeader(await cookies());
     const res = await fetch(`${backendUrl}/api/bookings/cancel`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
       body: JSON.stringify({ orderId }),
       cache: "no-store",
     });

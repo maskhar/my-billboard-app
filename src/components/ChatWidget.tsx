@@ -17,7 +17,10 @@ export default function ChatWidget() {
   const lastMsgCount = useRef(0);
 
   useEffect(() => {
-    socketRef.current = io("http://localhost:4001"); // Ganti port ke backend NestJS
+    // withCredentials hanya berlaku untuk handshake XHR/polling. Browser TIDAK
+    // pernah mengirim cookie pada handshake WebSocket, jadi kalau gateway
+    // socket.io di backend butuh session, harus pakai extraHeaders.
+    socketRef.current = io("http://localhost:4001", { withCredentials: true }); // Ganti port ke backend NestJS
 
     socketRef.current.on('connect', () => {
         console.log('Chat widget connected to NestJS backend');
@@ -57,7 +60,8 @@ export default function ChatWidget() {
           const res = await fetch('http://localhost:4001/api/chat/start', { // Arahkan ke backend NestJS
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(form)
+              body: JSON.stringify(form),
+              credentials: 'include',
           });
           const session = await res.json();
           if(session.id) {

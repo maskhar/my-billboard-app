@@ -45,7 +45,8 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
           const res = await fetch(`${apiUrl}/api/orders/update-status`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ orderId: order.id, newStatus, adminEmail: session?.user?.email, ...extraData })
+              body: JSON.stringify({ orderId: order.id, newStatus, adminEmail: session?.user?.email, ...extraData }),
+              credentials: 'include',
           });
 
           if (!res.ok) {

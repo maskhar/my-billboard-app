@@ -54,6 +54,9 @@ export default function BookingCard({ order }: { order: any }) {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(payload),
+              // Backend memverifikasi cookie session NextAuth; tanpa ini cookie
+              // tidak ikut saat request lintas origin dan guard membalas 401.
+              credentials: 'include',
           });
 
           if (!res.ok) {
@@ -78,6 +81,7 @@ export default function BookingCard({ order }: { order: any }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderId: order.id, designUrl: url }),
+        credentials: 'include',
       });
       const data = await res.json();
       if (res.ok) {
@@ -105,7 +109,9 @@ export default function BookingCard({ order }: { order: any }) {
 
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     try {
-      const res = await fetch(`${apiUrl}/api/uploads/design`, { method: 'POST', body: formData });
+      // JANGAN set header Content-Type di sini: browser yang harus menambahkan
+      // multipart/form-data beserta boundary-nya sendiri.
+      const res = await fetch(`${apiUrl}/api/uploads/design`, { method: 'POST', body: formData, credentials: 'include' });
       const data = await res.json();
       if (res.ok) {
         await handleDesignSubmit(data.url);

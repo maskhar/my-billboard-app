@@ -56,6 +56,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(profileData),
+                credentials: 'include',
             });
             if (!res.ok) {
                 const error = await res.json();
@@ -87,6 +88,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(passwordData),
+                credentials: 'include',
             });
             if (!res.ok) {
                 const error = await res.json();
