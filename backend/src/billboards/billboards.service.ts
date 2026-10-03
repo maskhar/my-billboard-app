@@ -4,16 +4,15 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateBillboardDto } from './dto/create-billboard.dto';
 import { UpdateBillboardDto } from './dto/update-billboard.dto';
 import { QuickUpdateBillboardDto } from './dto/quick-update-billboard.dto';
-import { assertAdmin } from '../common/admin-check.helper';
 
 @Injectable()
 export class BillboardsService {
   constructor(private prisma: PrismaService) {}
 
-  async create(createBillboardDto: CreateBillboardDto) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    const admin = await assertAdmin(this.prisma, createBillboardDto.adminEmail);
-
+  // otorisasi admin ditangani RolesGuard lewat @Roles(...ADMIN_ROLES) di
+  // controller. Field `adminEmail` masih ada di DTO demi kompatibilitas dengan
+  // frontend lama, tapi isinya TIDAK lagi dipakai validasi apa pun.
+  async create(createBillboardDto: CreateBillboardDto, actorId: string) {
     const {
       sizeH,
       sizeW,
@@ -79,8 +78,8 @@ export class BillboardsService {
           includes: JSON.stringify(includesList),
           excludes: JSON.stringify(excludesList),
           gallery: galleryJson,
-          createdById: admin.id,
-          updatedById: admin.id,
+          createdById: actorId,
+          updatedById: actorId,
         },
       });
       return { message: 'Billboard Berhasil Dibuat', id: newBillboard.id };
@@ -90,10 +89,7 @@ export class BillboardsService {
     }
   }
 
-  async update(id: string, updateBillboardDto: UpdateBillboardDto) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    const admin = await assertAdmin(this.prisma, updateBillboardDto.adminEmail);
-
+  async update(id: string, updateBillboardDto: UpdateBillboardDto, actorId: string) {
     const {
       sizeH,
       sizeW,
@@ -163,7 +159,7 @@ export class BillboardsService {
             title: oldData.title,
             price: oldData.price,
             status: oldData.status,
-            changedById: admin.id,
+            changedById: actorId,
             snapshot: JSON.stringify({ ...oldData }),
           },
         }),
@@ -187,7 +183,7 @@ export class BillboardsService {
             includes: JSON.stringify(includesList),
             excludes: JSON.stringify(excludesList),
             gallery: galleryJson,
-            updatedById: admin.id,
+            updatedById: actorId,
           },
         }),
       ]);
@@ -229,10 +225,7 @@ export class BillboardsService {
     });
   }
 
-  async updateStatus(id: string, data: { status?: string; publishStatus?: string; adminEmail?: string }) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    await assertAdmin(this.prisma, data.adminEmail);
-
+  async updateStatus(id: string, data: { status?: string; publishStatus?: string }) {
     const billboard = await this.prisma.billboard.findUnique({ where: { id } });
     if (!billboard) {
       throw new NotFoundException('Billboard not found');
@@ -264,10 +257,7 @@ export class BillboardsService {
       });
     }
 
-  async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    const admin = await assertAdmin(this.prisma, quickUpdateBillboardDto.adminEmail);
-
+  async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto, actorId: string) {
     const { status, publishStatus } = quickUpdateBillboardDto;
 
     const dataToUpdate: { status?: string; publishStatus?: string } = {};
@@ -283,7 +273,7 @@ export class BillboardsService {
         where: { id: id },
         data: {
           ...dataToUpdate,
-          updatedById: admin.id,
+          updatedById: actorId,
         },
       });
       return { message: 'Status berhasil diupdate!' };
@@ -292,10 +282,7 @@ export class BillboardsService {
     }
   }
 
-  async remove(id: string, adminEmail?: string) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    await assertAdmin(this.prisma, adminEmail);
-
+  async remove(id: string) {
     const hasActiveOrder = await this.prisma.booking.findFirst({
       where: {
         billboardId: id,
@@ -355,10 +342,7 @@ export class BillboardsService {
     return parsedBillboard;
   }
 
-  async rollback(historyId: string, adminEmail?: string) {
-    // TODO: ganti ke role guard JWT proper setelah keputusan arsitektur auth final.
-    const admin = await assertAdmin(this.prisma, adminEmail);
-
+  async rollback(historyId: string, actorId: string) {
     const history = await this.prisma.billboardHistory.findUnique({
       where: { id: historyId },
     });
@@ -383,7 +367,7 @@ export class BillboardsService {
           lat: details.lat,
           lng: details.lng,
           slug: details.slug,
-          updatedById: admin.id,
+          updatedById: actorId,
         },
       });
       return { message: 'Rollback Berhasil' };

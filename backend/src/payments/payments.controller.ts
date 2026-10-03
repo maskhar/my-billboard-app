@@ -3,11 +3,15 @@ import { Controller, Post, Body, Headers, UnauthorizedException } from '@nestjs/
 import * as crypto from 'crypto';
 import { PaymentsService } from './payments.service';
 import { PaymentNotificationDto } from './dto/payment-notification.dto';
+import { Public } from '../auth/public.decorator';
 
 @Controller('api/payments')
 export class PaymentsController {
   constructor(private readonly paymentsService: PaymentsService) {}
 
+  // Webhook payment gateway tidak punya session NextAuth, jadi harus publik.
+  // Keamanannya bertumpu pada verifikasi secret header di bawah.
+  @Public()
   @Post('notify')
   notify(
     @Body() paymentNotificationDto: PaymentNotificationDto,
