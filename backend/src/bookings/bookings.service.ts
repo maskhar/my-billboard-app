@@ -1,5 +1,5 @@
 
-import { Injectable, BadRequestException, ForbiddenException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, BadRequestException, ForbiddenException, InternalServerErrorException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../lib/mail.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
@@ -14,11 +14,27 @@ export class BookingsService {
     private mailService: MailService,
   ) {}
 
-  async create(createBookingDto: CreateBookingDto & { userId?: string }) {
-    const { userId } = createBookingDto;
+  /**
+   * Pastikan order yang disentuh benar milik `actorId`. Tanpa cek ini, guard
+   * global hanya membuktikan "seseorang sedang login", sehingga user A bisa
+   * mengubah atau membatalkan order user B hanya dengan mengetahui orderId.
+   */
+  private async assertOrderOwner(orderId: string, actorId: string) {
+    const order = await this.prisma.booking.findUnique({
+      where: { id: orderId },
+      select: { userId: true },
+    });
+    if (!order) {
+      throw new NotFoundException('Pesanan tidak ditemukan.');
+    }
+    if (order.userId !== actorId) {
+      throw new ForbiddenException('Pesanan ini bukan milik Anda.');
+    }
+  }
 
+  async create(createBookingDto: CreateBookingDto, userId: string) {
     if (!userId) {
-      throw new BadRequestException('userId wajib dikirim di body request.');
+      throw new UnauthorizedException('Sesi tidak valid. Silakan login ulang.');
     }
 
     const user = await this.prisma.user.findUnique({
@@ -112,8 +128,9 @@ export class BookingsService {
     }
   }
 
-  async submitDesign(submitDesignDto: SubmitDesignDto) {
+  async submitDesign(submitDesignDto: SubmitDesignDto, actorId: string) {
     const { orderId, designUrl } = submitDesignDto;
+    await this.assertOrderOwner(orderId, actorId);
 
     try {
       await this.prisma.booking.update({
@@ -129,8 +146,9 @@ export class BookingsService {
     }
   }
 
-  async cancel(cancelBookingDto: CancelBookingDto) {
+  async cancel(cancelBookingDto: CancelBookingDto, actorId: string) {
     const { orderId } = cancelBookingDto;
+    await this.assertOrderOwner(orderId, actorId);
 
     try {
       const order = await this.prisma.booking.update({
@@ -163,8 +181,9 @@ export class BookingsService {
     }
   }
 
-  async requestRefund(requestRefundDto: RequestRefundDto) {
+  async requestRefund(requestRefundDto: RequestRefundDto, actorId: string) {
     const { step, orderId, reason, bankName, bankAccount } = requestRefundDto;
+    await this.assertOrderOwner(orderId, actorId);
     const adminEmail = process.env.ADMIN_EMAIL;
 
     if (step === 'reason') {
