@@ -8,6 +8,26 @@ import { useSession } from 'next-auth/react';
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
 
+// Endpoint detail backend (`billboards.service.ts` `findOne`) sudah
+// JSON.parse kolom specs/includes/excludes/gallery sebelum dikirim, jadi bentuk
+// datanya ARRAY, bukan string JSON. Fungsi ini menerima keduanya supaya form
+// tidak pecah kalau bentuk datanya berubah. Perhatikan `[] || "[]"` selalu
+// mengembalikan `[]` (array kosong itu truthy) lalu `JSON.parse([])` menjadi
+// `JSON.parse("")` -> "Unexpected end of JSON input".
+function toArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
+
 export default function BillboardFormPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -46,14 +66,20 @@ export default function BillboardFormPage() {
   useEffect(() => {
       if (billboardId) {
           setFetching(true);
-          const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-          fetch(`${apiUrl}/api/billboards/${billboardId}/detail`)
-            .then(res => res.json())
+          fetch(`/api/proxy/billboards/${billboardId}/detail`)
+            .then(async (res) => {
+                if (!res.ok) {
+                    const err = await res.json().catch(() => null);
+                    const msg = Array.isArray(err?.message) ? err.message.join(', ') : (err?.message || `HTTP ${res.status}`);
+                    throw new Error(msg);
+                }
+                return res.json();
+            })
             .then(data => {
-                if(data) {
-                    const parsedGallery = JSON.parse(data.gallery || "[]");
-                    const dbIncludes = JSON.parse(data.includes || "[]");
-                    const parsedSpecs = JSON.parse(data.specs || "[]");
+                if(data && data.id) {
+                    const parsedGallery = toArray(data.gallery);
+                    const dbIncludes = toArray(data.includes);
+                    const parsedSpecs = toArray(data.specs);
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
                     
@@ -85,7 +111,7 @@ export default function BillboardFormPage() {
                 }
                 setFetching(false);
             })
-            .catch(() => setFetching(false));
+            .catch((err: any) => { alert("Gagal memuat data billboard: " + (err?.message || "Error tidak diketahui")); setFetching(false); });
       }
   }, [billboardId]);
 
@@ -114,11 +140,10 @@ export default function BillboardFormPage() {
       if(!confirm("Rollback data?")) return;
       if(!session?.user?.email) return alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
       setLoading(true);
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      const res = await fetch(`${apiUrl}/api/billboards/rollback`, { 
+      const res = await fetch(`/api/proxy/billboards/rollback`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ historyId: historyItem.id, adminEmail: session.user.email }) 
+        body: JSON.stringify({ historyId: historyItem.id, adminEmail: session.user.email }),
       });
       setLoading(false);
       if (res.ok) window.location.reload();
@@ -154,15 +179,14 @@ export default function BillboardFormPage() {
           specs: packedSpecs, includes: JSON.stringify(includesList), excludes: JSON.stringify(excludesList), gallery: form.gallery
       };
 
-            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-      const endpoint = billboardId ? `${apiUrl}/api/billboards/${billboardId}` : `${apiUrl}/api/billboards`;
+      const endpoint = billboardId ? `/api/proxy/billboards/${billboardId}` : `/api/proxy/billboards`;
       const method = billboardId ? 'PATCH' : 'POST';
 
       try {
           const res = await fetch(endpoint, { 
               method: method, 
               headers: {'Content-Type': 'application/json'}, 
-              body: JSON.stringify(payload) 
+              body: JSON.stringify(payload),
           });
           if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
           else { 
