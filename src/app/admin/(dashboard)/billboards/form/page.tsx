@@ -7,6 +7,7 @@ import { useSession } from 'next-auth/react';
 // PERBAIKAN: Menambahkan 'Plus' di sini
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
+import dynamic from 'next/dynamic';
 
 // Endpoint detail backend (`billboards.service.ts` `findOne`) sudah
 // JSON.parse kolom specs/includes/excludes/gallery sebelum dikirim, jadi bentuk
@@ -14,6 +15,8 @@ import ImageUpload from '@/components/ImageUpload';
 // tidak pecah kalau bentuk datanya berubah. Perhatikan `[] || "[]"` selalu
 // mengembalikan `[]` (array kosong itu truthy) lalu `JSON.parse([])` menjadi
 // `JSON.parse("")` -> "Unexpected end of JSON input".
+const LocationPicker = dynamic(() => import("@/components/LocationPicker"), {ssr:false,loading:()=>('<div className="flex h-[360px] w-full items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-gray-500">Memuat Peta...</div>')});
+
 function toArray(value: unknown): any[] {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') {
@@ -26,6 +29,17 @@ function toArray(value: unknown): any[] {
   }
   if (value && typeof value === 'object') return [value];
   return [];
+}
+
+// Kolom lat/lng di Prisma bertipe Float (wajib). Input teks dan peta bisa
+// menghasilkan string atau NaN, jadi selalu dinormalkan ke numberFinite
+// supaya Leaflet tidak menerima [NaN, NaN] dan payload tidak ditolak backend.
+const DEFAULT_LAT = -7.9666;
+const DEFAULT_LNG = 112.6326;
+
+function toCoord(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
 }
 
 export default function BillboardFormPage() {
@@ -54,7 +68,7 @@ export default function BillboardFormPage() {
 
   const [form, setForm] = useState<any>({
       title: '', slug: '', sku: '', address: '', type: 'Videotron',
-      price: 0, lat: -7.9666, lng: 112.6326, 
+      price: 0, lat: DEFAULT_LAT, lng: DEFAULT_LNG, 
       publishStatus: 'DRAFT', mainImage: '',
       sizeH: '', sizeW: '', 
       orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
@@ -176,6 +190,7 @@ export default function BillboardFormPage() {
 
       const payload = { 
           ...form, id: billboardId, adminEmail: session.user.email,
+          lat: toCoord(form.lat, DEFAULT_LAT), lng: toCoord(form.lng, DEFAULT_LNG),
           specs: packedSpecs, includes: JSON.stringify(includesList), excludes: JSON.stringify(excludesList), gallery: form.gallery
       };
 
@@ -274,6 +289,13 @@ export default function BillboardFormPage() {
                                 {inputType==='AUTO' ? <ImageUpload value={form.mainImage} onChange={(u)=>setForm((p:any)=>({...p,mainImage:u}))} label='Cover Image'/> : <input value={form.mainImage} onChange={e=>setForm((p:any)=>({...p,mainImage:e.target.value}))} className="w-full border p-2 text-xs"/>}
                                 <button type='button' onClick={()=>setInputType(p=>p==='AUTO'?'MANUAL':'AUTO')} className="text-xs underline mt-1 text-gray-400">Switch Upload Mode</button>
                              </div>
+                         </div>
+                                                   <div className="mt-4 pt-4 border-t">
+                             <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Lokasi Titik &mdash; Klik Peta atau Geser Marker</label>
+                             <LocationPicker
+                                value={{ lat: toCoord(form.lat, DEFAULT_LAT), lng: toCoord(form.lng, DEFAULT_LNG) }}
+                                onChange={(loc:{ lat:number; lng:number }) => setForm((p:any) => ({ ...p, lat: loc.lat, lng: loc.lng }))}
+                             />
                          </div>
                                                   <div className="mt-4 pt-4 border-t">
                              <label className="text-xs font-bold text-gray-500 uppercase mb-3 block">Galeri Tambahan</label>
