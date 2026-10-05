@@ -45,7 +45,11 @@ prisma/dev.db
 *.sqlite
 
 # Uploads
+# `public/uploads/` saja tidak cukup: pola yang mengandung `/` di tengah
+# ter-anchor ke root repo, sedangkan backend menyimpan unggahan di
+# `backend/public/uploads/`. File desain pesanan pengguna bisa ikut ter-track.
 public/uploads/
+backend/public/uploads/
 
 # IDE & Tooling
 .continue/
