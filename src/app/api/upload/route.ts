@@ -11,9 +11,9 @@ export async function POST(req: Request) {
   try {
       const formData = await req.formData();
       const file = formData.get("file") as File;
-      const orderId = formData.get("orderId") as string; // Penting
+      const orderId = formData.get("orderId") as string | null; // Opsional
 
-      if (!file || !orderId) return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
+      if (!file) return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
       
       // Limit 10MB
       if (file.size > 10 * 1024 * 1024) return NextResponse.json({ message: "File terlalu besar (Max 10MB)" }, { status: 400 });
@@ -25,9 +25,22 @@ export async function POST(req: Request) {
       // Buat Buffer
       const buffer = Buffer.from(await file.arrayBuffer());
       
-      // Nama File: DESIGN-{OrderId}.ext (Supaya file lama tertimpa jika upload ulang, hemat storage)
       const ext = file.name.split('.').pop();
-      const filename = `DESIGN-${orderId}.${ext}`;
+      let filename: string;
+      if (orderId) {
+        // Ada orderId (mis. upload desain pesanan): nama file lama
+        // DESIGN-{OrderId}.ext, sehingga file lama tertimpa saat upload ulang.
+        // Karakter selain angka/huruf dibuang supaya orderId tidak bisa
+        // menyuntik path (mis. "../../").
+        const safeOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, "");
+        if (!safeOrderId) return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
+        filename = `DESIGN-${safeOrderId}.${ext}`;
+      } else {
+        // Tanpa orderId (mis. foto cover/galeri billboard, bukti tayang):
+        // nama unik supaya tiap upload menghasilkan file terpisah.
+        const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        filename = `UPLOAD-${unique}.${ext}`;
+      }
       
       // Simpan di public/uploads/designs
       const uploadDir = path.join(process.cwd(), "public/uploads/designs");

@@ -44,7 +44,8 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
             if (res.ok) {
                 onChange(data.url); // Simpan path lokal
             } else {
-                alert("Gagal Upload Lokal: " + data.error);
+                // Route mengembalikan `{ message }`, bukan `{ error }`.
+                alert("Gagal Upload Lokal: " + (data?.message || "Terjadi kesalahan"));
             }
         } catch (err) { alert("Error sistem upload"); } 
         finally { setLoading(false); }
