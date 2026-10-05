@@ -1,13 +1,67 @@
 // backend/src/billboards/billboards.service.ts
-import { Injectable, InternalServerErrorException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, InternalServerErrorException, BadRequestException, NotFoundException, ConflictException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBillboardDto } from './dto/create-billboard.dto';
 import { UpdateBillboardDto } from './dto/update-billboard.dto';
 import { QuickUpdateBillboardDto } from './dto/quick-update-billboard.dto';
 
+// Dipakai `create()` saat koordinat tidak dikirim sama sekali. `update()` tidak
+// memakai konstanta ini: ia jatuh ke nilai yang sudah tersimpan di DB supaya
+// edit tanpa koordinat tidak memindahkan billboard.
+const DEFAULT_LAT = -7.9;
+const DEFAULT_LNG = 112.6;
+
 @Injectable()
 export class BillboardsService {
   constructor(private prisma: PrismaService) {}
+
+  /**
+   * Terjemahkan Prisma P2002 (unique constraint) jadi 409 yang menyebut field
+   * mana yang bentrok. Tanpa ini, collision `sku`/`slug` muncul sebagai 500
+   * "Gagal menyimpan data" yang tidak menjelaskan apa pun masalahnya.
+   *
+   * `meta.target` Prisma untuk PostgreSQL biasanya berisi nama kolom
+   * (mis. ['sku']), tapi bisa juga nama index ('Billboard_sku_key'), jadi
+   * keduanya ditangani.
+   */
+  private toConflict(error: unknown): ConflictException | null {
+    const e = error as { code?: string; meta?: { target?: unknown } } | null;
+    if (!e || e.code !== 'P2002') return null;
+
+    const target = e.meta?.target;
+    const raw = Array.isArray(target)
+      ? target.map(String)
+      : typeof target === 'string'
+        ? [target]
+        : [];
+
+    const lower = raw.join(' ').toLowerCase();
+    const field = lower.includes('sku') ? 'sku' : lower.includes('slug') ? 'slug' : null;
+
+    const message =
+      field === 'sku'
+        ? 'SKU sudah dipakai billboard lain. Gunakan kode SKU yang unik.'
+        : field === 'slug'
+          ? 'Link URL (Slug) sudah dipakai billboard lain!'
+          : `Data sudah dipakai billboard lain (${raw.join(', ') || 'nilai unik'}).`;
+
+    return new ConflictException(message);
+  }
+
+  /**
+   * Normalisasi koordinat menjadi number yang layak disimpan ke kolom `Float`.
+   *
+   * `Number(x) || fallback` itu SALAH, karena `0` termasuk falsy: koordinat
+   * 0 (Greenwich / Khatulistiwa) akan diam-diam diganti jadi default.
+   * `null`, `undefined`, string kosong, dan hasil `Number()` yang bukan
+   * finite (NaN) memang perlu di-fallback-kan.
+   */
+  private toCoordinate(value: unknown, fallback: number): number {
+    if (value === null || value === undefined) return fallback;
+    if (typeof value === 'string' && value.trim() === '') return fallback;
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : fallback;
+  }
 
   // otorisasi admin ditangani RolesGuard lewat @Roles(...ADMIN_ROLES) di
   // controller. Field `adminEmail` masih ada di DTO demi kompatibilitas dengan
@@ -43,6 +97,19 @@ export class BillboardsService {
       smartsucoUrl,
     } = createBillboardDto;
 
+    // Sama persis seperti update(): slug wajib unik, dicek lebih dulu supaya
+    // ketahuan sebagai 400 yang jelas, bukan 500 dari Prisma.
+    if (slug) {
+      const existingSlug = await this.prisma.billboard.findFirst({
+        where: {
+          slug: slug,
+        },
+      });
+      if (existingSlug) {
+        throw new BadRequestException('Link URL (Slug) sudah dipakai billboard lain!');
+      }
+    }
+
     const packedSpecs = JSON.stringify([
       { label: 'Ukuran', value: `${sizeH || 0}m x ${sizeW || 0}m` },
       { label: 'Luas Area', value: `${(Number(sizeH) * Number(sizeW)).toFixed(1)} m²` },
@@ -63,12 +130,15 @@ export class BillboardsService {
         data: {
           slug: slug || `billboard-${Date.now()}`,
           title,
-          sku: sku || 'NO-SKU',
+          // `sku` kosong disimpan sebagai NULL, bukan string placeholder seperti
+          // 'NO-SKU'. Kolomnya unik; di PostgreSQL beberapa NULL tidak dianggap
+          // bentrok, sedangkan string placeholder hanya bisa dipakai satu kali.
+          sku: sku || null,
           address: address || 'Alamat belum diisi',
           type: type || 'Baliho',
           price: Number(price),
-          lat: Number(lat) || -7.9,
-          lng: Number(lng) || 112.6,
+          lat: this.toCoordinate(lat, DEFAULT_LAT),
+          lng: this.toCoordinate(lng, DEFAULT_LNG),
           status: status || 'Available',
           publishStatus: publishStatus || 'DRAFT',
           mainImage: mainImage || '',
@@ -85,6 +155,8 @@ export class BillboardsService {
       return { message: 'Billboard Berhasil Dibuat', id: newBillboard.id };
     } catch (error) {
       console.error('Create Error:', error);
+      const conflict = this.toConflict(error);
+      if (conflict) throw conflict;
       throw new InternalServerErrorException('Gagal menyimpan data');
     }
   }
@@ -168,12 +240,15 @@ export class BillboardsService {
           data: {
             slug,
             title,
-            sku,
+            // Form admin tidak punya input SKU, jadi `sku` selalu terkirim
+            // kosong dan akan menimpa SKU asli menjadi ''. kirim `undefined`
+            // supaya Prisma tidak menyentuh kolom itu sama sekali.
+            sku: sku || undefined,
             address,
             type,
             price: Number(price),
-            lat: Number(lat),
-            lng: Number(lng),
+            lat: this.toCoordinate(lat, oldData.lat),
+            lng: this.toCoordinate(lng, oldData.lng),
             status,
             publishStatus,
             mainImage,
@@ -190,6 +265,8 @@ export class BillboardsService {
       return { message: 'Update Sukses!' };
     } catch (error) {
       console.error(error);
+      const conflict = this.toConflict(error);
+      if (conflict) throw conflict;
       throw new InternalServerErrorException('Gagal Update');
     }
   }
