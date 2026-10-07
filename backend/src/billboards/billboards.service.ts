@@ -284,7 +284,13 @@ export class BillboardsService {
   }
 
   findAll() {
-    return this.prisma.billboard.findMany(); // Hapus filter publishStatus
+    // Endpoint PUBLIK (GET /api/billboards, @Public di controller): hanya
+    // billboard berstatus PUBLISHED. Data DRAFT tetap bisa dilihat lewat
+    // GET /api/billboards/admin yang memakai @Roles(...ADMIN_ROLES), jadi
+    // akses admin ke data draft di halaman admin tidak berkurang.
+    return this.prisma.billboard.findMany({
+      where: { publishStatus: 'PUBLISHED' },
+    });
   }
 
   findOneBySlug(slug: string) {
