@@ -1,11 +1,20 @@
 
-import { Injectable, BadRequestException, ForbiddenException, InternalServerErrorException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, BadRequestException, ConflictException, ForbiddenException, InternalServerErrorException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../lib/mail.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { SubmitDesignDto } from './dto/submit-design.dto';
 import { CancelBookingDto } from './dto/cancel-booking.dto';
 import { RequestRefundDto } from './dto/request-refund.dto';
+
+// Status yang TIDAK memblokir availability karena slot sudah dilepas secara
+// terminal (user cancel / uang sudah kembali). Semua status lain — termasuk
+// PENDING_PAYMENT, PAID_CONFIRMED, DESIGN_RECEIVED, IN_PRODUCTION,
+// INSTALLATION, ACTIVE, dan status refund yang masih diproses — dianggap
+// masih memegang billboard dan harus menolak booking baru yang overlap.
+// Daftar ini disusun dari evidence codebase (lihat laporan Batch 3-B2) dan
+// bersifat fail-closed: status baru yang belum dikenal ikut memblokir.
+const NON_BLOCKING_BOOKING_STATUSES = ['CANCELLED', 'REFUNDED'];
 
 @Injectable()
 export class BookingsService {
@@ -52,12 +61,31 @@ export class BookingsService {
     const {
       billboardId,
       duration,
-      totalPrice,
-      dpAmount,
       paymentType,
       designOption,
       startDateString,
     } = createBookingDto;
+
+    // `duration` harus bilangan bulat positif. Client bisa mengirim negatif,
+    // nol, pecahan, atau nilai non-numeric; semuanya harus ditolak dengan 400.
+    if (typeof duration !== 'number' || !Number.isInteger(duration) || duration < 1) {
+      throw new BadRequestException('Durasi sewa tidak valid. Harus bilangan bulat minimal 1 bulan.');
+    }
+
+    // Hanya metode pembayaran yang dipakai aplikasi ('dp' | 'full') yang boleh
+    // diterima; nilai arbitrer tidak boleh tersimpan.
+    if (paymentType !== 'dp' && paymentType !== 'full') {
+      throw new BadRequestException('Metode pembayaran tidak valid.');
+    }
+
+    if (typeof startDateString !== 'string' || startDateString.trim() === '') {
+      throw new BadRequestException('Tanggal mulai tidak valid.');
+    }
+
+    const startDate = new Date(startDateString);
+    if (Number.isNaN(startDate.getTime())) {
+      throw new BadRequestException('Tanggal mulai tidak valid.');
+    }
 
     const targetBillboard = await this.prisma.billboard.findUnique({
       where: { id: billboardId },
@@ -67,23 +95,64 @@ export class BookingsService {
       throw new BadRequestException('Billboard tidak tersedia.');
     }
 
-    const startDate = new Date(startDateString);
+    // Sumber kebenaran harga adalah harga billboard di database, bukan
+    // `totalPrice`/`dpAmount` dari client (field itu boleh dikirim untuk
+    // kompatibilitas tapi diabaikan).
+    const pricePerMonth = targetBillboard.price;
+    if (typeof pricePerMonth !== 'number' || !Number.isFinite(pricePerMonth) || pricePerMonth <= 0) {
+      throw new BadRequestException('Harga billboard tidak valid.');
+    }
+
+    // Formula sama dengan CheckoutForm.tsx:
+    // subTotal = price * duration; PPN 11%; admin fee Rp 50.000;
+    // grandTotal = subTotal + ppn + adminFee; DP = 60% grandTotal.
+    const adminFee = 50000;
+    const subTotalSewa = pricePerMonth * duration;
+    const ppn = subTotalSewa * 0.11;
+    const totalPrice = subTotalSewa + ppn + adminFee;
+    const dpAmount = paymentType === 'dp' ? totalPrice * 0.6 : 0;
+
     const endDate = new Date(startDate);
     endDate.setMonth(endDate.getMonth() + duration);
 
     try {
-      const newBooking = await this.prisma.booking.create({
-        data: {
-          userId: user.id,
-          billboardId,
-          startDate,
-          endDate,
-          duration,
-          totalPrice,
-          dpAmount: paymentType === 'dp' ? dpAmount : 0,
-          status: 'PENDING_PAYMENT',
-          designOption,
-        },
+      // Cek overlap + insert booking dijalankan dalam satu transaction, dan
+      // baris billboard dikunci dengan FOR UPDATE lebih dahulu sehingga dua
+      // request concurrent untuk billboard yang sama tidak bisa sama-sama
+      // lolos cek overlap (check-then-insert jadi atomic per billboard).
+      const newBooking = await this.prisma.$transaction(async (tx) => {
+        await tx.$queryRaw`SELECT id FROM "Billboard" WHERE id = ${billboardId} FOR UPDATE`;
+
+        // Definisi overlap (boundary ketat, tanpa <= / >=):
+        //   existing.startDate < newEndDate
+        //   AND existing.endDate > newStartDate
+        const overlappingBooking = await tx.booking.findFirst({
+          where: {
+            billboardId,
+            status: { notIn: NON_BLOCKING_BOOKING_STATUSES },
+            startDate: { lt: endDate },
+            endDate: { gt: startDate },
+          },
+          select: { id: true },
+        });
+
+        if (overlappingBooking) {
+          throw new ConflictException('Billboard sudah dibooking pada rentang tanggal tersebut.');
+        }
+
+        return tx.booking.create({
+          data: {
+            userId: user.id,
+            billboardId,
+            startDate,
+            endDate,
+            duration,
+            totalPrice,
+            dpAmount,
+            status: 'PENDING_PAYMENT',
+            designOption,
+          },
+        });
       });
 
       if (user.email) {
@@ -123,6 +192,11 @@ export class BookingsService {
 
       return { message: 'Sukses', orderId: newBooking.id };
     } catch (error) {
+      // Conflict (409) dari cek overlap harus diteruskan ke client, jangan
+      // ditelan menjadi error server generik.
+      if (error instanceof ConflictException) {
+        throw error;
+      }
       console.error('🔥 Server Error:', error);
       throw new InternalServerErrorException('Error Server');
     }
