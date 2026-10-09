@@ -209,19 +209,37 @@ export class BillboardsService {
       throw new NotFoundException('Data hilang');
     }
 
-    const packedSpecs = JSON.stringify([
-        { label: 'Ukuran', value: `${sizeH || 0}m x ${sizeW || 0}m` },
-        { label: 'Luas Area', value: `${(Number(sizeH) * Number(sizeW)).toFixed(1)} m²` },
-        { label: 'Layout / Orientasi', value: orientation || '-' },
-        { label: 'Tampilan', value: sides ? `${sides} Sisi` : '-' },
-        { label: 'Jenis Penerangan', value: lighting || '-' },
-        { label: 'Material', value: material || '-' },
-    ]);
+    // Field turunan (specs/includes/excludes/gallery) HANYA dihitung ulang
+    // kalau field sumbernya benar-benar dikirim di payload. Kalau tidak,
+    // pertahankan nilai lama dari DB supaya PATCH parsial tidak mengosongkan
+    // data. Pengecekan pakai `!== undefined` (bukan `??`) supaya array kosong
+    // yang dikirim sengaja oleh form admin tetap dianggap "kirim kosong".
+    const specsSourceSent =
+      sizeH !== undefined ||
+      sizeW !== undefined ||
+      orientation !== undefined ||
+      sides !== undefined ||
+      lighting !== undefined ||
+      material !== undefined;
+
+    const packedSpecs = specsSourceSent
+      ? JSON.stringify([
+          { label: 'Ukuran', value: `${sizeH || 0}m x ${sizeW || 0}m` },
+          { label: 'Luas Area', value: `${(Number(sizeH) * Number(sizeW)).toFixed(1)} m²` },
+          { label: 'Layout / Orientasi', value: orientation || '-' },
+          { label: 'Tampilan', value: sides ? `${sides} Sisi` : '-' },
+          { label: 'Jenis Penerangan', value: lighting || '-' },
+          { label: 'Material', value: material || '-' },
+        ])
+      : oldData.specs;
 
     const options = Array.isArray(adminOptions) ? adminOptions : [];
     const includesList = options.filter((opt) => opt.included).map((opt) => opt.name);
     const excludesList = options.filter((opt) => !opt.included).map((opt) => opt.name);
-    const galleryJson = JSON.stringify(gallery || []);
+
+    const includesJson = adminOptions !== undefined ? JSON.stringify(includesList) : oldData.includes;
+    const excludesJson = adminOptions !== undefined ? JSON.stringify(excludesList) : oldData.excludes;
+    const galleryJson = gallery !== undefined ? JSON.stringify(gallery) : oldData.gallery;
 
     try {
       await this.prisma.$transaction([
@@ -246,17 +264,19 @@ export class BillboardsService {
             sku: sku || undefined,
             address,
             type,
-            price: Number(price),
+            // `price` yang tidak dikirim jangan di-Number()-kan (NaN) — kalau
+            // undefined, pertahankan harga lama.
+            price: price !== undefined ? Number(price) : oldData.price,
             lat: this.toCoordinate(lat, oldData.lat),
             lng: this.toCoordinate(lng, oldData.lng),
             status,
             publishStatus,
             mainImage,
-            videoUrl: videoUrl ?? null,
-            smartsucoUrl: smartsucoUrl ?? null,
+            videoUrl: videoUrl !== undefined ? videoUrl : oldData.videoUrl,
+            smartsucoUrl: smartsucoUrl !== undefined ? smartsucoUrl : oldData.smartsucoUrl,
             specs: packedSpecs,
-            includes: JSON.stringify(includesList),
-            excludes: JSON.stringify(excludesList),
+            includes: includesJson,
+            excludes: excludesJson,
             gallery: galleryJson,
             updatedById: actorId,
           },
