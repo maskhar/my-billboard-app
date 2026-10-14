@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   try {
     // 1. Cek Apakah User adalah Admin
     const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== 'ADMIN') {
+    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
         return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
     }
 

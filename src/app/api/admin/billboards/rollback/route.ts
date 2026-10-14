@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
-    if (!session || session.user.role !== 'ADMIN') return NextResponse.json({ message: "401" }, { status: 401 });
+    if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) return NextResponse.json({ message: "401" }, { status: 401 });
 
     const { historyId } = await req.json();
 

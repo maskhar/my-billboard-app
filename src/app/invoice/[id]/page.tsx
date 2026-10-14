@@ -27,7 +27,7 @@ export default async function InvoicePage(props: Props) {
   if(!order) return <div className="text-center p-10 font-bold">Invoice Tidak Ditemukan</div>;
 
   // Hanya pemilik order atau admin yang boleh lihat
-  if (order.userId !== session.user.id && session.user.role !== 'ADMIN') {
+  if (order.userId !== session.user.id && !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
       return <div className="text-center p-10 font-bold text-red-500">Anda tidak berhak melihat invoice ini.</div>;
   }
 

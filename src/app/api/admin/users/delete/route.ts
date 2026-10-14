@@ -8,7 +8,7 @@ export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   
   // Hanya Super Admin atau Admin yang boleh hapus
-  if (!session || session.user.role !== 'ADMIN') {
+  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
       return NextResponse.json({ message: "Akses Ditolak" }, { status: 401 });
   }
 
@@ -27,11 +27,13 @@ export async function POST(req: Request) {
           return NextResponse.json({ message: "Gagal: User ini sedang memiliki transaksi aktif." }, { status: 400 });
       }
 
-      // Hapus data booking yang statusnya sudah selesai/batal dulu (clean up)
-      await prisma.booking.deleteMany({ where: { userId: id } });
-
-      // Hapus Usernya
-      await prisma.user.delete({ where: { id: id } });
+      // Hapus data booking yang statusnya sudah selesai/batal dulu (clean up),
+      // lalu hapus usernya — dibungkus $transaction agar atomik (tidak ada data
+      // yatim kalau salah satu langkah gagal di tengah proses).
+      await prisma.$transaction([
+          prisma.booking.deleteMany({ where: { userId: id } }),
+          prisma.user.delete({ where: { id: id } }),
+      ]);
 
       return NextResponse.json({ message: "User Berhasil Dihapus" });
 
