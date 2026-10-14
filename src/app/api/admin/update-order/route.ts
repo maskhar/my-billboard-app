@@ -12,13 +12,14 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  const { orderId, newStatus, reason, refundProof, isLocked } = await req.json();
+  const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = await req.json();
 
   try {
       const updateData: any = { 
           status: newStatus,
           ...(reason && { cancelReason: reason }),
           ...(refundProof && { refundProof: refundProof }),
+          ...(installationProof && { installationProof: installationProof }),
           ...(isLocked !== undefined && { isLocked: isLocked })
       };
 
