@@ -72,9 +72,9 @@ const SearchFilter = () => {
                             className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 focus:outline-none focus:border-utero"
                         >
                             <option>Semua</option>
-                            <option>Videotron</option>
-                            <option>Baliho</option>
-                            <option>Megatron</option>
+                        <option>Videotron</option>
+                        <option>Baliho</option>
+                        <option>Billboard</option>
                         </select>
                     </div>
 
@@ -129,7 +129,7 @@ const SearchFilter = () => {
                         <option>Semua</option>
                         <option>Videotron</option>
                         <option>Baliho</option>
-                        <option>Megatron</option>
+                        <option>Billboard</option>
                     </select>
                 </div>
             </div>
