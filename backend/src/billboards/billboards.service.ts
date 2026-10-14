@@ -49,6 +49,17 @@ export class BillboardsService {
   }
 
   /**
+   * Terjemahkan Prisma P2025 ("record not found") jadi 404 yang jelas. Tanpa
+   * ini, menghapus / meng-update billboard dengan ID yang tidak ada akan
+   * muncul sebagai 500 "Gagal ..." generic, bukan 404.
+   */
+  private toNotFound(error: unknown): NotFoundException | null {
+    const e = error as { code?: string } | null;
+    if (!e || e.code !== 'P2025') return null;
+    return new NotFoundException('Billboard tidak ditemukan');
+  }
+
+  /**
    * Normalisasi koordinat menjadi number yang layak disimpan ke kolom `Float`.
    *
    * `Number(x) || fallback` itu SALAH, karena `0` termasuk falsy: koordinat
@@ -381,6 +392,8 @@ export class BillboardsService {
       });
       return { message: 'Status berhasil diupdate!' };
     } catch (error) {
+      const notFound = this.toNotFound(error);
+      if (notFound) throw notFound;
       throw new InternalServerErrorException('Gagal mengupdate status');
     }
   }
@@ -403,6 +416,8 @@ export class BillboardsService {
       });
       return { message: 'Billboard Berhasil Dihapus' };
     } catch (error) {
+      const notFound = this.toNotFound(error);
+      if (notFound) throw notFound;
       throw new InternalServerErrorException('Gagal menghapus data');
     }
   }
