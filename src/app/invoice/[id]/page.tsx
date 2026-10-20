@@ -42,7 +42,7 @@ export default async function InvoicePage(props: Props) {
                     <p className="text-gray-500 text-sm font-mono">#{order.id.slice(-8).toUpperCase()}</p>
                 </div>
                 <div className="text-right">
-                    <h2 className="text-2xl font-extrabold text-utero tracking-tight">Utero<span className='text-gray-800'>Cloud</span></h2>
+                    <h2 className="text-2xl font-extrabold text-utero tracking-tight">Utero<span className='text-gray-800'>Billboard</span></h2>
                     <p className="text-xs text-gray-500 mt-1">Jl. Soekarno Hatta No. 1, Malang</p>
                     <p className="text-xs text-gray-500">support@utero.cloud</p>
                 </div>
@@ -117,7 +117,7 @@ export default async function InvoicePage(props: Props) {
 
             {/* Footer */}
             <div className="text-center text-[10px] text-gray-400 border-t border-gray-200 pt-8">
-                <p className="font-bold mb-1">Terima kasih atas kepercayaan Anda kepada Utero Cloud.</p>
+                <p className="font-bold mb-1">Terima kasih atas kepercayaan Anda kepada Utero Billboard.</p>
                 <p>Dokumen ini diterbitkan secara otomatis oleh sistem komputer dan sah tanpa tanda tangan basah.</p>
                 <div className='print:hidden mt-8'>
                      <p className='text-xs text-blue-500'>*Tekan Ctrl + P untuk mencetak atau simpan sebagai PDF.</p>

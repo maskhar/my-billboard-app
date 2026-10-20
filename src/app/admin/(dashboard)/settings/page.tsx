@@ -63,7 +63,7 @@ export default function SettingsPage() {
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Nama Website</label>
-                    <input value={form.siteName || ""} onChange={e => setForm({...form, siteName: e.target.value})} className="w-full border rounded-lg p-3 font-bold" placeholder="Utero Cloud"/>
+                    <input value={form.siteName || ""} onChange={e => setForm({...form, siteName: e.target.value})} className="w-full border rounded-lg p-3 font-bold" placeholder="Utero Billboard"/>
                 </div>
                 <div>
                     <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Deskripsi</label>

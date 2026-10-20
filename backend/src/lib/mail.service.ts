@@ -29,7 +29,7 @@ export class MailService {
     return `
     <div style="font-family: Arial, sans-serif; color: #333; max-width: 680px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 12px; overflow: hidden; background-color: #fcfcfc;">
         <div style="background-color: #ffffff; padding: 30px; text-align: center; border-bottom: 1px solid #eaeaea;">
-            <h2 style="color: #1a1a1a; margin: 0; letter-spacing: -1px; font-size: 24px;">UTERO <span style="color: #CE181E;">CLOUD</span></h2>
+            <h2 style="color: #1a1a1a; margin: 0; letter-spacing: -1px; font-size: 24px;">UTERO <span style="color: #CE181E;">BILLBOARD</span></h2>
             <p style="color: #666; margin: 5px 0 0 0; font-size: 12px; letter-spacing: 1px;">PREMIUM OUTDOOR MEDIA</p>
         </div>
 

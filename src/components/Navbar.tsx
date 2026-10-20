@@ -45,7 +45,7 @@ const Navbar = () => {
           <Link href="/" className="flex-shrink-0 cursor-pointer flex items-center gap-1">
             {/* Di HP text-xl, di Desktop text-2xl */}
             <span className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">
-                Utero<span className="text-utero">Cloud</span>
+                Utero<span className="text-utero">Billboard</span>
             </span>
           </Link>
 

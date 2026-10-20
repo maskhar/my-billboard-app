@@ -49,7 +49,7 @@ export default function AdminLoginPage() {
                 <Lock color='white' size={32} />
             </div>
             <h1 className="text-3xl font-bold text-white">Admin Portal</h1>
-            <p className="text-gray-500 text-sm mt-1">Khusus akses authorized personnel Utero Cloud</p>
+            <p className="text-gray-500 text-sm mt-1">Khusus akses authorized personnel Utero Billboard</p>
         </div>
 
         <div className="w-full max-w-sm bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-8">

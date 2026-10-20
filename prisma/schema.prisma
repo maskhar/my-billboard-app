@@ -159,7 +159,7 @@ model AdditionalCharge {
 // 4. SETTING WEBSITE
 model SystemSetting {
   id               String  @id @default("default_config")
-  siteName         String  @default("Utero Cloud")
+  siteName         String  @default("Utero Billboard")
   siteDesc         String  @default("Platform Sewa Billboard Terlengkap")
   geminiApiKey     String? 
   googleMapsApiKey String?

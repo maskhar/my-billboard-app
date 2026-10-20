@@ -29,7 +29,7 @@ async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | n
 async function getSystemSettings(): Promise<SystemSetting | null> {
     return {
         id: 'default_config',
-        siteName: 'Utero Cloud',
+        siteName: 'Utero Billboard',
         siteDesc: 'Platform Sewa Billboard Terlengkap',
         geminiApiKey: null,
         googleMapsApiKey: null,
