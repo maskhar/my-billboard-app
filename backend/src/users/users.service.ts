@@ -43,6 +43,7 @@ export class UsersService {
       const { password: _password, ...safeUser } = user;
       return safeUser;
     } catch (error) {
+      console.error('Create user error:', error);
       throw new InternalServerErrorException('Terjadi kesalahan pada server.');
     }
   }
@@ -69,6 +70,7 @@ export class UsersService {
       const { password: _password, ...safeUser } = updatedUser;
       return safeUser;
     } catch (error) {
+      console.error('Update profile error:', error);
       throw new InternalServerErrorException('Terjadi kesalahan pada server.');
     }
   }
@@ -105,6 +107,7 @@ export class UsersService {
         }
       });
     } catch (error) {
+      console.error('Change password error:', error);
       throw new InternalServerErrorException('Terjadi kesalahan pada server.');
     }
   }

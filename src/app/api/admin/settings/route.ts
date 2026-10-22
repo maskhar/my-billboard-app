@@ -62,6 +62,7 @@ export async function POST(req: Request) {
           return NextResponse.json({ message: "Sukses", aiResult: resultText });
 
       } catch (error: any) {
+          console.error('[admin/settings] TEST_AI gagal:', error);
           return NextResponse.json({ message: "Koneksi Gagal.", errorDetails: error.message }, { status: 500 });
       }
   }

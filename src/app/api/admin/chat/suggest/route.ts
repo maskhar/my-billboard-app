@@ -40,6 +40,7 @@ export async function POST(req: Request) {
         return NextResponse.json({ reply: aiData.candidates?.[0]?.content?.parts?.[0]?.text });
 
     } catch (e) {
+        console.error('[admin/chat/suggest] AI suggest error:', e);
         return NextResponse.json({ reply: "Maaf, AI sedang sibuk." });
     }
 }

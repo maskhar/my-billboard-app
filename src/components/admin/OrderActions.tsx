@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { 
     CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, 
-    Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck
+    Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck, ImageOff
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -242,7 +242,14 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
                     </div>
                     <div className="p-5 space-y-4">
                         <div className="bg-gray-100 p-4 rounded-lg flex justify-center items-center">
-                            <img src={order.designFileUrl} alt="Desain User" className="max-w-full max-h-[60vh] rounded shadow-md"/>
+                            {order.designFileUrl ? (
+                                <img src={order.designFileUrl} alt="Desain User" className="max-w-full max-h-[60vh] rounded shadow-md"/>
+                            ) : (
+                                <div className="w-full h-40 rounded-lg bg-gray-200 flex flex-col items-center justify-center text-gray-400">
+                                    <ImageOff size={32} />
+                                    <p className="text-xs mt-2">Desain tidak tersedia</p>
+                                </div>
+                            )}
                         </div>
                         <a 
                             href={order.designFileUrl} 

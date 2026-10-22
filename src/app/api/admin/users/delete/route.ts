@@ -38,6 +38,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "User Berhasil Dihapus" });
 
   } catch (error) {
+      console.error('[admin/users/delete] Gagal menghapus user:', error);
       return NextResponse.json({ message: "Gagal menghapus user" }, { status: 500 });
   }
 }

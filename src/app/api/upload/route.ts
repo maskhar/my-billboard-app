@@ -52,6 +52,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ url: `/uploads/designs/${filename}` });
 
   } catch (error) {
+      console.error('[upload] Gagal upload:', error);
       return NextResponse.json({ message: "Gagal Upload" }, { status: 500 });
   }
 }

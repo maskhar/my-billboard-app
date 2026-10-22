@@ -28,6 +28,7 @@ export class UsersController {
       const user = await this.usersService.create(createUserDto);
       return { user, message: 'Sukses mendaftar' };
     } catch (error) {
+      console.error('Register error:', error);
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -43,6 +44,7 @@ export class UsersController {
       await this.usersService.updateProfile(id, updateProfileDto);
       return { message: 'Profil berhasil diperbarui.' };
     } catch (error) {
+      console.error('Update profile error:', error);
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
@@ -58,6 +60,7 @@ export class UsersController {
       await this.usersService.changePassword(id, changePasswordDto);
       return { message: 'Password berhasil diubah.' };
     } catch (error) {
+      console.error('Change password error:', error);
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }

@@ -34,6 +34,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Billboard Berhasil Dihapus" });
 
   } catch (error) {
+      console.error('[admin/billboards/delete] Gagal menghapus data:', error);
       return NextResponse.json({ message: "Gagal menghapus data" }, { status: 500 });
   }
 }

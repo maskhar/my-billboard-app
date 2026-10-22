@@ -28,6 +28,7 @@ export async function POST(req: Request) {
 
         return NextResponse.json({ status: "ok", message: "Role berhasil diupdate" });
     } catch (error) {
+        console.error('[admin/users/update-role] Gagal update role:', error);
         return NextResponse.json({ message: "Gagal update" }, { status: 500 });
     }
 }

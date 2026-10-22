@@ -60,6 +60,24 @@ export class BillboardsService {
   }
 
   /**
+   * JSON.parse yang aman. Data kolom JSON di DB bisa korup / tidak valid,
+   * dan JSON.parse mentah akan melempar SyntaxError yang tak tertangkap.
+   * Helper ini melempar error yang jelas (bukan 500 generic) supaya penyebab
+   * masalah (field mana yang rusak) gampang dilacak.
+   */
+  private safeJsonParse<T = any>(value: string, field: string, billboardId?: string): T {
+    try {
+      return JSON.parse(value) as T;
+    } catch (error) {
+      const where = billboardId ? ` (billboard ${billboardId})` : '';
+      console.error(`Gagal parse JSON field "${field}"${where}:`, error);
+      throw new InternalServerErrorException(
+        `Data ${field} pada billboard rusak / tidak valid JSON${where}.`,
+      );
+    }
+  }
+
+  /**
    * Normalisasi koordinat menjadi number yang layak disimpan ke kolom `Float`.
    *
    * `Number(x) || fallback` itu SALAH, karena `0` termasuk falsy: koordinat
@@ -394,6 +412,7 @@ export class BillboardsService {
     } catch (error) {
       const notFound = this.toNotFound(error);
       if (notFound) throw notFound;
+      console.error('Quick update error:', error);
       throw new InternalServerErrorException('Gagal mengupdate status');
     }
   }
@@ -418,6 +437,7 @@ export class BillboardsService {
     } catch (error) {
       const notFound = this.toNotFound(error);
       if (notFound) throw notFound;
+      console.error('Remove billboard error:', error);
       throw new InternalServerErrorException('Gagal menghapus data');
     }
   }
@@ -443,17 +463,17 @@ export class BillboardsService {
     // Parsing JSON string kembali ke objek/array
     const parsedBillboard = {
       ...billboard,
-      specs: JSON.parse(billboard.specs),
-      includes: JSON.parse(billboard.includes),
+      specs: this.safeJsonParse(billboard.specs, 'specs', billboard.id),
+      includes: this.safeJsonParse(billboard.includes, 'includes', billboard.id),
       // Only parse excludes if it's not null/undefined to prevent error on empty field
-      excludes: billboard.excludes ? JSON.parse(billboard.excludes) : [],
-      gallery: JSON.parse(billboard.gallery),
+      excludes: billboard.excludes ? this.safeJsonParse(billboard.excludes, 'excludes', billboard.id) : [],
+      gallery: this.safeJsonParse(billboard.gallery, 'gallery', billboard.id),
     };
 
     // Parsing snapshot riwayat juga
     const parsedHistory = parsedBillboard.history.map(h => ({
       ...h,
-      snapshot: JSON.parse(h.snapshot)
+      snapshot: this.safeJsonParse(h.snapshot, 'snapshot', billboard.id)
     }));
     parsedBillboard.history = parsedHistory;
 
@@ -469,7 +489,7 @@ export class BillboardsService {
       throw new NotFoundException('History not found');
     }
 
-    const details = JSON.parse(history.snapshot);
+    const details = this.safeJsonParse<Record<string, any>>(history.snapshot, 'snapshot', history.billboardId);
 
     try {
       await this.prisma.billboard.update({
@@ -490,6 +510,7 @@ export class BillboardsService {
       });
       return { message: 'Rollback Berhasil' };
     } catch (e) {
+      console.error('Rollback Error:', e);
       throw new InternalServerErrorException('Gagal Rollback');
     }
   }

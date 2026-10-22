@@ -2,7 +2,7 @@
 import { cookies } from 'next/headers';
 import { buildNextAuthCookieHeader } from '@/lib/nextauth-cookie';
 import Link from 'next/link';
-import { Plus, MapPin, Tag, Edit, Eye, User, Clock } from 'lucide-react';
+import { Plus, MapPin, Tag, Edit, Eye, User, Clock, ImageOff } from 'lucide-react';
 import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn'; 
 import StatusChanger from '@/components/admin/StatusChanger'; 
 import { Billboard, User as UserType } from '@prisma/client';
@@ -78,7 +78,13 @@ export default async function AdminBillboardsPage() {
                             
                             <td className="px-6 py-3 w-24">
                                 <Link href={`/billboard/${item.slug}`} target="_blank">
-                                    <img src={item.mainImage} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
+                                    {item.mainImage ? (
+                                        <img src={item.mainImage} alt={item.title} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
+                                    ) : (
+                                        <div className="w-20 h-12 rounded bg-gray-200 border flex items-center justify-center text-gray-400 hover:scale-110 transition cursor-pointer">
+                                            <ImageOff size={18} />
+                                        </div>
+                                    )}
                                 </Link>
                             </td>
                             

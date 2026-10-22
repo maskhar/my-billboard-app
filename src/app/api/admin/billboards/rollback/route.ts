@@ -19,7 +19,21 @@ export async function POST(req: Request) {
         if (!history) return NextResponse.json({ message: "History not found" }, { status: 404 });
 
         // Parse Snapshot JSON
-        const details = JSON.parse(history.snapshot);
+        let details: {
+            address?: string;
+            sku?: string | null;
+            type?: string;
+            mainImage?: string;
+            lat?: number;
+            lng?: number;
+            slug?: string;
+        };
+        try {
+            details = JSON.parse(history.snapshot);
+        } catch (parseError) {
+            console.error('[billboards/rollback] Snapshot JSON korup untuk history', historyId, parseError);
+            return NextResponse.json({ message: "Data snapshot korup / tidak valid JSON" }, { status: 422 });
+        }
 
         // 2. Kembalikan data ke Billboard Utama
         await prisma.billboard.update({
@@ -45,6 +59,7 @@ export async function POST(req: Request) {
         
         return NextResponse.json({ message: "Rollback Berhasil" });
     } catch (e) {
+        console.error('[billboards/rollback] Gagal rollback:', e);
         return NextResponse.json({ message: "Gagal Rollback" }, { status: 500 });
     }
 }

@@ -216,6 +216,7 @@ export class BookingsService {
       });
       return { message: 'Desain Berhasil Dikirim' };
     } catch (error) {
+      console.error('Submit design error:', error);
       throw new InternalServerErrorException('Gagal');
     }
   }
@@ -251,6 +252,7 @@ export class BookingsService {
 
       return { message: 'Pesanan dibatalkan' };
     } catch (error) {
+      console.error('Cancel booking error:', error);
       throw new InternalServerErrorException('Gagal membatalkan');
     }
   }

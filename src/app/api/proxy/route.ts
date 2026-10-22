@@ -175,6 +175,7 @@ export async function GET(req: Request) {
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
   } catch (error) {
+    console.error('[proxy] Gagal memuat target:', error);
     return new Response('Proxy Error', { status: 500 });
   }
 }

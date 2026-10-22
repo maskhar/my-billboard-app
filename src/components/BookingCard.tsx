@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, ImageOff, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 
@@ -217,7 +217,13 @@ export default function BookingCard({ order }: { order: any }) {
             
             {/* 1. KOLOM KIRI: INFO PRODUK */}
             <div className="md:col-span-2 flex gap-4">
-                <img src={order.billboard?.mainImage || '/placeholder.jpg'} className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100" />
+                {order.billboard?.mainImage ? (
+                    <img src={order.billboard.mainImage} className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100" />
+                ) : (
+                    <div className="w-24 h-24 rounded-lg bg-gray-200 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0">
+                        <ImageOff size={24} />
+                    </div>
+                )}
                 <div className="flex flex-col justify-between">
                     <div>
                         <h3 className="font-bold text-gray-800 line-clamp-1">{order.billboard?.title || "Billboard Tidak Ditemukan"}</h3>
