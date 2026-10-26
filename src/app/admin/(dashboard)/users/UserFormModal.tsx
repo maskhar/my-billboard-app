@@ -75,7 +75,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
     }
     setLoading(true);
     try {
-        const res = await fetch('/api/admin/users/create', {
+        const res = await fetch('/api/proxy/users/admin-create', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({

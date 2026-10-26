@@ -33,6 +33,15 @@ const SelectField = ({ label, id, value, onChange, children }: any) => (
     </div>
   );
 
+const getApiErrorMessage = async (res: Response) => {
+  try {
+    const data = await res.json();
+    return typeof data?.message === 'string' ? data.message : `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+};
+
 export default function UserProfileForm({ user }: { user: User }) {
   const [businessDetails, setBusinessDetails] = useState({
     name: user.name || '',
@@ -59,10 +68,10 @@ export default function UserProfileForm({ user }: { user: User }) {
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/users/update-business', {
-        method: 'POST',
+      const res = await fetch(`/api/proxy/users/${user.id}/admin-business`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user.id, ...businessDetails }),
+        body: JSON.stringify(businessDetails),
       });
       if (!res.ok) throw new Error('Server error');
       alert('Business details updated successfully!');
@@ -80,27 +89,72 @@ export default function UserProfileForm({ user }: { user: User }) {
       alert("Passwords do not match!");
       return;
     }
-    setLoading(true);
-    try {
+
+    const roleChanged = userAccount.role !== user.role;
+
+    const updateAccount = async () => {
       const data: any = {
-        userId: user.id,
         username: userAccount.username,
         whatsapp: userAccount.whatsapp,
-        role: userAccount.role, // Kirim role ke API
       };
       if (userAccount.newPassword) {
         data.password = userAccount.newPassword;
       }
-      const res = await fetch('/api/admin/users/update-account', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error('Server error');
-      alert('Account details updated successfully!');
+      try {
+        const res = await fetch(`/api/proxy/users/${user.id}/admin-account`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        return { ok: res.ok, message: res.ok ? '' : await getApiErrorMessage(res) };
+      } catch {
+        return { ok: false, message: 'Tidak dapat menghubungi server.' };
+      }
+    };
+
+    const updateRole = async () => {
+      try {
+        const res = await fetch(`/api/proxy/users/${user.id}/admin-role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newRole: userAccount.role }),
+        });
+        return { ok: res.ok, message: res.ok ? '' : await getApiErrorMessage(res) };
+      } catch {
+        return { ok: false, message: 'Tidak dapat menghubungi server.' };
+      }
+    };
+
+    setLoading(true);
+    try {
+      const rolePromise: Promise<{ ok: boolean; message: string } | null> = roleChanged
+        ? updateRole()
+        : Promise.resolve(null);
+      const [accountResult, roleResult] = await Promise.all([updateAccount(), rolePromise]);
+
+      const failures: string[] = [];
+      if (!accountResult.ok) {
+        failures.push(`Gagal memperbarui data akun: ${accountResult.message}`);
+      }
+      if (roleResult && !roleResult.ok) {
+        failures.push(`Gagal mengubah role: ${roleResult.message}`);
+        setUserAccount(prev => ({ ...prev, role: user.role }));
+      }
+
+      if (failures.length > 0) {
+        const successes: string[] = [];
+        if (accountResult.ok) successes.push('data akun berhasil diperbarui');
+        if (roleResult?.ok) successes.push('role berhasil diubah');
+
+        alert(`${failures.join('\n')}${successes.length > 0 ? `\n\nNamun ${successes.join(' dan ')}.` : ''}`);
+        if (accountResult.ok || roleResult?.ok) {
+          router.refresh();
+        }
+        return;
+      }
+
+      alert(roleChanged ? 'Account details and role updated successfully!' : 'Account details updated successfully!');
       router.refresh();
-    } catch (error) {
-      alert('Failed to update account details.');
     } finally {
       setLoading(false);
     }

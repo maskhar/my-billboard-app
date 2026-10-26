@@ -20,10 +20,8 @@ export default function UserActions({ user }: { user: any }) {
 
       setLoading(true);
       try {
-          const res = await fetch('/api/admin/users/delete', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id: user.id })
+          const res = await fetch(`/api/proxy/users/${user.id}/admin-delete`, {
+              method: 'DELETE'
           });
           const json = await res.json();
           if (res.ok) {
@@ -40,10 +38,10 @@ export default function UserActions({ user }: { user: any }) {
   const handleUpdateRole = async () => {
       setLoading(true);
       try {
-          const res = await fetch('/api/admin/users/update-role', {
-              method: 'POST',
+          const res = await fetch(`/api/proxy/users/${user.id}/admin-role`, {
+              method: 'PATCH',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: user.id, newRole })
+              body: JSON.stringify({ newRole })
           });
 
           if(res.ok) {
