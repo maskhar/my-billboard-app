@@ -1,12 +1,16 @@
 
-import { Body, Controller, ForbiddenException, HttpException, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Delete, ForbiddenException, HttpException, HttpStatus, Param, Patch, Post } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { AdminCreateUserDto } from './dto/admin-create-user.dto';
+import { AdminUpdateAccountDto } from './dto/admin-update-account.dto';
+import { AdminUpdateBusinessDto } from './dto/admin-update-business.dto';
 import { Public } from '../auth/public.decorator';
 import { CurrentUser } from '../auth/auth-user';
 import type { AuthUser } from '../auth/auth-user';
+import { Roles } from '../auth/roles.decorator';
 import { ADMIN_ROLES } from '../auth/admin-roles';
 
 @Controller('api/users')
@@ -63,5 +67,43 @@ export class UsersController {
       console.error('Change password error:', error);
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
     }
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Post('admin-create')
+  adminCreate(@Body() dto: AdminCreateUserDto) {
+    return this.usersService.adminCreate(dto);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Patch(':id/admin-account')
+  adminUpdateAccount(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Body() dto: AdminUpdateAccountDto,
+  ) {
+    return this.usersService.adminUpdateAccount(id, dto, user.role);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Patch(':id/admin-business')
+  adminUpdateBusiness(@Param('id') id: string, @Body() dto: AdminUpdateBusinessDto) {
+    return this.usersService.adminUpdateBusiness(id, dto);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Patch(':id/admin-role')
+  adminUpdateRole(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @Body() body: { newRole: string },
+  ) {
+    return this.usersService.adminUpdateRole(id, body.newRole, user.role);
+  }
+
+  @Roles(...ADMIN_ROLES)
+  @Delete(':id/admin-delete')
+  adminDelete(@Param('id') id: string) {
+    return this.usersService.adminDelete(id);
   }
 }
