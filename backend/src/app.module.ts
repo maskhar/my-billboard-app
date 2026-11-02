@@ -12,6 +12,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { OrdersModule } from './orders/orders.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { SettingsModule } from './settings/settings.module';
 import { ChatModule } from './chat/chat.module';
 
 @Module({
@@ -26,6 +27,7 @@ import { ChatModule } from './chat/chat.module';
     OrdersModule,
     BookingsModule,
     PaymentsModule,
+    SettingsModule,
   ],
   controllers: [],
   providers: [
