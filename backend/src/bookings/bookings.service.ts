@@ -15,6 +15,16 @@ import { RequestRefundDto } from './dto/request-refund.dto';
 // Daftar ini disusun dari evidence codebase (lihat laporan Batch 3-B2) dan
 // bersifat fail-closed: status baru yang belum dikenal ikut memblokir.
 const NON_BLOCKING_BOOKING_STATUSES = ['CANCELLED', 'REFUNDED'];
+const CANCELLABLE_BOOKING_STATUSES = ['PENDING_PAYMENT'];
+const REFUND_REQUESTABLE_STATUSES = [
+  'PAID_CONFIRMED',
+  'DESIGN_RECEIVED',
+  'IN_PRODUCTION',
+  'INSTALLATION',
+  'ACTIVE',
+];
+const REFUND_BANK_STATUSES = ['WAITING_BANK'];
+const DESIGN_OPTIONS = ['upload', 'service'];
 
 @Injectable()
 export class BookingsService {
@@ -31,7 +41,7 @@ export class BookingsService {
   private async assertOrderOwner(orderId: string, actorId: string) {
     const order = await this.prisma.booking.findUnique({
       where: { id: orderId },
-      select: { userId: true },
+      select: { userId: true, status: true },
     });
     if (!order) {
       throw new NotFoundException('Pesanan tidak ditemukan.');
@@ -39,6 +49,7 @@ export class BookingsService {
     if (order.userId !== actorId) {
       throw new ForbiddenException('Pesanan ini bukan milik Anda.');
     }
+    return order;
   }
 
   async create(createBookingDto: CreateBookingDto, userId: string) {
@@ -65,6 +76,10 @@ export class BookingsService {
       designOption,
       startDateString,
     } = createBookingDto;
+
+    if (!DESIGN_OPTIONS.includes(designOption)) {
+      throw new BadRequestException('Pilihan desain tidak valid.');
+    }
 
     // `duration` harus bilangan bulat positif. Client bisa mengirim negatif,
     // nol, pecahan, atau nilai non-numeric; semuanya harus ditolak dengan 400.
@@ -223,7 +238,13 @@ export class BookingsService {
 
   async cancel(cancelBookingDto: CancelBookingDto, actorId: string) {
     const { orderId } = cancelBookingDto;
-    await this.assertOrderOwner(orderId, actorId);
+    const existing = await this.assertOrderOwner(orderId, actorId);
+
+    if (!CANCELLABLE_BOOKING_STATUSES.includes(existing.status)) {
+      throw new BadRequestException(
+        'Pesanan tidak bisa dibatalkan karena sudah diproses. Gunakan pengajuan refund.',
+      );
+    }
 
     try {
       const order = await this.prisma.booking.update({
@@ -259,10 +280,16 @@ export class BookingsService {
 
   async requestRefund(requestRefundDto: RequestRefundDto, actorId: string) {
     const { step, orderId, reason, bankName, bankAccount } = requestRefundDto;
-    await this.assertOrderOwner(orderId, actorId);
+    const existing = await this.assertOrderOwner(orderId, actorId);
     const adminEmail = process.env.ADMIN_EMAIL;
 
     if (step === 'reason') {
+      if (!REFUND_REQUESTABLE_STATUSES.includes(existing.status)) {
+        throw new BadRequestException(
+          'Pengajuan refund hanya dapat dilakukan untuk pesanan yang sudah dibayar.',
+        );
+      }
+
       const order = await this.prisma.booking.update({
         where: { id: orderId },
         data: {
@@ -292,6 +319,20 @@ export class BookingsService {
     }
 
     if (step === 'bank') {
+      const trimmedBankName = typeof bankName === 'string' ? bankName.trim() : '';
+      const trimmedBankAccount =
+        typeof bankAccount === 'string' ? bankAccount.trim() : '';
+
+      if (!trimmedBankName || !trimmedBankAccount) {
+        throw new BadRequestException('Nama bank dan nomor rekening wajib diisi.');
+      }
+
+      if (!REFUND_BANK_STATUSES.includes(existing.status)) {
+        throw new BadRequestException(
+          'Data rekening hanya dapat diisi saat status pesanan menunggu data rekening.',
+        );
+      }
+
       const orderData = await this.prisma.booking.findUnique({ where: { id: orderId } });
       const refundNominal = (orderData?.totalPrice || 0) * 0.9;
 
@@ -299,8 +340,8 @@ export class BookingsService {
         where: { id: orderId },
         data: {
           status: 'PROCESS_REFUND',
-          userBankName: bankName,
-          userBankAccount: bankAccount,
+          userBankName: trimmedBankName,
+          userBankAccount: trimmedBankAccount,
           refundAmount: refundNominal,
         },
         include: { billboard: true, user: true },
@@ -313,7 +354,7 @@ export class BookingsService {
           title: 'Data Rekening Masuk',
           message: `User telah memasukkan data rekening. Mohon segera transfer pengembalian dana Rp ${refundNominal.toLocaleString(
             'id-ID',
-          )}.<br/>Bank: ${bankName} - ${bankAccount}`,
+          )}.<br/>Bank: ${trimmedBankName} - ${trimmedBankAccount}`,
           orderDetail: {
             id: order.id,
             total: refundNominal,
