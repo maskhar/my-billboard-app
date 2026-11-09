@@ -54,53 +54,126 @@ export const authOptions: NextAuthOptions = {
   ],
   
   callbacks: {
-    // 3. LOGIKA OTOMATIS REGISTER JIKA LOGIN GOOGLE
+    // LOGIKA LOGIN GOOGLE: hanya akun USER yang boleh masuk lewat Google.
     async signIn({ user, account, profile }) {
-        if (account?.provider === 'google') {
-            try {
-                // Cek apakah user sudah ada di database?
-                const existingUser = await prisma.user.findUnique({
-                    where: { email: user.email! }
-                });
-
-                                if (existingUser) {
-                    // Jika user sudah ada, cukup return true
-                    return true;
-                } else {
-                    // Kalau belum ada, buatkan akun baru otomatis
-                    await prisma.user.create({
-                        data: {
-                            name: user.name,
-                            email: user.email!,
-                            role: 'USER', // Default User
-                            password: '', // Tidak butuh password karena login google
-                            image: user.image,
-                            authProvider: "GOOGLE",
-                            isVerified: true // Langsung verified
-                        }
-                    });
-                }
-                return true; // Izinkan masuk
-            } catch (error) {
-                console.error("Error creating user from Google:", error);
-                return false;
-            }
-        }
+      if (account?.provider !== 'google') {
         return true;
+      }
+
+      const googleProfile = (profile ?? {}) as {
+        email?: string | null;
+        email_verified?: boolean | null;
+        name?: string | null;
+        picture?: string | null;
+      };
+
+      // Email dipakai apa adanya dari Google (tidak diubah kapitalisasinya).
+      const email = googleProfile.email ?? user.email ?? null;
+      const googleName = user.name ?? googleProfile.name ?? null;
+      const googleImage = user.image ?? googleProfile.picture ?? null;
+
+      // Tolak email kosong atau email Google yang belum terverifikasi.
+      if (!email || googleProfile.email_verified !== true) {
+        return false;
+      }
+
+      const fillMissingProfileFields = async (existingUser: {
+        id: string;
+        name: string | null;
+        image: string | null;
+      }) => {
+        const data: { name?: string; image?: string } = {};
+        if (!existingUser.name && googleName) data.name = googleName;
+        if (!existingUser.image && googleImage) data.image = googleImage;
+
+        if (Object.keys(data).length > 0) {
+          await prisma.user.update({
+            where: { id: existingUser.id },
+            data,
+          });
+        }
+      };
+
+      const authorizeExistingUser = async (existingUser: {
+        id: string;
+        role: string;
+        name: string | null;
+        image: string | null;
+      }) => {
+        // Staf/admin wajib login lewat /admin/login.
+        if (existingUser.role !== 'USER') {
+          return false;
+        }
+
+        // Role, authProvider, isVerified, dan password TIDAK diubah.
+        await fillMissingProfileFields(existingUser);
+        return true;
+      };
+
+      try {
+        const existingUser = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true, role: true, name: true, image: true },
+        });
+
+        if (existingUser) {
+          return await authorizeExistingUser(existingUser);
+        }
+
+        try {
+          await prisma.user.create({
+            data: {
+              name: googleName,
+              email,
+              role: 'USER',
+              password: null,
+              image: googleImage,
+              authProvider: 'GOOGLE',
+              isVerified: true,
+            },
+          });
+        } catch (error) {
+          // P2002 = unique constraint (race dua login paralel dengan email sama).
+          if ((error as { code?: string }).code === 'P2002') {
+            const racedUser = await prisma.user.findUnique({
+              where: { email },
+              select: { id: true, role: true, name: true, image: true },
+            });
+
+            if (!racedUser) {
+              return false;
+            }
+
+            return await authorizeExistingUser(racedUser);
+          }
+
+          throw error;
+        }
+
+        return true;
+      } catch (error) {
+        console.error('Error pada login Google:', error);
+        return false;
+      }
     },
 
         async session({ session, token }) {
       if (token && session.user) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as string;
-        session.user.image = token.picture; 
+        const sessionUser = session.user as typeof session.user & {
+          id?: string;
+          role?: string;
+        };
+        sessionUser.id = token.id as string;
+        sessionUser.role = token.role as string;
+        session.user.image = token.picture;
       }
       return session;
     },
     
-    async jwt({ token, user, account, profile, trigger, session }) {
+    async jwt({ token, user, trigger, session }) {
       if (trigger === 'update' && session) {
-        const updatedUser = (session as any).user ?? {};
+        const updatedUser =
+          (session as { user?: { name?: string; image?: string } }).user ?? {};
         if (updatedUser.name) token.name = updatedUser.name;
         if (updatedUser.image) token.picture = updatedUser.image;
         return token;

@@ -1,18 +1,24 @@
 // src/app/login/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { signIn, signOut, getSession } from 'next-auth/react'; 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-// Tambahkan Icon Google (Chrome logo-ish)
-import { Chrome } from 'lucide-react'; 
-
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const queryError = searchParams.get('error');
+  const queryErrorMessage = queryError
+    ? queryError === 'AccessDenied'
+      ? 'Login Google tidak tersedia untuk akun ini. Staf/admin silakan login lewat halaman admin.'
+      : 'Login gagal. Silakan coba lagi.'
+    : '';
+  const displayError = error || queryErrorMessage;
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -34,7 +40,7 @@ export default function LoginPage() {
         setLoading(false);
     } else {
         const session = await getSession();
-        const userRole = session?.user?.role;
+        const userRole = (session?.user as { role?: string } | undefined)?.role;
         const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'USER_AIDA'];
 
         if (userRole && adminRoles.includes(userRole)) {
@@ -49,10 +55,8 @@ export default function LoginPage() {
     }
   };
 
-  // HANDLER BARU: LOGIN GOOGLE
+  // Login Google: redirect penuh ke Google, lalu kembali ke halaman utama.
   const handleGoogleLogin = () => {
-      // Tidak perlu validasi macam-macam, langsung panggil Google
-      // Redirect false agar kita bisa kontrol sendiri
       signIn('google', { callbackUrl: '/' }); 
   };
 
@@ -72,9 +76,9 @@ export default function LoginPage() {
                     <p className="text-xs text-gray-400 mt-1">Silakan pilih metode login</p>
                   </div>
 
-                  {error && (
-                      <div className={`text-sm p-3 rounded-md text-center border font-semibold animate-pulse ${error.includes('⛔') ? 'bg-black text-yellow-400 border-black' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                          {error}
+                  {displayError && (
+                      <div className={`text-sm p-3 rounded-md text-center border font-semibold animate-pulse ${displayError.includes('⛔') ? 'bg-black text-yellow-400 border-black' : 'bg-red-50 text-red-600 border-red-100'}`}>
+                          {displayError}
                       </div>
                   )}
                   
@@ -120,5 +124,13 @@ export default function LoginPage() {
           </div>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50" />}>
+      <LoginForm />
+    </Suspense>
   );
 }
