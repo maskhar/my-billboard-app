@@ -49,7 +49,7 @@ export default function BillboardFormPage() {
   const billboardId = searchParams.get('id');
 
   const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(false);
+  const [fetching, setFetching] = useState(Boolean(billboardId));
   
   const [inputType, setInputType] = useState<'AUTO' | 'MANUAL'>('AUTO');
   const [historyList, setHistoryList] = useState<any[]>([]);
@@ -79,7 +79,6 @@ export default function BillboardFormPage() {
 
   useEffect(() => {
       if (billboardId) {
-          setFetching(true);
           fetch(`/api/proxy/billboards/${billboardId}/detail`)
             .then(async (res) => {
                 if (!res.ok) {

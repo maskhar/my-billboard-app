@@ -1,7 +1,7 @@
 // src/components/admin/OrderActions.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { 
@@ -23,13 +23,8 @@ export default function OrderActions({ order, currentUserRole }: { order: any, c
   
   
   const [uploadType, setUploadType] = useState<'LINK' | 'FILE'>('LINK');
-  const [proofData, setProofData] = useState<string>("");
-  const [installData, setInstallData] = useState<string>(""); // Data Foto Tayang
-
-  useEffect(() => {
-      setProofData(order.refundProof || "");
-      setInstallData(order.installationProof || "");
-  }, [order]);
+  const [proofData, setProofData] = useState<string>(order.refundProof || "");
+  const [installData, setInstallData] = useState<string>(order.installationProof || ""); // Data Foto Tayang
 
   const isTimeUp = order.refundedAt 
       ? (new Date().getTime() - new Date(order.refundedAt).getTime()) > (24 * 60 * 60 * 1000) 

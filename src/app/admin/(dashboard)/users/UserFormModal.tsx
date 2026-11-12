@@ -1,7 +1,7 @@
 // src/app/admin/(dashboard)/users/UserFormModal.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, X } from 'lucide-react';
 
@@ -46,19 +46,6 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
   });
   const [loading, setLoading] = useState(false);
   const router = useRouter();
-
-  useEffect(() => {
-    // Reset form when modal is opened
-    if (isOpen) {
-      setFormData({
-        name: '',
-        email: '',
-        password: '',
-        confirmPassword: '',
-        role: 'USER',
-      });
-    }
-  }, [isOpen]);
 
   if (!isOpen) return null;
 

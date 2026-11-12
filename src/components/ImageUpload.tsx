@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useSyncExternalStore } from 'react';
 import { CldUploadWidget } from 'next-cloudinary';
 import { Image as ImageIcon, Trash, Loader2, UploadCloud, Server, Cloud } from 'lucide-react';
 
@@ -12,13 +12,16 @@ interface ImageUploadProps {
 
 export default function ImageUpload({ value, onChange, label = "Upload Gambar" }: ImageUploadProps) {
     const [loading, setLoading] = useState(false);
-    const [mounted, setMounted] = useState(false);
     
     // STATE PILIHAN MODE: 'LOCAL' atau 'CLOUD'
     const [storageMode, setStorageMode] = useState<'LOCAL' | 'CLOUD'>('LOCAL');
 
-    // Hindari hydration mismatch
-    useEffect(() => { setMounted(true); }, []);
+    // Hindari hydration mismatch tanpa setState di dalam effect.
+    const mounted = useSyncExternalStore(
+        () => () => {},
+        () => true,
+        () => false,
+    );
 
     // 1. LOGIKA CLOUD (CLOUDINARY)
     const onCloudUpload = (result: any) => {

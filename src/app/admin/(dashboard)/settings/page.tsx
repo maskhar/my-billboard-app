@@ -59,7 +59,6 @@ export default function SettingsPage() {
   const [aiError, setAiError] = useState('');
 
   const loadSettings = useCallback(async () => {
-    setFetching(true);
     try {
       const res = await fetch('/api/proxy/settings/admin', { cache: 'no-store' });
       if (!res.ok) {
@@ -89,7 +88,12 @@ export default function SettingsPage() {
       router.replace('/admin');
       return;
     }
-    loadSettings();
+
+    const timeout = window.setTimeout(() => {
+      void loadSettings();
+    }, 0);
+
+    return () => window.clearTimeout(timeout);
   }, [status, isSuperAdmin, router, loadSettings]);
 
   const handleSave = async () => {
@@ -112,6 +116,7 @@ export default function SettingsPage() {
         return;
       }
 
+      setFetching(true);
       await loadSettings();
       alert('Pengaturan berhasil disimpan.');
     } catch {
@@ -138,6 +143,7 @@ export default function SettingsPage() {
         return;
       }
 
+      setFetching(true);
       await loadSettings();
     } catch {
       alert('Gagal menghapus key: tidak dapat menghubungi server.');

@@ -98,7 +98,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
   
   // --- Untuk Role Selain CS ---
-  let menus = [
+  const menus = [
       { name: "Overview", icon: LayoutDashboard, link: "/admin" },
       { name: "Transaksi", icon: ShoppingCart, link: "/admin/orders" },
       { name: "Inventory Billboard", icon: Map, link: "/admin/billboards" },

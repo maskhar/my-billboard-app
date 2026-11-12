@@ -33,9 +33,8 @@ async function handler(req: NextRequest) {
         ...(cookieHeader ? { Cookie: cookieHeader } : {}),
       },
       body: req.method !== 'GET' && req.method !== 'HEAD' ? req.body : null,
-      // @ts-ignore
       duplex: 'half',
-    });
+    } as RequestInit & { duplex: 'half' });
 
     // 4. Return the response from the backend
     return new NextResponse(response.body, {

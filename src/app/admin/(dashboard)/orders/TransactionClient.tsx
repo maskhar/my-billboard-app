@@ -136,6 +136,26 @@ const AddChargeForm = ({ orderId }: { orderId: string }) => {
     );
 };
 
+const StatusBadge = ({ status }: { status: string }) => (
+  <span className="px-2 py-1 text-[10px] font-bold rounded bg-green-100 text-green-700 uppercase">
+    {status.replace(/_/g, ' ')}
+  </span>
+);
+
+const DetailSection = ({ title, children }: { title: string, children: React.ReactNode }) => (
+  <div className="mb-6">
+    <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">{title}</h3>
+    {children}
+  </div>
+);
+
+const InfoPair = ({ label, value }: { label: string, value: string | undefined | null }) => (
+  <div className="flex justify-between items-center text-sm mb-1.5 text-gray-700">
+    <span>{label}</span>
+    <span className="font-bold text-right">{value || '-'}</span>
+  </div>
+);
+
 export default function TransactionClient({ transactions, currentUserRole }: Props) {
   const [selected, setSelected] = useState<Transaction | null>(transactions.length > 0 ? transactions[0] : null);
   const router = useRouter();
@@ -167,26 +187,6 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
       alert('Terjadi kesalahan pada server.');
     }
   };
-
-  const StatusBadge = ({ status }: { status: string }) => (
-    <span className="px-2 py-1 text-[10px] font-bold rounded bg-green-100 text-green-700 uppercase">
-      {status.replace(/_/g, ' ')}
-    </span>
-  );
-
-  const DetailSection = ({ title, children }: { title: string, children: React.ReactNode }) => (
-    <div className="mb-6">
-      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">{title}</h3>
-      {children}
-    </div>
-  );
-  
-  const InfoPair = ({ label, value }: { label: string, value: string | undefined | null }) => (
-    <div className="flex justify-between items-center text-sm mb-1.5 text-gray-700">
-      <span>{label}</span>
-      <span className="font-bold text-right">{value || '-'}</span>
-    </div>
-  );
 
   const grandTotal = selected ? selected.totalPrice + (selected.additionalCharges?.reduce((sum, charge) => sum + charge.amount, 0) || 0) : 0;
 
@@ -246,7 +246,7 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                         <InfoPair label="Office Address" value="Jl. Melati No. 10, Jakarta" />
                     </DetailSection>
                     <DetailSection title="Actions">
-                        <OrderActions order={selected} currentUserRole={currentUserRole} />
+                        <OrderActions key={selected.id} order={selected} currentUserRole={currentUserRole} />
                     </DetailSection>
                     
                     <DetailSection title="Billing Details">
