@@ -1,9 +1,9 @@
-// src/middleware.ts
+// src/proxy.ts
 //
-// Guard otorisasi untuk API admin Next.js. Berjalan di Edge sebelum request
-// sampai ke route handler, sehingga route admin yang tadinya tanpa cek sesi
-// (update-account, update-business, create, settings GET, chat/*, dll)
-// otomatis tertutup tanpa perlu mengubah tiap file route.
+// Guard otorisasi untuk API admin Next.js. Berjalan di runtime Node.js
+// sebelum request sampai ke route handler, sehingga route admin yang tadinya
+// tanpa cek sesi (update-account, update-business, create, settings GET,
+// chat/*, dll) otomatis tertutup tanpa perlu mengubah tiap file route.
 //
 // Verifikasi sesi memakai getToken() dari next-auth/jwt - pola yang sama
 // dengan backend NestJS (Opsi C: NextAuthSessionGuard membaca cookie
@@ -12,7 +12,7 @@
 //
 // Whitelist endpoint publik TIDAK diperlukan di sini karena matcher hanya
 // mencakup path yang memang khusus admin. Endpoint yang sengaja publik tidak
-// tersentuh middleware ini:
+// tersentuh proxy ini:
 //   - /api/auth/**              (login/register NextAuth, csrf, session)
 //   - /api/payment/notify       (punya cek sesi sendiri di route)
 //   - /api/proxy?url=...        (laporan trafik, dipakai halaman publik)
@@ -37,7 +37,7 @@ const LIVE_CHAT_ROLES = ['ADMIN', 'SUPER_ADMIN', 'CS'];
 const jsonError = (status: 401 | 403, message: string) =>
   NextResponse.json({ message }, { status });
 
-export async function middleware(req: NextRequest) {
+export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   const isAdminApi = pathname.startsWith('/api/admin/');
