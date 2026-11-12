@@ -14,8 +14,7 @@ export function getNextAuthSessionCookieName(nextAuthUrl?: string): string {
 }
 
 export interface CookieJar {
-  get: (name: string) => { name: string; value: string } | undefined;
-  getAll: (name?: string) => { name: string; value: string }[];
+  getAll: () => { name: string; value: string }[];
 }
 
 /**

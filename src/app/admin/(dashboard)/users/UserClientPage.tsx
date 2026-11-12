@@ -9,7 +9,9 @@ import UserFormModal from './UserFormModal';
 
 const GOOGLE_ICON = "https://cdn.iconscout.com/icon/free/png-256/free-google-1772223-1507807.png";
 
-type UserWithBookings = User & {
+type UserWithBookings = Omit<User, 'createdAt' | 'otpExpires'> & {
+    createdAt: string;
+    otpExpires: string | null;
     bookings: Booking[];
 };
 
@@ -18,7 +20,9 @@ export default function UserClientPage({ users }: { users: UserWithBookings[] })
 
     return (
         <div className="space-y-6">
-            <UserFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+            {isModalOpen && (
+                <UserFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+            )}
 
             <div className="flex justify-between items-center">
                 <div>

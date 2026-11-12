@@ -15,7 +15,7 @@ export default function RevenueChart({ data }: { data: any[] }) {
                 <Tooltip 
                     cursor={{fill: '#F3F4F6'}}
                     contentStyle={{borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)'}}
-                    formatter={(value:number) => [`Rp ${value.toLocaleString()}`, 'Omzet']}
+                    formatter={(value) => [`Rp ${Number(value).toLocaleString()}`, 'Omzet']}
                 />
                 <Bar dataKey="total" fill="#CE181E" radius={[4, 4, 0, 0]} barSize={40} />
             </BarChart>
