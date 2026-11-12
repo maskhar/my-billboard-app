@@ -24,12 +24,13 @@
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "next.config.ts",
+    "tailwind.config.ts",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts",
-    "**/*.mts",
-    "prisma.config" 
+    "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  "exclude": ["node_modules", "backend", "chat-server"]
 }
