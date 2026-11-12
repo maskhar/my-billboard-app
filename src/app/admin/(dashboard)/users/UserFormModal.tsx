@@ -69,37 +69,27 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
     }
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/users/create', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: formData.name,
-          email: formData.email,
-          password: formData.password,
-          role: formData.role,
-        }),
-      });
-
-      if (!res.ok) {
-        // `await res.json()` tanpa penjaga adalah cacat kedua di jalur ini:
-        // respons 500 dari Next.js berisi halaman HTML, bukan JSON, dan
-        // `res.json()` melemparkan SyntaxError. Galat itu menggantikan pesan
-        // server yang sebenarnya, jadi admin membaca "Unexpected token <"
-        // untuk setiap kegagalan yang tidak sempat menulis badan JSON.
-        // Penjaga itu sekarang hidup di `bacaJawaban`, satu tempat untuk
-        // seluruh repo, dan hasilnya bertipe — bukan `any` seperti
-        // `hasil?.message` yang dulu ada di sini.
-        const jawaban = await bacaJawaban(res);
-        throw new Error(alasanPenolakan(res, jawaban));
-      }
-
-      toast.sukses('Pengguna baru berhasil dibuat.');
-      onClose(); // Close the modal on success
-      router.refresh(); // Refresh the user list page
-    } catch (error) {
-      // Password tidak ikut tercatat: yang di-log hanya galatnya.
-      console.error('Gagal membuat pengguna baru:', error);
-      toast.galat(pesanGalat(error, 'Gagal membuat pengguna.'));
+        const res = await fetch('/api/proxy/users/admin-create', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              name: formData.name,
+              email: formData.email,
+              password: formData.password,
+              role: formData.role,
+            }),
+          });
+    
+          if (!res.ok) {
+            const errorData = await res.json();
+            throw new Error(errorData.message || 'Gagal membuat pengguna.');
+          }
+    
+          alert('Pengguna baru berhasil dibuat!');
+          onClose(); // Close the modal on success
+          router.refresh(); // Refresh the user list page
+    } catch (error: any) {
+      alert(`Error: ${error.message}`);
     } finally {
       setLoading(false);
     }

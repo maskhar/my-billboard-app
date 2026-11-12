@@ -1,37 +1,24 @@
 // src/app/login/page.tsx
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { signIn, signOut, getSession } from 'next-auth/react'; 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import type { Role } from '@prisma/client';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
-// `Chrome` dari lucide dibuang: tombol Google di bawah memakai SVG logo
-// Google empat warna yang ditulis langsung di JSX, bukan ikon ini. Logo
-// Chrome bukan logo Google, dan mengimpornya membuat pembaca menyangka
-// tombolnya masih memakai ikon yang salah.
-
-// Bentuknya sama dengan `src/app/register/page.tsx` dan
-// `src/app/sewakan-tempat/FormSewakanTempat.tsx` — tiga formulir publik yang
-// sebelumnya memakai tiga kelas isian berbeda.
-//
-// Yang diperbaiki: `focus:ring-utero` tanpa `ring-2`. Tailwind mengambil lebar
-// cincin dari `ring-{n}`, jadi kelas warna sendirian menghasilkan cincin
-// selebar nol — penanda fokus yang tidak terlihat sama sekali, di atas
-// `outline-none` yang sudah membuang penanda bawaan peramban. Pada halaman
-// login, pengguna papan tombol karena itu tidak bisa tahu kolom mana yang
-// sedang aktif saat mengetik sandinya.
-const KELAS_ISIAN =
-  'bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg block w-full p-2.5 font-semibold ' +
-  'outline-none focus:ring-2 focus:ring-utero focus:border-utero transition';
-
-const KELAS_LABEL = 'block mb-1 text-sm font-bold text-gray-700';
-
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+
+  const queryError = searchParams.get('error');
+  const queryErrorMessage = queryError
+    ? queryError === 'AccessDenied'
+      ? 'Login Google tidak tersedia untuk akun ini. Staf/admin silakan login lewat halaman admin.'
+      : 'Login gagal. Silakan coba lagi.'
+    : '';
+  const displayError = error || queryErrorMessage;
 
   const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -53,18 +40,8 @@ export default function LoginPage() {
         setLoading(false);
     } else {
         const session = await getSession();
-        const userRole = session?.user?.role;
-        // 'USER_AIDA' dihapus — role itu tidak ada di daftar role mana pun
-        // dan tidak pernah tertulis ke database. 'CS' ditambahkan: tanpa itu,
-        // petugas CS bisa masuk lewat pintu pelanggan dan tidak pernah
-        // diarahkan ke portal admin.
-        //
-        // Anotasi `readonly Role[]`: tanpanya daftar ini `string[]`, dan salah
-        // tulis satu huruf membuat admin lolos lewat pintu pelanggan tanpa
-        // pernah diarahkan ke portal admin — dan tanpa galat kompilasi. Arah
-        // salahnya di SINI berbeda dari gerbang route: gerbang route yang rusak
-        // menutup terlalu rapat, sedangkan yang ini GAGAL mengalihkan.
-        const adminRoles: readonly Role[] = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'CS'];
+        const userRole = (session?.user as { role?: string } | undefined)?.role;
+        const adminRoles = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'USER_AIDA'];
 
         if (userRole && adminRoles.includes(userRole)) {
             await signOut({ redirect: false });
@@ -78,10 +55,8 @@ export default function LoginPage() {
     }
   };
 
-  // HANDLER BARU: LOGIN GOOGLE
+  // Login Google: redirect penuh ke Google, lalu kembali ke halaman utama.
   const handleGoogleLogin = () => {
-      // Tidak perlu validasi macam-macam, langsung panggil Google
-      // Redirect false agar kita bisa kontrol sendiri
       signIn('google', { callbackUrl: '/' }); 
   };
 
@@ -103,9 +78,9 @@ export default function LoginPage() {
                     <p className="text-xs text-gray-400 mt-1">Silakan pilih metode login</p>
                   </div>
 
-                  {error && (
-                      <div className={`text-sm p-3 rounded-md text-center border font-semibold animate-pulse ${error.includes('⛔') ? 'bg-black text-yellow-400 border-black' : 'bg-red-50 text-red-600 border-red-100'}`}>
-                          {error}
+                  {displayError && (
+                      <div className={`text-sm p-3 rounded-md text-center border font-semibold animate-pulse ${displayError.includes('⛔') ? 'bg-black text-yellow-400 border-black' : 'bg-red-50 text-red-600 border-red-100'}`}>
+                          {displayError}
                       </div>
                   )}
                   
@@ -161,5 +136,13 @@ export default function LoginPage() {
           </div>
       </main>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gray-50" />}>
+      <LoginForm />
+    </Suspense>
   );
 }

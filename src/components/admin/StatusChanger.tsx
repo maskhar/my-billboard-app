@@ -21,10 +21,8 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, Loader2 } from 'lucide-react';
-import { useToast } from '@/components/ui/Toast';
-import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
-import { pesanGalat } from '@/lib/pesan-galat';
+import { useSession } from 'next-auth/react';
+import { Loader2 } from 'lucide-react';
 
 interface Props {
   billboardId: string;
@@ -34,7 +32,7 @@ interface Props {
 
 export default function StatusChanger({ billboardId, currentStatus, currentPublishStatus }: Props) {
   const router = useRouter();
-  const toast = useToast();
+  const { data: session } = useSession();
   const [isOpen, setIsOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -77,38 +75,29 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
     setLoading(true);
     setIsOpen(false);
 
+    if (!session?.user?.email) {
+      alert('Gagal: sesi admin tidak ditemukan. Silakan login ulang.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      // Dialihkan dari /api/proxy (yang tidak punya autentikasi sama sekali)
-      // ke route admin yang memverifikasi sesi dan role.
-      const body = { id: billboardId, [type]: value };
-      const res = await fetch('/api/admin/billboards/quick-update', {
-        method: 'POST',
+      const body = { [type]: value, adminEmail: session.user.email }; // Correctly set the key based on the 'type'
+      const res = await fetch(`/api/proxy/billboards/${billboardId}/status`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
 
-      // `await res.json()` dulu dipanggil tanpa penangkap di jalur galat.
-      // Balasan 500 berbadan HTML membuatnya melempar, dan lemparannya
-      // mendarat di `catch` di bawah yang mencetak "Terjadi kesalahan pada
-      // server." — pesan yang menghapus keterangan asli dari server.
-      //
-      // Penjaga itu kini datang dari `bacaJawaban`, yang sekaligus membuang
-      // `data?.message` bertipe `any`.
-      const jawaban = await bacaJawaban(res);
-
-      if (!res.ok) {
-        throw new Error(alasanPenolakan(res, jawaban));
+      if (res.ok) {
+        router.refresh(); 
+      } else {
+        const data = await res.json().catch(() => null);
+        const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+        alert(`Gagal mengupdate status: ${msg}`);
       }
-
-      toast.sukses(jawaban.pesan ?? 'Status billboard diperbarui.');
-      router.refresh();
-    } catch (galat) {
-      // `error: any` lalu `error?.message` dulu tertulis di sini. Pada nilai
-      // yang bukan `Error` — `fetch` yang dibatalkan melempar objek tanpa
-      // `message` — hasilnya `undefined`, jadi operator selalu membaca "galat
-      // tidak diketahui" tanpa pernah tahu permintaannya batal, bukan ditolak.
-      console.error('Gagal mengubah status billboard:', galat);
-      toast.galat(`Gagal mengubah status: ${pesanGalat(galat, 'galat tidak diketahui')}`);
+    } catch (error) {
+      alert('Terjadi kesalahan pada server. Pastikan backend sedang berjalan.');
     } finally {
       // `setTimeout(..., 500)` dulu menahan hamparan loading setengah detik
       // SETELAH pekerjaan selesai — jeda kosmetik yang, bila komponen sudah

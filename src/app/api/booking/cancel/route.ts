@@ -1,133 +1,73 @@
 // src/app/api/booking/cancel/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { cookies } from "next/headers";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { amankanHtml } from "@/lib/html";
-import { judulSurat, sendEmail } from "@/lib/mail";
-import { keAngka } from "@/lib/money";
-import { tutupTagihanMenganggur } from "@/lib/tutup-tagihan";
-import { BookingStatus } from "@prisma/client";
-import { bacaBodyJson } from "@/lib/body-json";
+import { buildNextAuthCookieHeader } from "@/lib/nextauth-cookie";
 
+// API BATAL PESANAN (server-side only)
+//
+// Route ini adalah satu-satunya bridge browser -> backend untuk pembatalan.
+// Wajib login DAN order harus milik user yang sedang login, sehingga orderId
+// milik orang lain tidak bisa dibatalkan hanya karena diketahui.
 export async function POST(req: Request) {
+  // 1. Wajib login
+  const session = await getServerSession(authOptions);
+  if (!session?.user) {
+    return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+  }
+
+  const backendUrl = process.env.BACKEND_API_URL || "http://localhost:4001";
+
   try {
-    const session = await getServerSession(authOptions);
-    if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
-
-    const hasilBody = await bacaBodyJson(req, 'booking/cancel');
-    if (!hasilBody.ok) return hasilBody.jawaban;
-    const { orderId } = hasilBody.body;
-    const adminEmail = process.env.ADMIN_EMAIL;
-
-    // TIPENYA DIPERIKSA, BUKAN HANYA KEBERADAANNYA — dan ini bukan sekadar
-    // kerapian: `orderId` masuk langsung ke `where: { id: orderId }`. Nilai
-    // berupa objek tidak dibaca Prisma sebagai id, melainkan sebagai FILTER.
-    // `{"orderId":{"not":""}}` karena itu cocok dengan SEMUA baris yang lolos
-    // syarat lainnya, dan `updateMany` membatalkan seluruh pesanan
-    // `PENDING_PAYMENT` milik pemanggil dalam satu permintaan. Syarat `userId`
-    // membatasi kerusakannya pada pesanan sendiri, tapi satu klik yang
-    // dimaksudkan untuk satu pesanan tetap menghanguskan semuanya — termasuk
-    // tanggal billboard yang sudah dipesan.
-    if (typeof orderId !== 'string' || orderId.trim() === '') {
-      return NextResponse.json({ message: "ID pesanan tidak valid." }, { status: 400 });
+    const { orderId } = await req.json();
+    if (!orderId) {
+      return NextResponse.json({ message: "orderId wajib diisi" }, { status: 400 });
     }
 
-    // Kepemilikan ditegakkan di tingkat query: sebelumnya order diambil
-    // berdasarkan id saja, sehingga user mana pun bisa membatalkan pesanan
-    // milik orang lain. updateMany dipakai karena update() hanya menerima
-    // field unik pada `where`.
-    //
-    // `status` ikut disyaratkan. Rute ini adalah pembatalan MANDIRI oleh user
-    // pada pesanan yang belum dibayar, dan judul emailnya sendiri berbunyi
-    // "(Fase Pending)". Tanpa syarat status, user bisa memanggilnya atas
-    // pesanan yang sudah dibayar dan menghanguskan pesanannya sendiri tanpa
-    // satu pun jalur pengembalian dana terbuka — uangnya sudah di rekening
-    // perusahaan, tapi statusnya CANCELLED, yang bukan status sah untuk
-    // mengajukan refund. Pembatalan setelah pembayaran lewat
-    // `booking/request-refund`.
-    // Penghangusan pesanan dan penutupan tagihannya satu transaksi. Di antara
-    // keduanya pesanan sudah CANCELLED sementara tagihannya masih PENDING, dan
-    // pembuat sesi pembayaran yang membaca persis di celah itu akan membukakan
-    // checkout untuk pesanan yang baru saja dibatalkan pemiliknya sendiri.
-    const count = await prisma.$transaction(async (tx) => {
-        const { count } = await tx.booking.updateMany({
-            where: {
-                id: orderId,
-                userId: session.user.id,
-                status: BookingStatus.PENDING_PAYMENT,
-            },
-            data: { status: "CANCELLED" },
-        });
+    // 2. Order harus benar milik user yang sedang login
+    const userId = (session.user as unknown as { id: string }).id;
+    const order = await prisma.booking.findUnique({ where: { id: orderId } });
+    if (!order) {
+      return NextResponse.json({ message: "Order not found" }, { status: 404 });
+    }
+    if (order.userId !== userId) {
+      console.warn(`⛔ [CANCEL] ${session.user.email} mencoba membatalkan order milik user lain: ${orderId}`);
+      return NextResponse.json({ message: "Order ini bukan milik Anda" }, { status: 403 });
+    }
 
-        // Tagihan hanya ditutup bila pesanannya benar-benar berubah. `count: 0`
-        // berarti pesanan itu bukan miliknya, tidak ada, atau sudah dibayar —
-        // dan tagihan pesanan yang sudah dibayar masih harus bisa dilunasi.
-        if (count > 0) await tutupTagihanMenganggur(tx, [orderId]);
+    console.log("🚫 [CANCEL] Menerima permintaan batal untuk order:", orderId);
 
-        return count;
+    // 3. Teruskan ke backend (logika bisnis tetap di backend).
+    // Cookie session NextAuth ikut diteruskan karena backend memverifikasi
+    // session-nya sendiri lewat global guard. Hanya cookie next-auth yang
+    // diteruskan, bukan seluruh cookie milik pengguna.
+    const cookieHeader = buildNextAuthCookieHeader(await cookies());
+    const res = await fetch(`${backendUrl}/api/bookings/cancel`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(cookieHeader ? { Cookie: cookieHeader } : {}),
+      },
+      body: JSON.stringify({ orderId }),
+      cache: "no-store",
     });
 
-    if (count === 0) {
-        // Dibedakan agar user tidak melihat "tidak ditemukan" untuk pesanan
-        // yang jelas terpampang di layarnya.
-        const milikUser = await prisma.booking.findFirst({
-            where: { id: orderId, userId: session.user.id },
-            select: { status: true },
-        });
+    const data = await res.json().catch(() => null);
 
-        if (!milikUser) {
-            return NextResponse.json({ message: "Pesanan tidak ditemukan" }, { status: 404 });
-        }
-
-        return NextResponse.json(
-            {
-                message:
-                    `Pesanan berstatus ${milikUser.status} tidak bisa dibatalkan sendiri. ` +
-                    `Pembatalan mandiri hanya berlaku sebelum pembayaran; setelah itu ajukan refund.`,
-            },
-            { status: 409 }
-        );
+    // 4. teruskan hasil backend apa adanya
+    if (!res.ok) {
+      const msg = Array.isArray(data?.message)
+        ? data.message.join(", ")
+        : data?.message || `Error tidak diketahui (HTTP ${res.status})`;
+      return NextResponse.json({ message: msg }, { status: res.status });
     }
 
-    const order = await prisma.booking.findUniqueOrThrow({
-        where: { id: orderId },
-        include: { billboard: true, user: true }
-    });
-
-    // KIRIM EMAIL KE ADMIN
-    if (adminEmail) {
-         await sendEmail({
-            to: adminEmail,
-            subject: judulSurat({
-                topik: 'Dibatalkan pembeli',
-                idPesanan: order.id,
-                untukAdmin: true,
-            }),
-            title: "Pesanan Batal",
-            message: `User <b>${amankanHtml(order.user.name)}</b> membatalkan pesanan (Fase Pending) untuk billboard <b>${amankanHtml(order.billboard.title)}</b>.`,
-            orderDetail: {
-                id: order.id,
-                // Decimal tidak boleh diserahkan apa adanya ke template email:
-                // `Intl.NumberFormat` menerimanya diam-diam dan mencetak
-                // "Rp NaN" — lihat catatan di lib/mail.ts.
-                total: keAngka(order.totalPrice),
-                status: "CANCELLED",
-                billboardTitle: order.billboard.title,
-                billboardAddress: order.billboard.address,
-                duration: order.duration
-            }
-        });
-    }
-
-    return NextResponse.json({ message: "Pesanan dibatalkan" });
-  } catch (galat) {
-    // Galatnya dulu ditangkap lalu dibuang. Pembatalan menyentuh `Booking`,
-    // `Billboard.status`, dan pengiriman email dalam satu jalur, jadi 500 di
-    // sini bisa berarti transaksinya gagal (pesanan MASIH aktif dan billboard
-    // masih terkunci) atau hanya SMTP yang mati setelah semuanya tersimpan.
-    // Tanpa satu baris log, tidak ada cara membedakannya setelah kejadian.
-    console.error('Gagal membatalkan pesanan:', galat);
-    return NextResponse.json({ message: "Gagal membatalkan" }, { status: 500 });
+    return NextResponse.json(data ?? { message: "Pesanan dibatalkan" });
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    console.error("🔥 Server Error (Cancel):", reason);
+    return NextResponse.json({ message: "Server Error" }, { status: 500 });
   }
 }

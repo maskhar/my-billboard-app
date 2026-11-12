@@ -418,8 +418,8 @@ export default function TransactionClient({ transactions, currentUserRole, kataK
               className={`w-full text-left p-4 rounded-lg mb-2 transition ${selected?.id === t.id ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
             >
               <div className="flex justify-between items-center mb-1">
-                <span className="font-mono text-xs font-bold text-gray-700">{labelPesanan(t.id)}</span>
-                <span className="text-xs text-gray-400">{tanggalRingkas(t.createdAt)}</span>
+                <span className="font-mono text-xs font-bold text-gray-700">#{t.id.slice(-8).toUpperCase()}</span>
+                <span className="text-xs text-gray-400">{new Date(t.createdAt).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta' })}</span>
               </div>
               <p className="text-sm font-semibold text-gray-800 line-clamp-1">{t.billboard.title}</p>
               <p className="text-xs text-gray-500">{t.user.name}</p>

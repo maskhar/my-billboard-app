@@ -30,45 +30,15 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: "Unauthorized" }, { status: 401 });
   }
 
-  // `installationProof` sempat hilang di sini: `OrderActions.tsx` mengirimnya
-  // saat status diubah ke ACTIVE, route NestJS lama menerimanya, tapi route ini
-  // tidak pernah membacanya. Akibatnya admin melihat "Update Sukses", status
-  // berubah, tapi foto bukti pemasangan tidak tersimpan — dan
-  // `dashboard/order/[id]/page.tsx` (isLive = ACTIVE && !!installationProof)
-  // tidak pernah menampilkan order sebagai tayang.
-  //
-  // `await req.json()` dulu dipanggil apa adanya di sini, DI LUAR `try` yang
-  // baru dibuka beberapa baris di bawah. Body yang bukan JSON melempar tanpa
-  // penangkap: Next menjawabnya sebagai galat runtime 500, bukan 400, dan
-  // mencatatnya sebagai kerusakan server — sehingga permintaan cacat dari
-  // client tidak bisa dibedakan dari database yang tumbang di log.
-  // Lihat `src/lib/body-json.ts`.
-  const hasilBody = await bacaBodyJson(req, 'admin/update-order');
-  if (!hasilBody.ok) return hasilBody.jawaban;
-  const { orderId, newStatus, reason, refundProof, isLocked, installationProof } = hasilBody.body;
-
-  // Kolom `status` bertipe enum, jadi nilai asing ditolak database di lapisan
-  // paling dalam — muncul ke admin sebagai "Gagal Update" tanpa keterangan,
-  // setelah email sempat disusun. Diperiksa di sini, di pintu masuk.
-  if (!sahBookingStatus(newStatus)) {
-      return NextResponse.json(
-          { message: `Status tidak dikenal. Pilihan: ${daftarNilai(BookingStatus)}` },
-          { status: 400 }
-      );
-  }
-
-  // `orderId` dulu diteruskan ke Prisma tanpa diperiksa tipenya. Nilai selain
-  // teks membuat query gagal dengan galat yang jatuh ke "Gagal Update" — pesan
-  // yang tidak memberitahu admin apa pun tentang penyebabnya.
-  if (typeof orderId !== 'string' || orderId.trim() === "") {
-      return NextResponse.json({ message: "ID pesanan tidak valid." }, { status: 400 });
-  }
+  const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = await req.json();
 
   try {
-      const teksOpsional = (nilai: unknown, batas: number): string | null => {
-          if (typeof nilai !== 'string') return null;
-          const rapi = nilai.trim();
-          return rapi === "" ? null : rapi.slice(0, batas);
+      const updateData: any = { 
+          status: newStatus,
+          ...(reason && { cancelReason: reason }),
+          ...(refundProof && { refundProof: refundProof }),
+          ...(installationProof && { installationProof: installationProof }),
+          ...(isLocked !== undefined && { isLocked: isLocked })
       };
 
       const alasan = teksOpsional(reason, 1000);

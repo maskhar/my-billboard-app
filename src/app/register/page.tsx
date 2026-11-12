@@ -53,26 +53,14 @@ export default function RegisterPage() {
     const phone = formData.get('phone');
     const password = formData.get('password');
 
-    // Tiga cacat ditambal sekaligus di sini:
-    //
-    //   1. Tidak ada `try` sama sekali. `fetch` melempar saat jaringan mati atau
-    //      permintaannya dibatalkan, lemparannya tidak ditangani siapa pun, dan
-    //      `setLoading(false)` di bawahnya TIDAK PERNAH dijalankan: tombol
-    //      tertinggal berbunyi "Mendaftar..." selamanya dan calon pengguna
-    //      pergi tanpa akun.
-    //   2. `await res.json()` tanpa penjaga. Balasan 500 berbadan HTML
-    //      membuatnya melempar — di jalur yang sama, tanpa penangkap.
-    //   3. `setLoading(false)` di akhir badan fungsi, bukan di `finally`.
-    //
-    // Dialihkan dari backend NestJS (`/api/users/register`) ke route Next.
-    // Endpoint lama membalas "Sukses mendaftar" tanpa pernah membuat user,
-    // karena method `create()` di sisi sana tidak pernah diimplementasikan.
-    try {
-        const res = await fetch('/api/register', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email, phone, password })
-        });
+    // Kirim ke API yang baru kita buat
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    const res = await fetch(`${apiUrl}/api/users/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, phone, password }),
+        credentials: 'include',
+    });
 
         const jawaban = await bacaJawaban(res);
 

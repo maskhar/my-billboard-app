@@ -139,20 +139,10 @@ const SearchFilter = () => {
                             onChange={(e) => setType(e.target.value)} 
                             className="w-full border border-gray-200 p-3 rounded-xl font-bold text-gray-700 outline-none focus:ring-2 focus:ring-utero focus:border-utero"
                         >
-                            {/* Daftarnya dari `@/lib/tipe-billboard`, bukan ditulis
-                                di sini. Sebelumnya empat `<option>` yang sama
-                                tertulis di DUA tempat di berkas ini plus sekali
-                                lagi di `about/page.tsx` — dan daftar yang sama
-                                di tiga tempat adalah daftar yang akan berbeda.
-                                Yang lebih keras: nilai-nilai inilah yang menjadi
-                                gerbang `?type=` di server lewat
-                                `PILIHAN_TIPE_MEDIA`, jadi `<option>` yang
-                                menyimpang menghasilkan pilihan yang dibuang
-                                server menjadi "Semua" tanpa satu pun tanda. */}
-                            <option>{TIPE_SEMUA}</option>
-                            {NAMA_JENIS_MEDIA.map((nama) => (
-                                <option key={nama}>{nama}</option>
-                            ))}
+                            <option>Semua</option>
+                        <option>Videotron</option>
+                        <option>Baliho</option>
+                        <option>Billboard</option>
                         </select>
                     </div>
 
@@ -220,10 +210,10 @@ const SearchFilter = () => {
                         onChange={(e) => setType(e.target.value)} 
                         className={`text-sm text-gray-800 font-bold bg-transparent w-full -ml-1 cursor-pointer truncate ${KELAS_FOKUS}`}
                     >
-                        <option>{TIPE_SEMUA}</option>
-                        {NAMA_JENIS_MEDIA.map((nama) => (
-                            <option key={nama}>{nama}</option>
-                        ))}
+                        <option>Semua</option>
+                        <option>Videotron</option>
+                        <option>Baliho</option>
+                        <option>Billboard</option>
                     </select>
                 </div>
             </div>

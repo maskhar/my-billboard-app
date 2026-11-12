@@ -34,32 +34,10 @@ export default function ChatWidget() {
   const lastMsgCount = useRef(0);
 
   useEffect(() => {
-    // Dua perbaikan sekaligus di sini:
-    //
-    // 1. PORT. Sebelumnya menyambung ke 4001 (backend NestJS yang dihapus),
-    //    padahal chat-server mendengarkan di 3001. Live chat tidak pernah
-    //    tersambung.
-    //
-    // 2. IDENTITAS TAMU. chat-server kini mewajibkan handshake: tamu harus
-    //    membawa `guestToken` yang diterbitkan server lewat POST /api/chat/start.
-    //    Sebelumnya client mengirim `sessionId` pilihannya sendiri, sehingga
-    //    siapa pun bisa menebak id sesi orang lain dan ikut membaca
-    //    percakapannya. Sekarang sessionId diturunkan dari token, bukan dari
-    //    apa yang dikirim client.
-    //
-    // 3. ALAMAT. Alamatnya kini satu sumber lewat `alamatChat()`. Bila ia
-    //    mengembalikan `null` (build produksi tanpa NEXT_PUBLIC_CHAT_URL),
-    //    koneksi TIDAK dibuka: menyambung ke cadangan localhost berarti setiap
-    //    browser pengunjung menghubungi mesinnya sendiri. Pesannya dirender
-    //    langsung dari `chatUrl`, bukan lewat `setError` di sini: `setState`
-    //    sinkron di dalam effect memicu render berantai.
-    if (!chatUrl) return;
-
-    const storedToken = localStorage.getItem('utero_chat_token');
-
-    socketRef.current = io(chatUrl, {
-        auth: storedToken ? { guestToken: storedToken } : undefined,
-    });
+    // withCredentials hanya berlaku untuk handshake XHR/polling. Browser TIDAK
+    // pernah mengirim cookie pada handshake WebSocket, jadi kalau gateway
+    // socket.io di backend butuh session, harus pakai extraHeaders.
+    socketRef.current = io("http://localhost:4001", { withCredentials: true }); // Ganti port ke backend NestJS
 
     socketRef.current.on('connect', () => {
         const storedId = localStorage.getItem('utero_chat_id');
@@ -234,7 +212,8 @@ export default function ChatWidget() {
           const res = await fetch(`${chatUrl}/api/chat/start`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(form)
+              body: JSON.stringify(form),
+              credentials: 'include',
           });
           // `await res.json()` tanpa penjaga: balasan 429 atau 500 yang berbadan
           // HTML (proxy di depan chat-server) membuatnya melempar, lemparannya

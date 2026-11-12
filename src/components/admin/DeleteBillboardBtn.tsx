@@ -4,13 +4,11 @@
 import { Trash2, Loader2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
-import { useToast } from '@/components/ui/Toast';
-import { useKonfirmasi } from '@/components/ui/Konfirmasi';
-import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
-import { pesanGalat } from '@/lib/pesan-galat';
+import { useSession } from 'next-auth/react';
 
 export default function DeleteBillboardBtn({ id, title }: { id: string, title: string }) {
   const router = useRouter();
+  const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
   const toast = useToast();
   const konfirmasi = useKonfirmasi();
@@ -29,18 +27,19 @@ export default function DeleteBillboardBtn({ id, title }: { id: string, title: s
       });
       if (!setuju) return;
 
+      if (!session?.user?.email) {
+          alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
+          return;
+      }
+
       setLoading(true);
 
       try {
-          // Dialihkan dari `/api/proxy/billboards/:id` ke route Next yang ber-auth.
-          // Proxy lama meneruskan DELETE ke backend tanpa sesi sama sekali, sehingga
-          // siapa pun bisa menghapus billboard. Route di bawah memeriksa sesi +
-          // role ADMIN/SUPER_ADMIN dan menolak penghapusan bila billboard masih
-          // punya booking ACTIVE / PENDING_PAYMENT.
-          const res = await fetch('/api/admin/billboards/delete', {
-              method: 'POST',
+          // Body wajib berisi adminEmail: backend memvalidasi role admin ke database.
+          const res = await fetch(`/api/proxy/billboards/${id}`, {
+              method: 'DELETE',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ id }),
+              body: JSON.stringify({ adminEmail: session.user.email }),
           });
 
           // Tiga cacat ditambal bersamaan di sini:
@@ -63,11 +62,12 @@ export default function DeleteBillboardBtn({ id, title }: { id: string, title: s
               toast.sukses(jawaban.pesan ?? 'Billboard berhasil dihapus.');
               router.refresh();
           } else {
-              toast.galat('Gagal menghapus: ' + alasanPenolakan(res, jawaban));
+              const data = await res.json().catch(() => null);
+              const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+              alert("❌ Gagal: " + msg);
           }
-      } catch (galat) {
-          console.error('Gagal menghapus billboard:', galat);
-          toast.galat(pesanGalat(galat, 'Server tidak dapat dihubungi. Billboard TIDAK dihapus.'));
+      } catch (err) {
+          alert("Terjadi kesalahan sistem. Pastikan backend sedang berjalan.");
       } finally {
           setLoading(false);
       }

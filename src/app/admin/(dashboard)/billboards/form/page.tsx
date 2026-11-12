@@ -3,76 +3,49 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-// Hanya ikon yang benar-benar dirender. Daftar ini sebelumnya memuat enam nama
-// lain (`Link`, `Wand2`, `Lightbulb`, `Clock`, `Plus`) yang tidak dipakai satu
-// pun — termasuk `Plus`, yang komentar di atasnya justru mengaku sengaja
-// ditambahkan.
-import { ArrowLeft, Save, Loader2, Ruler, ExternalLink, X, History, RotateCcw } from 'lucide-react';
+import { useSession } from 'next-auth/react';
+// PERBAIKAN: Menambahkan 'Plus' di sini
+import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
-import { useToast } from '@/components/ui/Toast';
-import { useKonfirmasi } from '@/components/ui/Konfirmasi';
-import { arrayDariJson } from '@/lib/safe-json';
-import { specsAman } from '@/lib/spesifikasi-billboard';
-import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
-import { angkaRupiah } from '@/lib/money';
-import { tanggalJam, tanggalRingkas, kunciTanggalJam } from '@/lib/tanggal';
-import TabelDiffRollback from '@/components/admin/TabelDiffRollback';
-import type { BarisDiffBillboard } from '@/lib/diff-billboard';
-import {
-  sahStatusBillboard,
-  sahStatusPublikasi,
-  type BarisRiwayatBillboard,
-  type DetailBillboardDariApi,
-  type FormBillboard,
-  type OpsiFasilitas,
-} from '@/lib/tipe-billboard';
+import dynamic from 'next/dynamic';
 
-/**
- * Kolom `<select>` dan `<input>` yang boleh disetel `handleChange`.
- *
- * Sengaja MENGECUALIKAN `gallery`, `adminOptions`, dan `price`: ketiganya
- * bukan teks, dan masing-masing punya penyetelnya sendiri. Tanpa batas ini
- * satu `name` yang salah tulis di JSX akan menimpa array galeri dengan
- * sebuah string, dan tombol Simpan menuliskannya ke database.
- */
-type KolomTeksForm = Exclude<keyof FormBillboard, 'gallery' | 'adminOptions' | 'price'>;
+// Endpoint detail backend (`billboards.service.ts` `findOne`) sudah
+// JSON.parse kolom specs/includes/excludes/gallery sebelum dikirim, jadi bentuk
+// datanya ARRAY, bukan string JSON. Fungsi ini menerima keduanya supaya form
+// tidak pecah kalau bentuk datanya berubah. Perhatikan `[] || "[]"` selalu
+// mengembalikan `[]` (array kosong itu truthy) lalu `JSON.parse([])` menjadi
+// `JSON.parse("")` -> "Unexpected end of JSON input".
+const LocationPicker = dynamic(() => import("@/components/LocationPicker"), {ssr:false,loading:()=>('<div className="flex h-[360px] w-full items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-gray-500">Memuat Peta...</div>')});
 
-/** Daftar fasilitas bawaan untuk billboard baru. */
-const OPSI_BAWAAN: readonly OpsiFasilitas[] = [
-    { name: "Sewa Lahan / Konstruksi", included: true },
-    { name: "Pengawasan Media / Maintenance", included: true },
-    { name: "Biaya Cetak (1x)", included: true },
-    { name: "Biaya Pasang (1x)", included: true },
-    { name: "Pajak Reklame Pemda", included: true },
-    { name: "Asuransi", included: false },
-    { name: "Laporan Trafik (Smartsuco)", included: false },
-    { name: "PPN 11%", included: false },
-];
+function toArray(value: unknown): any[] {
+  if (Array.isArray(value)) return value;
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+  if (value && typeof value === 'object') return [value];
+  return [];
+}
 
-/** Isi form untuk billboard yang belum pernah disimpan. */
-const FORM_KOSONG: FormBillboard = {
-    title: '', slug: '', sku: '', address: '', type: 'Videotron',
-    price: 0, lat: -7.9666, lng: 112.6326,
-    // `status` WAJIB ADA DI SINI. Nilai awalnya dulu tidak ada sama sekali,
-    // sementara JSX merender `<select name="status" value={form.status}>`.
-    // React memperlakukan `value={undefined}` sebagai input TAK TERKENDALI:
-    // select-nya menampilkan "Available" sedangkan state-nya `undefined`, jadi
-    // pilihan admin baru terkirim kalau ia sempat menyentuh select itu. Pada
-    // billboard baru nilainya lolos hanya karena route create punya default
-    // (`body.status || BillboardStatus.Available`); route update tidak punya —
-    // ia memeriksa `sahBillboardStatus(body.status)` dan menjawab 400.
-    status: 'Available',
-    publishStatus: 'DRAFT', mainImage: '',
-    sizeH: '', sizeW: '',
-    orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
-    smartsucoUrl: '',
-    gallery: [],
-    adminOptions: [...OPSI_BAWAAN],
-};
+// Kolom lat/lng di Prisma bertipe Float (wajib). Input teks dan peta bisa
+// menghasilkan string atau NaN, jadi selalu dinormalkan ke numberFinite
+// supaya Leaflet tidak menerima [NaN, NaN] dan payload tidak ditolak backend.
+const DEFAULT_LAT = -7.9666;
+const DEFAULT_LNG = 112.6326;
+
+function toCoord(value: unknown, fallback: number): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
 
 export default function BillboardFormPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { data: session } = useSession();
   const billboardId = searchParams.get('id');
   const toast = useToast();
   const konfirmasi = useKonfirmasi();
@@ -111,47 +84,46 @@ export default function BillboardFormPage() {
   // yang sedang ditunggunya.
   const [memuatPratinjau, setMemuatPratinjau] = useState<string | null>(null);
 
-  const [form, setForm] = useState<FormBillboard>(FORM_KOSONG);
+  // DEFAULT DATA CHECKLIST
+  const defaultAdminOptions = [
+      { name: "Sewa Lahan / Konstruksi", included: true },
+      { name: "Pengawasan Media / Maintenance", included: true },
+      { name: "Biaya Cetak (1x)", included: true },
+      { name: "Biaya Pasang (1x)", included: true },
+      { name: "Pajak Reklame Pemda", included: true },
+      { name: "Asuransi", included: false },
+      { name: "Laporan Trafik (Smartsuco)", included: false },
+      { name: "PPN 11%", included: false },
+  ];
+
+  const [form, setForm] = useState<any>({
+      title: '', slug: '', sku: '', address: '', type: 'Videotron',
+      price: 0, lat: DEFAULT_LAT, lng: DEFAULT_LNG, 
+      publishStatus: 'DRAFT', mainImage: '',
+      sizeH: '', sizeW: '', 
+      orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
+      smartsucoUrl: '',
+      gallery: [], 
+      adminOptions: defaultAdminOptions
+  });
 
   useEffect(() => {
       if (billboardId) {
-          fetch(`/api/admin/billboards/detail?id=${encodeURIComponent(billboardId)}`)
-            .then(res => {
-                if (!res.ok) throw new Error('Gagal memuat data billboard.');
-                return res.json() as Promise<DetailBillboardDariApi | null>;
+          setFetching(true);
+          fetch(`/api/proxy/billboards/${billboardId}/detail`)
+            .then(async (res) => {
+                if (!res.ok) {
+                    const err = await res.json().catch(() => null);
+                    const msg = Array.isArray(err?.message) ? err.message.join(', ') : (err?.message || `HTTP ${res.status}`);
+                    throw new Error(msg);
+                }
+                return res.json();
             })
             .then(data => {
-                if(data) {
-                    // `JSON.parse` mentah di dalam `.then()` melempar ke `.catch`
-                    // di bawah, sehingga kolom yang rusak muncul sebagai "gagal
-                    // memuat" — admin tidak punya petunjuk bahwa datanyalah yang
-                    // cacat, dan tidak bisa membuka form untuk memperbaikinya.
-                    // Sekarang bagian rusak jadi kosong dan form tetap terbuka.
-                    //
-                    // `arrayDariJson`, BUKAN `safeJsonArray`: ketiga kolom ini
-                    // bertipe jsonb, jadi yang sampai ke sini lewat `res.json()`
-                    // SUDAH berupa array. Form inilah titik paling berbahaya bila
-                    // salah pembaca: nilai yang gagal dibaca menjadi array kosong,
-                    // lalu tombol Simpan menulis kembali array kosong itu ke
-                    // database — galeri dan daftar fasilitas hilang permanen,
-                    // tanpa satu pun pesan galat ke admin.
-                    const parsedGallery = arrayDariJson<string>(data.gallery, `Billboard.gallery id=${billboardId}`);
-                    const dbIncludes = arrayDariJson<string>(data.includes, `Billboard.includes id=${billboardId}`);
-                    // `specsAman` menyaring baris yang `label` atau `value`-nya
-                    // bukan teks. Penjagaan itu dulu ditulis inline di sini —
-                    // dua predikat `typeof` yang benar, tapi hanya ada di berkas
-                    // ini. Halaman billboard publik dan panel transaksi admin
-                    // membaca kolom yang sama tanpa penjagaan itu, dan keduanya
-                    // mati pada baris yang form ini justru bertahan menghadapinya.
-                    // Sekarang ketiganya memakai satu fungsi.
-                    //
-                    // Alasan penjagaannya tetap sama: `arrayDariJson` menjamin
-                    // hasilnya ARRAY, tidak menjamin isi tiap elemennya. Satu
-                    // entri `{ label: "Ukuran" }` tanpa `value` membuat
-                    // `.replace()` di bawah melempar, dan form-nya gagal terbuka.
-                    const parsedSpecs = specsAman(
-                        arrayDariJson<unknown>(data.specs, `Billboard.specs id=${billboardId}`)
-                    );
+                if(data && data.id) {
+                    const parsedGallery = toArray(data.gallery);
+                    const dbIncludes = toArray(data.includes);
+                    const parsedSpecs = toArray(data.specs);
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
 
@@ -227,16 +199,7 @@ export default function BillboardFormPage() {
                 }
                 setFetching(false);
             })
-            .catch((galat) => {
-                // Dicatat, bukan ditelan: `.catch` di sini menangkap TIGA hal
-                // sekaligus — `fetch` yang gagal, `res.ok` palsu yang dilempar
-                // di atas, dan setiap galat yang keluar dari `.then` pengurai.
-                // Tanpa satu baris log tidak ada cara membedakannya setelah
-                // admin melapor "formnya kosong".
-                console.error('Gagal memuat detail billboard:', galat);
-                setFetching(false);
-                toast.galat('Gagal memuat data billboard. Muat ulang halaman ini.');
-            });
+            .catch((err: any) => { alert("Gagal memuat data billboard: " + (err?.message || "Error tidak diketahui")); setFetching(false); });
       }
       // `toast` ikut di sini karena dipakai di atas. Nilainya dimemoisasi di
       // `ToastProvider`, jadi ia tidak pernah memicu effect ini berjalan ulang
@@ -291,171 +254,69 @@ export default function BillboardFormPage() {
       if(!url) return;
       setForm((p) => ({ ...p, gallery: [...p.gallery, url] }));
   };
-
-  const removeGallery = (index: number) =>
-      setForm((p) => ({ ...p, gallery: p.gallery.filter((_, i) => i !== index) }));
-
-  const handleRollback = async (historyItem: BarisRiwayatBillboard) => {
-      // PRATINJAU DIAMBIL LEBIH DULU, DI LUAR DIALOG
-      //
-      // Dialog ini tidak menghitung apa pun dan tidak boleh: diff antara data
-      // sekarang dan revisi yang dipilih dihitung server oleh kode yang sama
-      // yang menuliskan perubahannya (`bacaSnapshotBillboard`), supaya yang
-      // dipratinjau adalah — secara harfiah — objek yang akan dituliskan.
-      // Menghitungnya di sini dari `form` akan MELEWATKAN `videoUrl` (tidak ada
-      // di `FormBillboard`) dan membandingkan snapshot dengan suntingan yang
-      // belum disimpan, bukan dengan data yang benar-benar akan ditimpa.
-      setMemuatPratinjau(historyItem.id);
-      let baris: BarisDiffBillboard[];
-      try {
-          const res = await fetch(
-              `/api/admin/billboards/rollback/preview?historyId=${encodeURIComponent(historyItem.id)}`
-          );
-          if (!res.ok) {
-              const jawaban = await bacaJawaban(res);
-              // Pratinjau yang gagal MEMBATALKAN rollback, bukan melanjutkannya
-              // tanpa pratinjau. Penyebab paling mungkin — snapshot rusak atau
-              // tidak lengkap — adalah penyebab yang sama yang akan membuat
-              // route rollback menolak; membiarkan admin menekan tombolnya
-              // hanya memindahkan penolakan yang sama ke sesudah keputusannya.
-              toast.galat('Gagal menyusun pratinjau: ' + alasanPenolakan(res, jawaban));
-              setMemuatPratinjau(null);
-              return;
-          }
-          const data = (await res.json()) as { baris?: unknown };
-          baris = Array.isArray(data.baris) ? (data.baris as BarisDiffBillboard[]) : [];
-      } catch (galat) {
-          console.error('Gagal mengambil pratinjau rollback:', galat);
-          toast.galat('Server tidak dapat dihubungi. Rollback dibatalkan.');
-          setMemuatPratinjau(null);
-          return;
-      }
-      setMemuatPratinjau(null);
-
-      // Daftar kosong adalah jawaban yang sah: revisi yang dipilih identik
-      // dengan data sekarang. Tanpa cabang ini admin menekan "Pulihkan",
-      // membaca "Berhasil", lalu bertanya-tanya mengapa layarnya tidak
-      // berubah — dan satu baris riwayat kembar tertulis tanpa alasan.
-      if (baris.length === 0) {
-          toast.info(
-              'Revisi ini sama dengan data yang tersimpan sekarang. Tidak ada yang perlu dipulihkan.'
-          );
-          return;
-      }
-
-      // Teks yang harus diketik memuat TANGGAL REVISINYA, bukan kata tetap
-      // seperti "PULIHKAN". Tombol "Pulihkan" berdiri di ujung sepuluh baris
-      // yang tampak nyaris identik — nama admin sama, harga sering sama, hanya
-      // tanggalnya berbeda. Kata tetap bisa dihafal dan diketik tanpa melihat
-      // baris mana yang terbuka; tanggal yang hanya muncul di baris yang benar
-      // memaksa mata membacanya, dan itulah satu-satunya hal yang mencegah
-      // kesalahan pemilihan baris.
-      const kunciKetik = `PULIHKAN ${kunciTanggalJam(historyItem.archivedAt)}`;
-
-      // Pesan lama berbunyi `confirm(\`Rollback data?\`)` — sebuah template
-      // literal tanpa satu pun interpolasi, dan sebuah pertanyaan yang tidak
-      // menyebut revisi mana yang akan dipulihkan maupun bahwa data sekarang
-      // ditimpa. Admin yang menekan "Restore" pada baris keempat dari sepuluh
-      // tidak punya cara memastikan baris itulah yang ditekannya.
-      const diketik = await konfirmasi({
-          judul: 'Pulihkan billboard ke revisi ini?',
-          pesan:
-              `Revisi ${tanggalJam(historyItem.archivedAt)} ` +
-              `oleh ${historyItem.changedBy?.name ?? 'Sistem'}, harga ` +
-              `Rp ${angkaRupiah(historyItem.price)}.\n\n` +
-              `${baris.length} kolom akan DITIMPA oleh revisi ini. Data sekarang ` +
-              'tetap tercatat sebagai revisi baru, jadi pemulihan ini bisa ' +
-              'dibatalkan dengan memulihkan revisi teratas.',
-          rincian: <TabelDiffRollback baris={baris} />,
-          lebar: 'lg',
-          isian: {
-              label: `Ketik "${kunciKetik}" untuk melanjutkan`,
-              placeholder: kunciKetik,
-              cocok: kunciKetik,
-          },
-          labelSetuju: 'Pulihkan Revisi Ini',
-          labelTolak: 'Jangan',
-          nada: 'bahaya',
-      });
-      // Kontrak `tanya()` dengan `isian`: teks terpangkas atau `null`. Dijaga
-      // dengan pemeriksaan TIPE, bukan truthiness — `cocok` menahan tombolnya
-      // sampai teksnya persis, jadi teks kosong tidak pernah pulang hari ini,
-      // tapi penjaga yang benar karena kebetulan akan salah begitu syaratnya
-      // berubah.
-      if (typeof diketik !== 'string') return;
-
+  
+  const removeGallery = (index: number) => setForm((p:any) => ({ ...p, gallery: p.gallery.filter((_:any, i:number) => i !== index) }));
+  
+  const handleRollback = async (historyItem: any) => {
+      if(!confirm("Rollback data?")) return;
+      if(!session?.user?.email) return alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
       setLoading(true);
-      try {
-          const res = await fetch('/api/admin/billboards/rollback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ historyId: historyItem.id })
-          });
-          if (!res.ok) {
-              const jawaban = await bacaJawaban(res);
-              toast.galat('Gagal memulihkan revisi: ' + alasanPenolakan(res, jawaban));
-              setLoading(false);
-              return;
-          }
-          toast.sukses('Billboard dipulihkan ke revisi yang dipilih.');
-          setLoading(false);
-          // Pengganti `window.location.reload()`: form dan daftar riwayat diambil
-          // ulang dari API, sisa halaman admin tetap hidup.
-          setFetching(true);
-          setPemuatanKe((n) => n + 1);
-      } catch (galat) {
-          console.error('Gagal memulihkan revisi billboard:', galat);
-          toast.galat('Server tidak dapat dihubungi. Revisi TIDAK dipulihkan.');
-          setLoading(false);
+      const res = await fetch(`/api/proxy/billboards/rollback`, { 
+        method: 'POST', 
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ historyId: historyItem.id, adminEmail: session.user.email }),
+      });
+      setLoading(false);
+      if (res.ok) window.location.reload();
+      else {
+        const data = await res.json().catch(() => null);
+        alert("Gagal rollback: " + (Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`)));
       }
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
-      e.preventDefault();
-      setLoading(true);
-      
-      // Route Next (create/update) yang menyusun sendiri `specs`, `includes`,
-      // dan `excludes` dari `adminOptions` + field ukuran mentah, jadi cukup
-      // kirim data form apa adanya.
-      const payload = {
-          ...form,
-          ...(billboardId ? { id: billboardId } : {}),
-          gallery: form.gallery,
-          adminOptions: form.adminOptions
+    e.preventDefault();
+
+    if(!session?.user?.email) {
+      alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
+      return;
+    }
+
+    setLoading(true);
+    
+    const packedSpecs = JSON.stringify([
+          { label: "Ukuran", value: `${form.sizeH}m x ${form.sizeW}m` },
+          { label: "Luas Area", value: `${(Number(form.sizeH) * Number(form.sizeW)).toFixed(1)} m²` },
+          { label: "Layout / Orientasi", value: form.orientation },
+          { label: "Tampilan", value: form.sides + " Sisi" },
+          { label: "Jenis Penerangan", value: form.lighting },
+          { label: "Material", value: form.material }
+      ]);
+      const includesList = form.adminOptions.filter((o:any)=>o.included).map((o:any)=>o.name);
+      const excludesList = form.adminOptions.filter((o:any)=>!o.included).map((o:any)=>o.name);
+
+      const payload = { 
+          ...form, id: billboardId, adminEmail: session.user.email,
+          lat: toCoord(form.lat, DEFAULT_LAT), lng: toCoord(form.lng, DEFAULT_LNG),
+          specs: packedSpecs, includes: JSON.stringify(includesList), excludes: JSON.stringify(excludesList), gallery: form.gallery
       };
 
-      const endpoint = billboardId ? '/api/admin/billboards/update' : '/api/admin/billboards/create';
+      const endpoint = billboardId ? `/api/proxy/billboards/${billboardId}` : `/api/proxy/billboards`;
+      const method = billboardId ? 'PATCH' : 'POST';
 
       try {
-          const res = await fetch(endpoint, {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify(payload)
+          const res = await fetch(endpoint, { 
+              method: method, 
+              headers: {'Content-Type': 'application/json'}, 
+              body: JSON.stringify(payload),
           });
-          if (res.ok) {
-              toast.sukses(billboardId ? 'Perubahan billboard tersimpan.' : 'Billboard baru dibuat.');
-              if (billboardId) {
-                  // Pengganti `window.location.reload()`. Route update menyusun
-                  // ulang `specs`/`includes`/`excludes` dari payload, jadi bentuk
-                  // yang tersimpan tidak selalu sama dengan isi form — data harus
-                  // diambil ulang, tapi tidak dengan mengunduh ulang seluruh
-                  // halaman.
-                  setFetching(true);
-                  setPemuatanKe((n) => n + 1);
-              } else {
-                  router.push('/admin/billboards');
-              }
-          } else {
-              // Dulu `res.json().catch(() => null)` mentah: `msg?.message` lolos
-              // `tsc` sebagai `any`, jadi salah tulis nama kolom tidak pernah
-              // tertangkap dan pesan server yang sebenarnya tidak muncul.
-              const jawaban = await bacaJawaban(res);
-              toast.galat('Gagal menyimpan data: ' + alasanPenolakan(res, jawaban));
+          if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
+          else { 
+            const data = await res.json().catch(() => null);
+            const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+            alert("Gagal: " + msg); 
           }
-      } catch (galat) {
-          console.error('Gagal menyimpan billboard:', galat);
-          toast.galat('Server tidak dapat dihubungi. Data billboard belum tersimpan.');
-      }
+      } catch(err) { alert("Error server. Pastikan backend sedang berjalan."); }
       setLoading(false);
   }
 
@@ -480,6 +341,7 @@ export default function BillboardFormPage() {
                         <div className="grid grid-cols-1 gap-4">
                             <div><label className="text-xs font-bold text-gray-500 uppercase">Nama Billboard</label><input name="title" value={form.title} onChange={handleChange} className="w-full border rounded p-2.5 mt-1 font-bold text-lg" required /></div>
                             <div className='flex gap-2'><div className='flex-1'><label className="text-xs font-bold text-gray-500 uppercase">Slug URL</label><input name="slug" value={form.slug} onChange={handleChange} className="w-full border rounded p-2.5 mt-1 bg-blue-50/50" required /></div><button type="button" onClick={generateSlug} className="text-blue-600 text-xs mt-6 underline px-2">Auto</button></div>
+                            <div><label className="text-xs font-bold text-gray-500 uppercase">Tipe Billboard</label><select name="type" value={form.type} onChange={handleChange} className="w-full border rounded p-2.5 mt-1 bg-white font-bold"><option value="Videotron">Videotron</option><option value="Baliho">Baliho</option><option value="Billboard">Billboard</option></select></div>
                             <div className="grid grid-cols-2 gap-2">
                                                                 <div><label className="text-xs font-bold text-gray-500 uppercase">Status Ketersediaan</label><select name="status" value={form.status} onChange={handleChange} className="w-full border rounded p-2.5 mt-1 bg-white font-bold"><option value="Available">Available</option><option value="Booked">Booked</option></select></div>
                                 <div><label className="text-xs font-bold text-gray-500 uppercase">Status Publikasi</label><select name="publishStatus" value={form.publishStatus} onChange={handleChange} className="w-full border rounded p-2.5 mt-1 bg-white font-bold"><option value="DRAFT">Draft</option><option value="PUBLISHED">Published</option><option value="ARCHIVED">Archived</option></select></div>
@@ -535,6 +397,13 @@ export default function BillboardFormPage() {
                                 {inputType==='AUTO' ? <ImageUpload value={form.mainImage} onChange={(u)=>setForm((p)=>({...p,mainImage:u}))} label='Cover Image'/> : <input value={form.mainImage} onChange={e=>setForm((p)=>({...p,mainImage:e.target.value}))} className="w-full border p-2 text-xs"/>}
                                 <button type='button' onClick={()=>setInputType(p=>p==='AUTO'?'MANUAL':'AUTO')} className="text-xs underline mt-1 text-gray-400">Switch Upload Mode</button>
                              </div>
+                         </div>
+                                                   <div className="mt-4 pt-4 border-t">
+                             <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Lokasi Titik &mdash; Klik Peta atau Geser Marker</label>
+                             <LocationPicker
+                                value={{ lat: toCoord(form.lat, DEFAULT_LAT), lng: toCoord(form.lng, DEFAULT_LNG) }}
+                                onChange={(loc:{ lat:number; lng:number }) => setForm((p:any) => ({ ...p, lat: loc.lat, lng: loc.lng }))}
+                             />
                          </div>
                                                   <div className="mt-4 pt-4 border-t">
                              <label className="text-xs font-bold text-gray-500 uppercase mb-3 block">Galeri Tambahan</label>

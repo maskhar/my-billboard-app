@@ -154,7 +154,7 @@ const Navbar = () => {
           <Link href="/" className="flex-shrink-0 cursor-pointer flex items-center gap-1">
             {/* Di HP text-xl, di Desktop text-2xl */}
             <span className="text-xl md:text-2xl font-bold text-gray-900 tracking-tight">
-                Utero<span className="text-utero">Cloud</span>
+                Utero<span className="text-utero">Billboard</span>
             </span>
           </Link>
 
@@ -169,7 +169,8 @@ const Navbar = () => {
               penanda. Peta tetap terjangkau: lewat logo, dan lewat tautan "Lihat
               di peta" di katalog. */}
           <div className="hidden md:flex items-center space-x-8">
-              <Link href="/billboards" className="text-sm font-medium text-gray-700 hover:text-utero transition">Cari Billboard</Link>
+              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Home</Link>
+              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
               <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
               {session && (
                 <Link href="/dashboard" className="text-sm font-medium text-gray-700 hover:text-utero transition">Pesanan Saya</Link>
@@ -299,39 +300,16 @@ const Navbar = () => {
                     </Link>
                 )}
 
-                {/* Link Navigasi Biasa.
-                    `/billboards`, sepasang dengan tautan desktop — lihat
-                    alasannya di sana. Di layar HP bobotnya lebih besar lagi:
-                    peta penuh penanda di lebar 375px praktis tidak bisa
-                    ditelusuri, sementara daftar satu kolom bisa. */}
-                <Link href="/billboards" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 Cari Billboard</Link>
-                <Link href="/about" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">ℹ️ Tentang Kami</Link>
-                {/* `onClick={() => setIsOpen(false)}` sama seperti tautan mobile
-                    lainnya: tanpa itu menu tetap terbuka menutupi halaman
-                    tujuan. */}
-                <Link href="/sewakan-tempat" onClick={() => setIsOpen(false)} className="block px-3 py-3 rounded-lg text-base font-bold text-utero border border-utero/30 mt-3 text-center hover:bg-utero/5">
-                    Sewakan Tempat Anda
-                </Link>
-
-                {/* Kebijakan privasi dan ketentuan.
-                    Aplikasi ini tidak punya footer — Navbar dipanggil di dalam
-                    masing-masing halaman, jadi tidak ada satu tempat pun di
-                    bawah halaman yang bisa memuat tautan ini secara global.
-                    Menu mobile adalah satu-satunya daftar navigasi yang ada di
-                    setiap halaman publik, jadi keduanya dipasang di sini —
-                    dengan ukuran kecil, karena ini bukan tugas utama pengunjung,
-                    tapi harus bisa ditemukan tanpa mencari.
-                    Teks persetujuan di formulir pendaftaran, pemesanan, dan
-                    pengajuan titik menautkan keduanya secara langsung di tempat
-                    datanya benar-benar diminta. */}
-                <div className="flex items-center justify-center gap-3 mt-4 pt-4 border-t border-gray-100">
-                    <Link href="/kebijakan-privasi" onClick={() => setIsOpen(false)} className="text-xs text-gray-500 hover:text-utero">
-                        Kebijakan Privasi
-                    </Link>
-                    <span className="text-xs text-gray-300" aria-hidden="true">|</span>
-                    <Link href="/syarat-ketentuan" onClick={() => setIsOpen(false)} className="text-xs text-gray-500 hover:text-utero">
-                        Syarat &amp; Ketentuan
-                    </Link>
+                {/* Link Navigasi Biasa */}
+                <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏠 Home</Link>
+                <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
+                <Link href="/about" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏢 Tentang Kami</Link>
+                
+                {/* Tombol CTA dipindah kesini untuk mobile */}
+                <div className="pt-4 border-t border-gray-100 mt-2">
+                    <button className="w-full bg-utero text-white py-3.5 rounded-xl font-bold text-sm shadow-lg shadow-red-100">
+                        + Sewakan Tempat Anda
+                    </button>
                 </div>
             </div>
         </div>

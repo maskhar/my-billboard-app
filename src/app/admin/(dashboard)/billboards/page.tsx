@@ -1,26 +1,11 @@
-import { prisma } from '@/lib/prisma';
+// import { prisma } from '@/lib/prisma';
+import { cookies } from 'next/headers';
+import { buildNextAuthCookieHeader } from '@/lib/nextauth-cookie';
 import Link from 'next/link';
-import { Plus, MapPin, Edit, Eye, Clock } from 'lucide-react';
-import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn';
-import StatusChanger from '@/components/admin/StatusChanger';
-import { Billboard, Prisma } from '@prisma/client';
-import { angkaRupiah } from '@/lib/money';
-import { tanggalRingkas } from '@/lib/tanggal';
-import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
-import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
-// `where` dan `URUT` dipakai bersama route ekspor CSV. Selama keduanya ditulis
-// di halaman ini, berkas ekspor bisa memuat himpunan baris yang berbeda dari
-// layar tanpa satu pun tanda — dan berkas itu dipakai untuk rekonsiliasi.
-import {
-  KUNCI_URUT_BILLBOARD,
-  URUT_BILLBOARD,
-  whereBillboard,
-} from '@/lib/saringan-daftar';
-import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
-import KepalaUrut from '@/components/admin/KepalaUrut';
-import KotakCari from '@/components/admin/KotakCari';
-import TombolEkspor from '@/components/admin/TombolEkspor';
-import { redirect } from 'next/navigation';
+import { Plus, MapPin, Tag, Edit, Eye, User, Clock, ImageOff } from 'lucide-react';
+import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn'; 
+import StatusChanger from '@/components/admin/StatusChanger'; 
+import { Billboard, User as UserType } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
@@ -59,20 +44,28 @@ async function getAdminBillboards(
   orderBy: Prisma.BillboardOrderByWithRelationInput,
 ): Promise<{ data: BillboardWithUsers[]; total: number }> {
   try {
-    const [data, total] = await prisma.$transaction([
-      prisma.billboard.findMany({
-        where,
-        orderBy,
-        include: {
-          createdBy: { select: { id: true, name: true } },
-          updatedBy: { select: { id: true, name: true } },
-        },
-        skip: (halamanDiminta - 1) * PER_HALAMAN,
-        take: PER_HALAMAN,
-      }),
-      prisma.billboard.count({ where }),
-    ]);
-    return { data, total };
+    // Endpoint ini dilindungi @Roles(...ADMIN_ROLES) di backend, jadi cookie
+    // session NextAuth wajib ikut diteruskan. Server Component tidak punya
+    // cookie browser, jadi dibaca manual lalu dikirim sebagai header `Cookie`.
+    const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4001';
+    const targetUrl = `${backendUrl}/api/billboards/admin`;
+
+    const cookieHeader = buildNextAuthCookieHeader(await cookies());
+
+    const res = await fetch(targetUrl, {
+      cache: 'no-store',
+      headers: cookieHeader ? { Cookie: cookieHeader } : {},
+    });
+
+    if (!res.ok) {
+      console.error("Gagal mengambil data admin billboards:", res.status, await res.text());
+      // 401 = session tidak diteruskan/kedaluwarsa, 403 = role bukan admin.
+      return [];
+    }
+    
+    const billboards = await res.json();
+    return billboards;
+
   } catch (error) {
     console.error('Gagal mengambil data admin billboards:', error);
     return { data: [], total: 0 };
@@ -273,26 +266,13 @@ export default async function AdminBillboardsPage({
 
                             <td className="px-6 py-3 w-24">
                                 <Link href={`/billboard/${item.slug}`} target="_blank">
-                                    {/*
-                                      `<img>` biasa, bukan `next/image`:
-                                      `mainImage` diisi admin dan boleh menunjuk
-                                      ke penyimpanan mana pun, sedangkan
-                                      `remotePatterns` di next.config.ts hanya
-                                      memuat tiga host. `next/image` MELEMPAR
-                                      saat dijalankan untuk sumber di luar
-                                      daftar itu, jadi satu billboard dengan
-                                      host baru akan menjatuhkan seluruh daftar
-                                      inventori admin.
-
-                                      `alt` dulu tidak ada. Sel ini adalah
-                                      TAUTAN ke halaman produk, dan tautan yang
-                                      isinya hanya gambar tanpa alt dibacakan
-                                      pembaca layar sebagai URL berkasnya —
-                                      operator yang memakainya tidak punya cara
-                                      tahu baris mana yang sedang dibukanya.
-                                    */}
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={item.mainImage} alt={`Foto ${item.title}`} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
+                                    {item.mainImage ? (
+                                        <img src={item.mainImage} alt={item.title} className="w-20 h-12 object-cover rounded bg-gray-200 border hover:scale-110 transition cursor-pointer" />
+                                    ) : (
+                                        <div className="w-20 h-12 rounded bg-gray-200 border flex items-center justify-center text-gray-400 hover:scale-110 transition cursor-pointer">
+                                            <ImageOff size={18} />
+                                        </div>
+                                    )}
                                 </Link>
                             </td>
 

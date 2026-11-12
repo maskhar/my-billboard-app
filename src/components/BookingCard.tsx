@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { UploadCloud, MapPin, Clock, Eye, AlertTriangle, Landmark, CheckCircle2, ExternalLink, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, ImageOff, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 // Keempat modal di berkas ini dulu `<div className="fixed inset-0">` biasa —
@@ -189,6 +189,35 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
 
   // LOGIKA 2: HANDLING TOMBOL UTAMA
 
+  // Helper POST JSON: cek res.ok, kembalikan true hanya kalau server sukses.
+  const postJson = async (endpoint: string, payload: object, actionLabel: string): Promise<boolean> => {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      // Endpoint diawali '/' diarahkan ke Next.js API route (server-side),
+      // selain itu diteruskan langsung ke backend.
+      const url = endpoint.startsWith('/') ? endpoint : `${apiUrl}${endpoint}`;
+      try {
+          const res = await fetch(url, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+              // Backend memverifikasi cookie session NextAuth; tanpa ini cookie
+              // tidak ikut saat request lintas origin dan guard membalas 401.
+              credentials: 'include',
+          });
+
+          if (!res.ok) {
+              const data = await res.json().catch(() => null);
+              const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
+              alert(`❌ Gagal ${actionLabel}: ${msg}`);
+              return false;
+          }
+          return true;
+      } catch (e) {
+          alert(`❌ Gagal ${actionLabel}: tidak bisa menghubungi server.`);
+          return false;
+      }
+  };
+
   // A. Upload File Desain ke Server
     const handleDesignSubmit = async (url: string) => {
     setLoading(true);
@@ -197,6 +226,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ orderId: order.id, designUrl: url }),
+        credentials: 'include',
       });
       const jawaban = await bacaJawaban(res);
       if (res.ok) {
@@ -234,13 +264,14 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
     formData.append('orderId', order.id);
 
     try {
-      // Sengaja TANPA header Content-Type: browser harus menyusunnya sendiri
-      // lengkap dengan boundary multipart.
-      const res = await fetch('/api/upload/design', { method: 'POST', body: formData });
-      const jawaban = await bacaJawaban(res);
-      if (!res.ok) {
-        toast.galat('Unggahan gagal: ' + alasanPenolakan(res, jawaban));
-        return;
+      // JANGAN set header Content-Type di sini: browser yang harus menambahkan
+      // multipart/form-data beserta boundary-nya sendiri.
+      const res = await fetch(`${apiUrl}/api/uploads/design`, { method: 'POST', body: formData, credentials: 'include' });
+      const data = await res.json();
+      if (res.ok) {
+        await handleDesignSubmit(data.url);
+      } else {
+        alert('Upload Gagal: ' + data.message);
       }
       // `url` diperiksa, tidak diteruskan buta. Respons 200 tanpa `url` —
       // badan JSON yang bentuknya berubah, atau proxy yang memangkasnya —
@@ -274,75 +305,39 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
 
   // D. Batalkan Pesanan (Fase Pending)
   const handleCancelPending = async () => {
-      const setuju = await konfirmasi({
-          judul: 'Batalkan pesanan ini?',
-          pesan:
-              'Slot tanggal yang Anda pesan akan dilepas kembali dan bisa diambil orang ' +
-              'lain. Pembatalan tidak bisa diurungkan.',
-          labelSetuju: 'Batalkan Pesanan',
-          labelTolak: 'Jangan Batalkan',
-          nada: 'bahaya',
-      });
-      if (!setuju) return;
+      if(!confirm("Yakin mau membatalkan pesanan?")) return;
       setLoading(true);
-      try {
-        const res = await fetch('/api/booking/cancel', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ orderId: order.id })
-        });
-        const jawaban = await bacaJawaban(res);
-        if (!res.ok) {
-          toast.galat('Gagal membatalkan: ' + alasanPenolakan(res, jawaban));
-          return;
-        }
-        toast.sukses('Pesanan dibatalkan.');
-        router.refresh();
-      } catch (galat) {
-        console.error('Gagal membatalkan pesanan:', galat);
-        toast.galat('Server tidak dapat dihubungi. Pesanan TIDAK dibatalkan.');
-      } finally {
-        setLoading(false);
-      }
+      const ok = await postJson('/api/booking/cancel', { orderId: order.id }, 'membatalkan pesanan');
+      setLoading(false);
+      if (!ok) return;
+      alert("✅ Pesanan berhasil dibatalkan.");
+      router.refresh();
   };
 
-  // E. Bayar: tautan ke halaman Pembayaran Otomatis milik pembeli.
-  //
-  // Sebelumnya tombol di kartu ini memanggil `/api/payment/notify` — endpoint
-  // WEBHOOK, yang hanya boleh dipanggil server gerbang pembayaran dengan token
-  // rahasia. Panggilan dari browser selalu ditolak, jadi tombolnya tidak pernah
-  // membayar apa pun; yang lebih berbahaya adalah bentuknya, karena ia
-  // memperlakukan browser sebagai sumber kebenaran soal uang masuk.
-  //
-  // Sekarang kartu ini tidak lagi memiliki jalur pembayaran sendiri. Ia hanya
-  // menavigasi ke halaman pembayaran; sesi dibuat server, dan pelunasan tetap
-  // ditetapkan webhook.
+  // E. Simulasi Bayar
+  const handlePaySimulation = async () => {
+       const confirmed = confirm(`[SIMULASI XENDIT]\n\nBayar tagihan sebesar Rp ${order.totalPrice.toLocaleString('id-ID')}?`);
+       if (!confirmed) return;
+       setLoading(true);
+       // lewat Next.js API route supaya PAYMENT_WEBHOOK_SECRET tidak pernah masuk browser
+       const ok = await postJson('/api/payment/notify', { orderId: order.id }, 'memproses pembayaran');
+       setLoading(false);
+       if (!ok) return;
+       alert("✅ Pembayaran Diterima! Status menunggu verifikasi Admin.");
+       router.refresh();
+  };
 
   // F. Submit Alasan Refund
   const handleSubmitReason = async (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-      try {
-        const res = await fetch('/api/booking/request-refund', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ step: 'reason', orderId: order.id, reason: form.get("reason") })
-        });
-        const jawaban = await bacaJawaban(res);
-        if (!res.ok) {
-            toast.galat('Gagal mengirim permintaan: ' + alasanPenolakan(res, jawaban));
-            return;
-        }
-        toast.sukses('Permintaan dikirim. Menunggu persetujuan admin.');
-        setModalType('NONE');
-        router.refresh();
-      } catch (galat) {
-        console.error('Gagal mengirim permintaan refund:', galat);
-        toast.galat('Server tidak dapat dihubungi. Permintaan belum terkirim.');
-      } finally {
-        setLoading(false);
-      }
+      const ok = await postJson('/api/booking/request-refund', { step: 'reason', orderId: order.id, reason: form.get("reason") }, 'mengirim alasan pembatalan');
+      setLoading(false);
+      if (!ok) return;
+      alert("✅ Permintaan dikirim. Menunggu persetujuan Admin.");
+      setModalType('NONE');
+      router.refresh();
   }
 
   // G. Submit Nomor Rekening
@@ -350,31 +345,17 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
       e.preventDefault();
       const form = new FormData(e.currentTarget);
       setLoading(true);
-      try {
-        const res = await fetch('/api/booking/request-refund', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                step: 'bank',
-                orderId: order.id,
-                bankName: form.get("bankName"),
-                bankAccount: form.get("bankAccount")
-            })
-        });
-        const jawaban = await bacaJawaban(res);
-        if (!res.ok) {
-            toast.galat('Gagal menyimpan rekening: ' + alasanPenolakan(res, jawaban));
-            return;
-        }
-        toast.sukses('Rekening disimpan. Dana diproses admin.');
-        setModalType('NONE');
-        router.refresh();
-      } catch (galat) {
-        console.error('Gagal menyimpan rekening refund:', galat);
-        toast.galat('Server tidak dapat dihubungi. Rekening belum tersimpan.');
-      } finally {
-        setLoading(false);
-      }
+      const ok = await postJson('/api/booking/request-refund', {
+          step: 'bank',
+          orderId: order.id,
+          bankName: form.get("bankName"),
+          bankAccount: form.get("bankAccount")
+      }, 'menyimpan nomor rekening');
+      setLoading(false);
+      if (!ok) return;
+      alert("✅ Rekening disimpan. Dana diproses Admin.");
+      setModalType('NONE');
+      router.refresh();
   }
 
 
@@ -437,17 +418,13 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
             
             {/* 1. KOLOM KIRI: INFO PRODUK */}
             <div className="md:col-span-2 flex gap-4">
-                {/* `<img>` biasa, bukan `next/image`: `mainImage` diisi admin dan boleh
-                    menunjuk penyimpanan mana pun, sementara `next/image` menolak host
-                    yang tidak terdaftar di `remotePatterns` next.config.ts dengan galat
-                    saat dijalankan. Mengubahnya di sini membuat kartu pesanan gagal
-                    merender untuk billboard yang gambarnya di luar tiga host itu. */}
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                    src={order.billboard?.mainImage || '/placeholder.jpg'}
-                    alt={order.billboard?.title ? `Foto ${order.billboard.title}` : 'Billboard tidak ditemukan'}
-                    className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100"
-                />
+                {order.billboard?.mainImage ? (
+                    <img src={order.billboard.mainImage} className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100" />
+                ) : (
+                    <div className="w-24 h-24 rounded-lg bg-gray-200 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0">
+                        <ImageOff size={24} />
+                    </div>
+                )}
                 <div className="flex flex-col justify-between">
                     <div>
                         <h3 className="font-bold text-gray-800 line-clamp-1">{order.billboard?.title || "Billboard Tidak Ditemukan"}</h3>

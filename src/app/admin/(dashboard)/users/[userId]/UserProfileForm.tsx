@@ -21,6 +21,30 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
   // bertitik-titik itu ke database dan menghapus nomor aslinya.
   const identitasTersamar = user.identitasTersamar;
 
+const SelectField = ({ label, id, value, onChange, children }: any) => (
+    <div>
+      <label htmlFor={id} className="block text-sm font-medium text-gray-700">{label}</label>
+      <select
+        id={id}
+        value={value}
+        onChange={onChange}
+        className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
+      >
+        {children}
+      </select>
+    </div>
+  );
+
+const getApiErrorMessage = async (res: Response) => {
+  try {
+    const data = await res.json();
+    return typeof data?.message === 'string' ? data.message : `HTTP ${res.status}`;
+  } catch {
+    return `HTTP ${res.status}`;
+  }
+};
+
+export default function UserProfileForm({ user }: { user: User }) {
   const [businessDetails, setBusinessDetails] = useState({
     name: user.name || '',
     companyName: user.companyName || '',
@@ -62,28 +86,10 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
     e.preventDefault();
     setLoading(true);
     try {
-      // Bila nilai yang tampil adalah samaran, kolomnya TIDAK ikut dikirim.
-      // Mengirimnya berarti menimpa nomor asli dengan titik-titik.
-      //
-      // Muatannya disusun kolom per kolom, bukan `{ ...businessDetails }`:
-      // route `update-business` memakai allowlist, jadi kolom asing memang
-      // dibuang — tapi daftar eksplisit di sini membuat terlihat persis apa
-      // yang dikirim, dan kolom baru di state tidak ikut menyeberang sendiri.
-      const muatan = {
-        userId: user.id,
-        name: businessDetails.name,
-        companyName: businessDetails.companyName,
-        ktpAddress: businessDetails.ktpAddress,
-        officeAddress: businessDetails.officeAddress,
-        ...(identitasTersamar
-          ? {}
-          : { ktp: businessDetails.ktp, npwp: businessDetails.npwp }),
-      };
-
-      const res = await fetch('/api/admin/users/update-business', {
-        method: 'POST',
+      const res = await fetch(`/api/proxy/users/${user.id}/admin-business`, {
+        method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(muatan),
+        body: JSON.stringify(businessDetails),
       });
       // Pesan dari server dibaca, bukan dibuang. Route ini menolak dengan
       // keterangan yang berguna — "Field name harus berupa teks", "Tidak ada
@@ -110,49 +116,76 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
 
   const handleAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (userAccount.newPassword !== userAccount.confirmPassword) {
+      alert("Passwords do not match!");
+      return;
+    }
+
+    const roleChanged = userAccount.role !== user.role;
+
+    const updateAccount = async () => {
+      const data: any = {
+        username: userAccount.username,
+        whatsapp: userAccount.whatsapp,
+      };
+      if (userAccount.newPassword) {
+        data.password = userAccount.newPassword;
+      }
+      try {
+        const res = await fetch(`/api/proxy/users/${user.id}/admin-account`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        return { ok: res.ok, message: res.ok ? '' : await getApiErrorMessage(res) };
+      } catch {
+        return { ok: false, message: 'Tidak dapat menghubungi server.' };
+      }
+    };
+
+    const updateRole = async () => {
+      try {
+        const res = await fetch(`/api/proxy/users/${user.id}/admin-role`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ newRole: userAccount.role }),
+        });
+        return { ok: res.ok, message: res.ok ? '' : await getApiErrorMessage(res) };
+      } catch {
+        return { ok: false, message: 'Tidak dapat menghubungi server.' };
+      }
+    };
+
     setLoading(true);
     try {
-      // Role TIDAK ikut dikirim ke sini. `update-account` sengaja menolak body
-      // yang memuat `role` (400) karena naik-turun pangkat punya aturan
-      // sendiri: hanya SUPER_ADMIN boleh mengangkat SUPER_ADMIN, dan ADMIN
-      // tidak boleh menurunkan SUPER_ADMIN. Aturan itu hidup di
-      // `/api/admin/users/update-role`, jadi perubahan role dikirim ke sana.
-      const res = await fetch('/api/admin/users/update-account', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: user.id,
-          username: userAccount.username,
-          whatsapp: userAccount.whatsapp,
-        }),
-      });
-      if (!res.ok) {
-        const jawaban = await bacaJawaban(res);
-        throw new Error(alasanPenolakan(res, jawaban));
+      const rolePromise: Promise<{ ok: boolean; message: string } | null> = roleChanged
+        ? updateRole()
+        : Promise.resolve(null);
+      const [accountResult, roleResult] = await Promise.all([updateAccount(), rolePromise]);
+
+      const failures: string[] = [];
+      if (!accountResult.ok) {
+        failures.push(`Gagal memperbarui data akun: ${accountResult.message}`);
+      }
+      if (roleResult && !roleResult.ok) {
+        failures.push(`Gagal mengubah role: ${roleResult.message}`);
+        setUserAccount(prev => ({ ...prev, role: user.role }));
       }
 
-      // Kirim role hanya bila memang diubah, supaya penyimpanan biasa tidak
-      // menyentuh endpoint yang lebih sensitif ini sama sekali.
-      if (userAccount.role !== user.role) {
-        const resRole = await fetch('/api/admin/users/update-role', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ userId: user.id, newRole: userAccount.role }),
-        });
-        if (!resRole.ok) {
-          // Penolakan dari sini paling perlu dibaca utuh: "hanya SUPER_ADMIN
-          // boleh mengangkat SUPER_ADMIN" menuntut tindakan yang sama sekali
-          // berbeda dari "server mati".
-          const jawaban = await bacaJawaban(resRole);
-          throw new Error(alasanPenolakan(resRole, jawaban));
+      if (failures.length > 0) {
+        const successes: string[] = [];
+        if (accountResult.ok) successes.push('data akun berhasil diperbarui');
+        if (roleResult?.ok) successes.push('role berhasil diubah');
+
+        alert(`${failures.join('\n')}${successes.length > 0 ? `\n\nNamun ${successes.join(' dan ')}.` : ''}`);
+        if (accountResult.ok || roleResult?.ok) {
+          router.refresh();
         }
+        return;
       }
 
-      toast.sukses('Data akun berhasil disimpan.');
+      alert(roleChanged ? 'Account details and role updated successfully!' : 'Account details updated successfully!');
       router.refresh();
-    } catch (error) {
-      console.error('Gagal menyimpan data akun pengguna:', error);
-      toast.galat(pesanGalat(error, 'Gagal menyimpan data akun.'));
     } finally {
       setLoading(false);
     }

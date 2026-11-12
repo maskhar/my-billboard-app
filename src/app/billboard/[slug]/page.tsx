@@ -65,51 +65,15 @@ async function getBillboardBySlug(slug: string): Promise<BillboardDetailData | n
     });
 }
 
-// Fungsi ini dulu mengembalikan nilai tetap yang ditulis langsung di kode —
-// termasuk `googleMapsApiKey: null`, selamanya. Akibatnya kunci Google Maps
-// yang dimasukkan admin di /admin/settings, dienkripsi, dan disimpan rapi ke
-// database TIDAK PERNAH sampai ke sini: peta di halaman detail produk tidak
-// muncul, tanpa satu pun pesan yang menjelaskan kenapa. Admin akan menyimpulkan
-// kuncinya salah dan menggantinya berulang kali.
-//
-// Kunci disimpan terenkripsi (lihat `src/lib/rahasia.ts`), jadi harus dibuka
-// dulu sebelum dipakai; yang tersimpan tanpa awalan `enc:v1:` dianggap teks
-// biasa peninggalan sebelum enkripsi diterapkan dan tetap terbaca.
-//
-// HANYA `googleMapsApiKey` yang menyeberang ke browser, dan memang harus:
-// kunci Maps dipakai oleh skrip peta di sisi klien. `geminiApiKey` sengaja
-// TIDAK ikut — ia hanya dipakai server, dan mengirimnya ke browser berarti
-// membagikannya ke setiap pengunjung halaman.
-// Tipenya `SystemSetting` utuh dulu tertulis di sini, padahal `select` di bawah
-// hanya mengambil lima kolom. Setiap kolom baru di schema karena itu menjadi
-// galat `tsc` di berkas ini — persis apa yang terjadi saat `waNumber`
-// ditambahkan — dan jalan keluar yang paling mudah adalah menambahkannya ke
-// `select`, yang berarti kolom itu ikut menyeberang ke Client Component tanpa
-// ada yang memutuskannya. Tipe sempit ini membuat pilihan sebaliknya yang mudah.
-type PengaturanPeta = {
-  googleMapsApiKey: string | null;
-};
-
-async function getSystemSettings(): Promise<PengaturanPeta | null> {
-    try {
-        // SATU kolom. `id`, `siteName`, `siteDesc`, dan `updatedAt` ikut diambil
-        // di sini sebelumnya, lalu diteruskan lewat `...setting` — tidak satu pun
-        // dipakai halaman ini, dan `siteName`/`siteDesc` sekarang punya
-        // pembacanya sendiri di `ambilIdentitasSitus()`. Sisa yang berguna
-        // hanyalah kunci peta.
-        const setting = await prisma.systemSetting.findUnique({
-            where: { id: 'default_config' },
-            select: { googleMapsApiKey: true },
-        });
-
-        if (!setting) return null;
-
-        return { googleMapsApiKey: dekripsi(setting.googleMapsApiKey) };
-    } catch (error) {
-        // Peta yang tidak muncul tidak boleh membuat seluruh halaman produk
-        // gagal terbuka — sisa halaman masih berguna tanpanya.
-        console.error('Gagal mengambil pengaturan sistem:', error);
-        return null;
+// Fungsi dummy untuk settings, akan kita refaktor nanti
+async function getSystemSettings(): Promise<SystemSetting | null> {
+    return {
+        id: 'default_config',
+        siteName: 'Utero Billboard',
+        siteDesc: 'Platform Sewa Billboard Terlengkap',
+        geminiApiKey: null,
+        googleMapsApiKey: null,
+        updatedAt: new Date()
     }
 }
 

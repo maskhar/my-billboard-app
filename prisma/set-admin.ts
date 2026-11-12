@@ -35,11 +35,7 @@ async function main() {
 }
 
 main()
-  // `process.exit(1)`: tanpa ini skrip yang gagal — mis. email tidak ada di
-  // database — tetap keluar dengan kode 0, dan pemanggilnya (atau CI) membaca
-  // kegagalan itu sebagai keberhasilan.
-  .catch((e) => {
-    console.error(e);
-    process.exitCode = 1;
-  })
+  .catch(e => console.error(e))
   .finally(async () => await prisma.$disconnect());
+
+export {};

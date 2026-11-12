@@ -57,8 +57,7 @@ services:
     # menyapa server milik proyek lain, yang menolaknya dengan P1000. Pola
     # 15432-15435 sudah dipakai container database lain di mesin ini.
     ports:
-      - '127.0.0.1:15436:5432'
-
+      - '5434:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
 

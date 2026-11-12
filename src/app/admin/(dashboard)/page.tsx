@@ -148,7 +148,7 @@ export default async function AdminDashboard() {
         {/* HEADER */}
         <div>
             <h1 className="text-2xl font-bold text-gray-800">Ringkasan Bisnis</h1>
-            <p className="text-gray-500 text-sm">Pantau kinerja penjualan {identitas.nama}.</p>
+            <p className="text-gray-500 text-sm">Pantau kinerja penjualan Utero Billboard.</p>
         </div>
 
         {/* STATS CARDS

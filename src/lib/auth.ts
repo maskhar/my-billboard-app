@@ -154,87 +154,131 @@ export const authOptions: NextAuthOptions = {
   ],
   
   callbacks: {
-    // Registrasi otomatis saat login Google.
-    //
-    // Dua pemeriksaan keamanan ditambahkan di sini:
-    //
-    // 1. `email_verified` wajib true. Tanpa ini, penyedia identitas yang
-    //    mengembalikan alamat email tak terverifikasi bisa dipakai untuk
-    //    mengklaim alamat milik orang lain.
-    //
-    // 2. Penautan otomatis ke akun email/password yang sudah ada DITOLAK.
-    //    Sebelumnya, akun yang sudah ada langsung diloloskan apa pun cara
-    //    daftarnya. Artinya siapa pun yang menguasai alamat email seseorang
-    //    di sisi Google bisa masuk ke akun email/password milik orang itu
-    //    tanpa pernah tahu passwordnya. Penautan akun harus dilakukan secara
-    //    sadar oleh pemilik akun setelah login, bukan diam-diam saat login.
+    // LOGIKA LOGIN GOOGLE: hanya akun USER yang boleh masuk lewat Google.
     async signIn({ user, account, profile }) {
-        if (account?.provider !== 'google') {
-            return true;
+      if (account?.provider !== 'google') {
+        return true;
+      }
+
+      const googleProfile = (profile ?? {}) as {
+        email?: string | null;
+        email_verified?: boolean | null;
+        name?: string | null;
+        picture?: string | null;
+      };
+
+      // Email dipakai apa adanya dari Google (tidak diubah kapitalisasinya).
+      const email = googleProfile.email ?? user.email ?? null;
+      const googleName = user.name ?? googleProfile.name ?? null;
+      const googleImage = user.image ?? googleProfile.picture ?? null;
+
+      // Tolak email kosong atau email Google yang belum terverifikasi.
+      if (!email || googleProfile.email_verified !== true) {
+        return false;
+      }
+
+      const fillMissingProfileFields = async (existingUser: {
+        id: string;
+        name: string | null;
+        image: string | null;
+      }) => {
+        const data: { name?: string; image?: string } = {};
+        if (!existingUser.name && googleName) data.name = googleName;
+        if (!existingUser.image && googleImage) data.image = googleImage;
+
+        if (Object.keys(data).length > 0) {
+          await prisma.user.update({
+            where: { id: existingUser.id },
+            data,
+          });
+        }
+      };
+
+      const authorizeExistingUser = async (existingUser: {
+        id: string;
+        role: string;
+        name: string | null;
+        image: string | null;
+      }) => {
+        // Staf/admin wajib login lewat /admin/login.
+        if (existingUser.role !== 'USER') {
+          return false;
         }
 
-        const googleProfile = profile as { email_verified?: boolean } | undefined;
-        if (!googleProfile?.email_verified) {
-            return '/login?error=EmailNotVerified';
-        }
+        // Role, authProvider, isVerified, dan password TIDAK diubah.
+        await fillMissingProfileFields(existingUser);
+        return true;
+      };
 
-        if (!user.email) {
-            return '/login?error=NoEmail';
+      try {
+        const existingUser = await prisma.user.findUnique({
+          where: { email },
+          select: { id: true, role: true, name: true, image: true },
+        });
+
+        if (existingUser) {
+          return await authorizeExistingUser(existingUser);
         }
 
         try {
-            const existingUser = await prisma.user.findUnique({
-                where: { email: user.email },
-                select: { id: true, authProvider: true },
+          await prisma.user.create({
+            data: {
+              name: googleName,
+              email,
+              role: 'USER',
+              password: null,
+              image: googleImage,
+              authProvider: 'GOOGLE',
+              isVerified: true,
+            },
+          });
+        } catch (error) {
+          // P2002 = unique constraint (race dua login paralel dengan email sama).
+          if ((error as { code?: string }).code === 'P2002') {
+            const racedUser = await prisma.user.findUnique({
+              where: { email },
+              select: { id: true, role: true, name: true, image: true },
             });
 
-            if (existingUser) {
-                // Hanya loloskan bila akun itu memang akun Google.
-                if (existingUser.authProvider !== 'GOOGLE') {
-                    return '/login?error=AccountExists';
-                }
-                return true;
+            if (!racedUser) {
+              return false;
             }
 
-            await prisma.user.create({
-                data: {
-                    name: user.name,
-                    email: user.email,
-                    role: 'USER',
-                    password: null, // login Google tidak memakai password
-                    image: user.image,
-                    authProvider: 'GOOGLE',
-                    isVerified: true,
-                },
-            });
+            return await authorizeExistingUser(racedUser);
+          }
 
-            return true;
-        } catch (error) {
-            console.error('Gagal membuat user dari Google:', error);
-            return false;
+          throw error;
         }
+
+        return true;
+      } catch (error) {
+        console.error('Error pada login Google:', error);
+        return false;
+      }
     },
 
         async session({ session, token }) {
       if (token && session.user) {
-        session.user.id = token.id as string;
-        // Role di sesi kini bertipe enum, bukan teks bebas. Token JWT yang
-        // sudah beredar di browser bisa membawa role tulisan lama yang tidak
-        // ada lagi di daftar; dipaksa lewat `as string` nilai itu akan lolos
-        // ke seluruh pemeriksaan izin. Yang tidak dikenali diturunkan ke USER.
-        session.user.role = sahRole(token.role) ? token.role : Role.USER;
-        session.user.image = token.picture; 
+        const sessionUser = session.user as typeof session.user & {
+          id?: string;
+          role?: string;
+        };
+        sessionUser.id = token.id as string;
+        sessionUser.role = token.role as string;
+        session.user.image = token.picture;
       }
       return session;
     },
     
-    // `account` dan `profile` dibuang dari daftar parameter: keduanya tidak
-    // dibaca, dan seluruh isi token diambil ulang dari database lewat `user.email`
-    // di bawah. Menuliskannya memberi kesan callback ini membedakan provider
-    // (Google vs kredensial) padahal tidak — dan penulis berikutnya yang percaya
-    // itu akan menambahkan cabang berdasarkan `account.provider` yang selalu
-    // `undefined` pada pemanggilan refresh token.
-    async jwt({ token, user }) {
+    async jwt({ token, user, trigger, session }) {
+      if (trigger === 'update' && session) {
+        const updatedUser =
+          (session as { user?: { name?: string; image?: string } }).user ?? {};
+        if (updatedUser.name) token.name = updatedUser.name;
+        if (updatedUser.image) token.picture = updatedUser.image;
+        return token;
+      }
+
       if (user) {
         // Ambil data lengkap dari DB saat login
         const dbUser = await prisma.user.findUnique({

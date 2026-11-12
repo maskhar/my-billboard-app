@@ -3,9 +3,10 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import {
-    CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud,
-    Eye, Printer, Hammer, Palette, Truck, Banknote, Wallet
+import { useSession } from 'next-auth/react';
+import { 
+    CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, 
+    Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck, ImageOff
 } from 'lucide-react';
 import Link from 'next/link';
 import { rupiah } from '@/lib/money';
@@ -113,8 +114,7 @@ export default function OrderActions({
   sisaPokok: number;
 }) {
   const router = useRouter();
-  const toast = useToast();
-  const konfirmasi = useKonfirmasi();
+  const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
 
   // STATE MODALS
@@ -139,29 +139,42 @@ export default function OrderActions({
 
   const updateStatus = async (newStatus: string, extraData: DataTambahan = {}) => {
       setLoading(true);
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+
       try {
-          const res = await fetch('/api/admin/update-order', {
+          const res = await fetch(`${apiUrl}/api/orders/update-status`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ orderId: order.id, newStatus, ...extraData })
+              body: JSON.stringify({ orderId: order.id, newStatus, adminEmail: session?.user?.email, ...extraData }),
+              credentials: 'include',
           });
-          const jawaban = await bacaJawaban(res);
+
           if (!res.ok) {
-              toast.galat('Gagal memperbarui status: ' + alasanPenolakan(res, jawaban));
+              const data = await res.json().catch(() => null);
+              const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || 'Error tidak diketahui');
+              alert("❌ Gagal update status: " + msg);
               return;
           }
-          setShowTransferModal(false);
-          setShowInstallModal(false);
-          router.refresh();
-      } catch (galat) {
-          // Dicatat, bukan ditelan. `catch` di sini menangkap `fetch` yang
-          // melempar — jaringan mati, permintaan dibatalkan — dan tanpa satu
-          // baris log tidak ada cara tahu itu terjadi setelah admin melapor
-          // "tombolnya tidak jalan".
-          console.error('Gagal memperbarui status pesanan:', galat);
-          toast.galat('Server tidak dapat dihubungi. Status tidak berubah.');
+      } catch (e) {
+          alert("❌ Gagal update status: tidak bisa menghubungi server.");
+          return;
       } finally {
           setLoading(false);
+      }
+
+      setShowTransferModal(false);
+      setShowInstallModal(false);
+      router.refresh();
+  };
+
+  // --- HANDLERS HELPER ---
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: any) => {
+      const file = e.target.files?.[0];
+      if (file) {
+          if (file.size > 2 * 1024 * 1024) { alert("Max 2MB"); return; }
+          const reader = new FileReader();
+          reader.onloadend = () => setter(reader.result as string);
+          reader.readAsDataURL(file);
       }
   };
 
@@ -852,47 +865,26 @@ export default function OrderActions({
             kelasKepala="bg-blue-50 text-blue-900"
         >
                     <div className="p-5 space-y-4">
-                        {/* `designFileUrl` boleh `null` di status DESIGN_RECEIVED: pembeli
-                            yang memilih "upload sendiri" sampai di tahap ini sebelum
-                            berkasnya masuk. Sebelum penjaga ini, modalnya merender gambar
-                            rusak dan sebuah tombol "Download Desain" tanpa `href` — yang
-                            di browser justru menavigasi ke halaman ini sendiri, sehingga
-                            admin menyangka berkasnya ada tapi gagal diunduh. */}
-                        {order.designFileUrl ? (
-                            <>
-                                <div className="bg-gray-100 p-4 rounded-lg flex justify-center items-center">
-                                    {/* `<img>` biasa, bukan `next/image`: desain diunggah pembeli
-                                        dan `designFileUrl` boleh berupa tautan ke penyimpanan
-                                        mana pun. `next/image` menolak host yang tidak terdaftar
-                                        di `remotePatterns` next.config.ts saat dijalankan, jadi
-                                        mengubahnya membuat modal ini gagal merender setiap
-                                        desain yang tidak diunggah lewat form kami. */}
-                                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                                    <img src={order.designFileUrl} alt="Desain yang dikirim pembeli" className="max-w-full max-h-[60vh] rounded shadow-md"/>
+                        <div className="bg-gray-100 p-4 rounded-lg flex justify-center items-center">
+                            {order.designFileUrl ? (
+                                <img src={order.designFileUrl} alt="Desain User" className="max-w-full max-h-[60vh] rounded shadow-md"/>
+                            ) : (
+                                <div className="w-full h-40 rounded-lg bg-gray-200 flex flex-col items-center justify-center text-gray-400">
+                                    <ImageOff size={32} />
+                                    <p className="text-xs mt-2">Desain tidak tersedia</p>
                                 </div>
-                                {/*
-                                  `download` SENGAJA tanpa nama berkas. Atribut ini
-                                  diabaikan browser pada tautan lintas-domain, dan
-                                  `design-<id>.jpg` yang dulu dipaksakan di sini berbohong
-                                  soal formatnya: berkas PNG atau PDF tersimpan dengan
-                                  akhiran .jpg dan gagal dibuka di mesin admin.
-                                */}
-                                <a
-                                    href={order.designFileUrl}
-                                    download
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-blue-700 flex items-center justify-center gap-2"
-                                >
-                                    <UploadCloud size={14} />
-                                    Download Desain
-                                </a>
-                            </>
-                        ) : (
-                            <p className="bg-gray-50 border rounded-lg p-6 text-center text-xs text-gray-500">
-                                Pembeli belum mengunggah berkas desain.
-                            </p>
-                        )}
+                            )}
+                        </div>
+                        <a 
+                            href={order.designFileUrl} 
+                            download={`design-${order.id}.jpg`} // Anda bisa sesuaikan nama filenya
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="w-full bg-blue-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-blue-700 flex items-center justify-center gap-2"
+                        >
+                            <UploadCloud size={14} />
+                            Download Desain
+                        </a>
                     </div>
         </Modal>
     </>

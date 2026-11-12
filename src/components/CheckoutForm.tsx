@@ -161,6 +161,12 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
   const mustPayNow = paymentType === 'full' ? grandTotal : persenAngka(grandTotal, PERSEN_DP);
 
   const handlePayment = async () => {
+      if (!session?.user?.id) {
+          alert("🔐 Silakan login terlebih dahulu sebelum melakukan pemesanan.");
+          router.push('/login');
+          return;
+      }
+
       const userRole = session?.user?.role;
       if (userRole === 'ADMIN' || userRole === 'SUPER_ADMIN') {
           toast.galat(
@@ -213,6 +219,7 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
       // memindahkan akun ke alamat lain — atau menabrak alamat orang lain dan
       // gagal dengan galat unique yang tidak menyebut email sama sekali.
       const payload = {
+          userId: session.user.id,
           billboardId: billboard.id,
           duration: duration,
           paymentType: paymentType,
@@ -232,7 +239,8 @@ export default function CheckoutForm({ billboard, startDate, duration: initialDu
           const response = await fetch('/api/booking/create', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(payload)
+              body: JSON.stringify(payload),
+              credentials: 'include',
           });
 
           // Respons error bisa saja bukan JSON (mis. halaman error), jadi

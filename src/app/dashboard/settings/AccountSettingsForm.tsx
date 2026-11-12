@@ -3,6 +3,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useSession } from 'next-auth/react';
 import { Loader2 } from 'lucide-react';
 import { InputField } from '@/components/FormField';
 import { useToast } from '@/components/ui/Toast';
@@ -33,7 +34,7 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
     const router = useRouter();
-    const toast = useToast();
+    const { data: session, update } = useSession();
 
     const handleProfileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setProfileData({ ...profileData, [e.target.name]: e.target.value });
@@ -47,11 +48,12 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         e.preventDefault();
         setLoading(true);
         try {
-            // userId diambil dari sesi server di dalam route, tidak dikirim dari client.
-            const res = await fetch('/api/user/update-profile', {
-                method: 'POST',
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const res = await fetch(`${apiUrl}/api/users/${user.id}/profile`, {
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify(profileData),
+                credentials: 'include',
             });
             if (!res.ok) {
                 // `res.json().catch(() => null)` mentah membuat `error?.message`
@@ -60,7 +62,11 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
                 const jawaban = await bacaJawaban(res);
                 throw new Error(alasanPenolakan(res, jawaban));
             }
-            toast.sukses('Profil berhasil diperbarui.');
+            await update({
+                ...session,
+                user: { ...session?.user, name: profileData.name },
+            });
+            alert('Profil berhasil diperbarui!');
             router.refresh();
         } catch (error) {
             console.error('Gagal memperbarui profil pengguna:', error);
@@ -78,15 +84,12 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
         }
         setPasswordLoading(true);
         try {
-            // userId diambil dari sesi server di dalam route, tidak dikirim dari client.
-            // confirmPassword hanya dipakai untuk validasi di sisi client.
-            const res = await fetch('/api/user/change-password', {
-                method: 'POST',
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const res = await fetch(`${apiUrl}/api/users/${user.id}/change-password`, {
+                method: 'PATCH',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    currentPassword: passwordData.currentPassword,
-                    newPassword: passwordData.newPassword,
-                }),
+                body: JSON.stringify(passwordData),
+                credentials: 'include',
             });
             if (!res.ok) {
                 const jawaban = await bacaJawaban(res);
