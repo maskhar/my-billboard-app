@@ -25,8 +25,27 @@ const Popup = dynamic(
   { ssr: false }
 );
 
-export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat: number, lng: number, address: string, apiKey?: string | null }) {
+type LocationVisualizerProps = {
+  lat: number;
+  lng: number;
+  address: string;
+  apiKey?: string | null;
+  panoId?: string | null;
+  heading?: number | null;
+  pitch?: number | null;
+  fov?: number | null;
+};
+
+export default function LocationVisualizer({ lat, lng, address, apiKey, panoId, heading, pitch, fov }: LocationVisualizerProps) {
   const [viewMode, setViewMode] = useState<'MAP' | 'STREET'>('MAP');
+
+  // Bila billboard punya panoId, arahkan tautan Maps langsung ke panorama tsb
+  // dengan heading/pitch/fov yang tersimpan. Tanpa panoId, perilaku lama
+  // (viewpoint lat/lng) dipertahankan agar billboard lain tidak berubah.
+  const trimmedPanoId = panoId?.trim();
+  const streetViewUrl = trimmedPanoId
+    ? `https://www.google.com/maps/@?api=1&map_action=pano&pano=${encodeURIComponent(trimmedPanoId)}&heading=${heading ?? 0}&pitch=${pitch ?? 0}&fov=${fov ?? 90}`
+    : `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 
   // --- SOLUSI BUG ICON HILANG/CRASH DI NEXT.JS ---
   // Kita set icon secara manual di dalam useEffect (Hanya jalan di Client)
@@ -115,7 +134,7 @@ export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat:
                         </p>
                         
                         <a 
-                            href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`} 
+                            href={streetViewUrl} 
                             target="_blank"
                             className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-full font-bold text-sm inline-flex items-center gap-2 transition shadow-lg"
                         >

@@ -73,6 +73,7 @@ export default function BillboardFormPage() {
       sizeH: '', sizeW: '', 
       orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
       smartsucoUrl: '',
+      streetViewPanoId: '', streetViewHeading: '', streetViewPitch: '', streetViewFov: '',
       gallery: [], 
       adminOptions: defaultAdminOptions
   });
@@ -263,6 +264,15 @@ export default function BillboardFormPage() {
                              <div><label className="text-[10px] font-bold text-gray-400 uppercase">Material</label><input name="material" value={form.material} onChange={handleChange} className="w-full border rounded p-2 mt-1" /></div>
                         </div>
                         <div><label className="text-[10px] font-bold text-gray-400 uppercase flex gap-1 items-center mb-1"><ExternalLink size={12}/> Link Laporan Trafik</label><input name="smartsucoUrl" value={form.smartsucoUrl} onChange={handleChange} className="w-full border border-blue-100 bg-blue-50/50 rounded p-2 text-xs text-blue-700"/></div>
+                        <div className='mt-4 pt-4 border-t'>
+                            <label className="text-[10px] font-bold text-gray-400 uppercase flex gap-1 items-center mb-2"><LinkIcon size={12}/> Street View (opsional)</label>
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                <div className="md:col-span-4"><label className="text-[10px] font-bold text-gray-400 uppercase">Pano ID</label><input name="streetViewPanoId" value={form.streetViewPanoId ?? ''} onChange={handleChange} placeholder="mis. dP5BwF6Hp4Ng4kDqGYB-4A" className="w-full border rounded p-2 text-xs mt-1"/></div>
+                                <div><label className="text-[10px] font-bold text-gray-400 uppercase">Heading (0-360)</label><input type="number" step="0.01" name="streetViewHeading" value={form.streetViewHeading ?? ''} onChange={handleChange} className="w-full border rounded p-2 text-xs mt-1"/></div>
+                                <div><label className="text-[10px] font-bold text-gray-400 uppercase">Pitch (-90 s/d 90)</label><input type="number" step="0.01" name="streetViewPitch" value={form.streetViewPitch ?? ''} onChange={handleChange} className="w-full border rounded p-2 text-xs mt-1"/></div>
+                                <div><label className="text-[10px] font-bold text-gray-400 uppercase">FOV (10-120)</label><input type="number" step="0.01" name="streetViewFov" value={form.streetViewFov ?? ''} onChange={handleChange} className="w-full border rounded p-2 text-xs mt-1"/></div>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
