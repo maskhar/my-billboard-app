@@ -22,4 +22,8 @@ export class UpdateBillboardDto {
   gallery?: string[];
   videoUrl?: string;
   smartsucoUrl?: string;
+  streetViewPanoId?: string | null;
+  streetViewHeading?: number | null;
+  streetViewPitch?: number | null;
+  streetViewFov?: number | null;
 }

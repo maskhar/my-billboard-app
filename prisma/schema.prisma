@@ -78,6 +78,11 @@ model Billboard {
   videoUrl    String?
   smartsucoUrl String?
 
+  streetViewPanoId String?
+  streetViewHeading Float?
+  streetViewPitch   Float?
+  streetViewFov     Float?
+
   specs       String   
   includes    String  
   excludes    String 
