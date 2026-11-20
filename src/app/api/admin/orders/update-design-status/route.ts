@@ -18,6 +18,14 @@ export async function POST(req: Request) {
     if (!orderId || !status) {
       return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
     }
+
+    const validDesignStatuses = ['PENDING_REVIEW', 'APPROVED', 'REJECTED'];
+    if (!validDesignStatuses.includes(status)) {
+        return NextResponse.json(
+            { message: `designStatus tidak valid. Gunakan salah satu: ${validDesignStatuses.join(', ')}.` },
+            { status: 400 },
+        );
+    }
     
     if (status === 'REJECTED' && !reason) {
         return NextResponse.json({ message: "Alasan penolakan harus diisi" }, { status: 400 });

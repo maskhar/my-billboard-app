@@ -4,6 +4,36 @@ import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { sendEmail } from "@/lib/mail";
 
+const VALID_ORDER_STATUSES = [
+  'PENDING_PAYMENT',
+  'PAID_CONFIRMED',
+  'DESIGN_RECEIVED',
+  'IN_PRODUCTION',
+  'INSTALLATION',
+  'ACTIVE',
+  'WAITING_BANK',
+  'REVIEW_REFUND',
+  'PROCESS_REFUND',
+  'REFUNDED',
+  'CANCELLED',
+] as const;
+
+const TERMINAL_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'] as const;
+
+const ALLOWED_ORDER_TRANSITIONS: Record<string, string[]> = {
+  PENDING_PAYMENT: ['CANCELLED', 'PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION'],
+  PAID_CONFIRMED: ['CANCELLED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'REVIEW_REFUND'],
+  DESIGN_RECEIVED: ['IN_PRODUCTION', 'REVIEW_REFUND'],
+  IN_PRODUCTION: ['INSTALLATION', 'REVIEW_REFUND'],
+  INSTALLATION: ['ACTIVE', 'REVIEW_REFUND'],
+  ACTIVE: ['WAITING_BANK', 'REVIEW_REFUND'],
+  WAITING_BANK: ['PROCESS_REFUND'],
+  REVIEW_REFUND: ['WAITING_BANK', 'ACTIVE'],
+  PROCESS_REFUND: ['REFUNDED'],
+  REFUNDED: [],
+  CANCELLED: [],
+};
+
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   
@@ -14,9 +44,47 @@ export async function POST(req: Request) {
 
   const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = await req.json();
 
+  if (!orderId) {
+      return NextResponse.json({ message: "orderId wajib diisi" }, { status: 400 });
+  }
+
+  if (newStatus !== undefined && newStatus !== null) {
+      if (!VALID_ORDER_STATUSES.includes(newStatus as (typeof VALID_ORDER_STATUSES)[number])) {
+          return NextResponse.json(
+              { message: `Status order tidak valid. Gunakan salah satu: ${VALID_ORDER_STATUSES.join(', ')}.` },
+              { status: 400 },
+          );
+      }
+  }
+
   try {
+      if (newStatus !== undefined && newStatus !== null) {
+          const currentOrder = await prisma.booking.findUnique({
+              where: { id: orderId },
+              select: { status: true, refundedAt: true },
+          });
+          if (!currentOrder) {
+              return NextResponse.json({ message: "Order tidak ditemukan" }, { status: 404 });
+          }
+          if (newStatus !== currentOrder.status) {
+              if (TERMINAL_ORDER_STATUSES.includes(currentOrder.status as (typeof TERMINAL_ORDER_STATUSES)[number])) {
+                  return NextResponse.json({ message: "Status akhir (CANCELLED/REFUNDED) tidak dapat diubah lagi." }, { status: 400 });
+              }
+              const allowed = ALLOWED_ORDER_TRANSITIONS[currentOrder.status] ?? [];
+              if (!allowed.includes(newStatus)) {
+                  return NextResponse.json(
+                      { message: `Transisi status tidak diizinkan: ${currentOrder.status} -> ${newStatus}.` },
+                      { status: 400 },
+                  );
+              }
+          }
+          if (newStatus === 'REFUNDED' && !currentOrder.refundedAt) {
+              // handled below
+          }
+      }
+
       const updateData: any = { 
-          status: newStatus,
+          ...(newStatus !== undefined && newStatus !== null && { status: newStatus }),
           ...(reason && { cancelReason: reason }),
           ...(refundProof && { refundProof: refundProof }),
           ...(installationProof && { installationProof: installationProof }),
@@ -24,7 +92,7 @@ export async function POST(req: Request) {
       };
 
       if (newStatus === 'REFUNDED') {
-          const currentOrder = await prisma.booking.findUnique({ where: {id: orderId}});
+          const currentOrder = await prisma.booking.findUnique({ where: {id: orderId}, select: { refundedAt: true } });
           if (!currentOrder?.refundedAt) {
               updateData.refundedAt = new Date();
           }
