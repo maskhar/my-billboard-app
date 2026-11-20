@@ -425,6 +425,18 @@ export class BillboardsService {
     });
   }
 
+  private async assertNoActiveBooking(billboardId: string) {
+    const hasActiveOrder = await this.prisma.booking.findFirst({
+      where: {
+        billboardId,
+        status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAID_CONFIRMED'] },
+      },
+    });
+    if (hasActiveOrder) {
+      throw new BadRequestException('Tidak bisa mengubah status ketersediaan karena ada booking aktif.');
+    }
+  }
+
   async updateStatus(id: string, data: { status?: string; publishStatus?: string }) {
     const billboard = await this.prisma.billboard.findUnique({ where: { id } });
     if (!billboard) {
@@ -440,15 +452,7 @@ export class BillboardsService {
 
     // Cek apakah ada order aktif jika ingin mengubah status ketersediaan
     if (data.status && data.status !== billboard.status) {
-    const hasActiveOrder = await this.prisma.booking.findFirst({
-      where: {
-        billboardId: id,
-          status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAID_CONFIRMED'] },
-      },
-    });
-    if (hasActiveOrder) {
-        throw new BadRequestException('Tidak bisa mengubah status ketersediaan karena ada booking aktif.');
-    }
+      await this.assertNoActiveBooking(id);
     }
 
     return this.prisma.billboard.update({
@@ -460,12 +464,21 @@ export class BillboardsService {
   async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto, actorId: string) {
     const { status, publishStatus } = quickUpdateBillboardDto;
 
+    const billboard = await this.prisma.billboard.findUnique({ where: { id } });
+    if (!billboard) {
+      throw new NotFoundException('Billboard tidak ditemukan');
+    }
+
     const dataToUpdate: { status?: string; publishStatus?: string } = {};
     if (status) dataToUpdate.status = status;
     if (publishStatus) dataToUpdate.publishStatus = publishStatus;
 
     if (Object.keys(dataToUpdate).length === 0) {
       throw new BadRequestException('Tidak ada data untuk diupdate');
+    }
+
+    if (status && status !== billboard.status) {
+      await this.assertNoActiveBooking(id);
     }
 
     try {
