@@ -1,6 +1,8 @@
 // src/app/admin/(dashboard)/actions.ts
 'use server';
 
+import { getServerSession } from 'next-auth';
+import { authOptions } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 
 // Mendefinisikan tipe data yang akan dikembalikan
@@ -13,6 +15,11 @@ type ChartData = {
 export async function getRevenueData(
   period: 'daily' | '1m' | '3m' | '6m' | '12m' | 'all'
 ): Promise<ChartData[]> {
+  const session = await getServerSession(authOptions);
+  if (!session || !['ADMIN', 'SUPER_ADMIN'].includes(session.user.role)) {
+    return [];
+  }
+
   const now = new Date();
   let startDate: Date;
 

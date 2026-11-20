@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
+import { prisma } from "@/lib/prisma";
 import { writeFile, mkdir } from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 
 // Ekstensi yang diizinkan HARUS cocok dengan MIME yang dikirim. Jangan percaya
 // salah satu saja: `file.type` berasal dari client, dan nama file juga bisa
@@ -20,6 +22,8 @@ const ALLOWED_EXT_BY_MIME: Record<string, string[]> = {
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
   if (!session) return NextResponse.json({ message: "Login dulu" }, { status: 401 });
+
+  const isAdmin = ['ADMIN', 'SUPER_ADMIN'].includes(session.user.role);
 
   try {
       const formData = await req.formData();
@@ -46,17 +50,29 @@ export async function POST(req: Request) {
       
       let filename: string;
       if (orderId) {
-        // Ada orderId (mis. upload desain pesanan): nama file lama
-        // DESIGN-{OrderId}.ext, sehingga file lama tertimpa saat upload ulang.
-        // Karakter selain angka/huruf dibuang supaya orderId tidak bisa
-        // menyuntik path (mis. "../../").
+        // Ada orderId (mis. upload desain pesanan): cek pemilik order.
         const safeOrderId = orderId.replace(/[^a-zA-Z0-9_-]/g, "");
         if (!safeOrderId) return NextResponse.json({ message: "Data tidak lengkap" }, { status: 400 });
-        filename = `DESIGN-${safeOrderId}${ext}`;
+
+        const order = await prisma.booking.findUnique({
+          where: { id: safeOrderId },
+          select: { userId: true },
+        });
+        if (!order) return NextResponse.json({ message: "Order tidak ditemukan" }, { status: 404 });
+        if (order.userId !== session.user.id && !isAdmin) {
+          return NextResponse.json({ message: "Order ini bukan milik Anda" }, { status: 403 });
+        }
+
+        // Tambah bagian acak supaya file lama tidak tertimpa dan nama tidak mudah ditebak.
+        filename = `DESIGN-${safeOrderId}-${crypto.randomBytes(4).toString('hex')}${ext}`;
       } else {
         // Tanpa orderId (mis. foto cover/galeri billboard, bukti tayang):
-        // nama unik supaya tiap upload menghasilkan file terpisah.
-        const unique = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        // hanya admin yang boleh upload generik; nama unik supaya tiap upload
+        // menghasilkan file terpisah.
+        if (!isAdmin) {
+          return NextResponse.json({ message: "Akses ditolak" }, { status: 403 });
+        }
+        const unique = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
         filename = `UPLOAD-${unique}${ext}`;
       }
       
