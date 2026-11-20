@@ -188,7 +188,7 @@ export default function BookingCard({ order }: { order: any }) {
   // --- VISUAL UI ---
 
   // Cek apakah user boleh upload desain?
-  const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'ACTIVE'].includes(order.status);
+  const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED'].includes(order.status);
   const isImageProof = order.refundProof?.startsWith('data:image');
 
   // Badge Status Warna-warni
