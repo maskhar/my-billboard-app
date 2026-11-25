@@ -7,6 +7,7 @@ import { useState } from 'react';
 import type { Booking, User, Billboard, AdditionalCharge } from '@prisma/client';
 import { X, Check, ThumbsDown, UploadCloud, Loader2, PlusCircle } from 'lucide-react';
 import OrderActions from '@/components/admin/OrderActions';
+import { safeParse } from '@/lib/safeParse';
 
 type Transaction = Booking & {
   user: User;
@@ -269,9 +270,9 @@ export default function TransactionClient({ transactions, currentUserRole }: Pro
                         <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm text-gray-600">
                            <span>Location:</span><span className="font-medium text-gray-800">{selected.billboard.address}</span>
                            <span>Type:</span><span className="font-medium text-gray-800">{selected.billboard.type}</span>
-                           <span>Lighting:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Penerangan"))?.value}</span>
-                           <span>Size:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Ukuran"))?.value}</span>
-                           <span>Orientation:</span><span className="font-medium text-gray-800">{JSON.parse(selected.billboard.specs).find((s:any)=>s.label.includes("Layout"))?.value}</span>
+                            <span>Lighting:</span><span className="font-medium text-gray-800">{safeParse(selected.billboard.specs, [] as { label: string; value: string }[]).find((s:any)=>s.label.includes("Penerangan"))?.value}</span>
+                            <span>Size:</span><span className="font-medium text-gray-800">{safeParse(selected.billboard.specs, [] as { label: string; value: string }[]).find((s:any)=>s.label.includes("Ukuran"))?.value}</span>
+                            <span>Orientation:</span><span className="font-medium text-gray-800">{safeParse(selected.billboard.specs, [] as { label: string; value: string }[]).find((s:any)=>s.label.includes("Layout"))?.value}</span>
                         </div>
                     </DetailSection>
 

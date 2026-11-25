@@ -9,6 +9,7 @@ import LocationVisualizer from '@/components/LocationVisualizer';
 import AvailabilityCalendar from '@/components/AvailabilityCalendar';
 import { MapPin, CheckCircle2, XCircle, ChevronLeft, ShieldCheck, Calendar } from 'lucide-react';
 import TrafficReportModal from '@/components/TrafficReportModal';
+import { safeParse } from '@/lib/safeParse';
 
 // Tipe properti yang diterima dari Server Component
 type DetailPageClientProps = {
@@ -34,10 +35,10 @@ export default function BillboardDetailClient({ rawData, setting, bookedDates, i
   };
 
   // Parsing data
-  const gallery = JSON.parse(rawData.gallery) as string[];
-  const specs = JSON.parse(rawData.specs) as { label: string; value: string }[];
-  const includes = JSON.parse(rawData.includes) as string[];
-  const excludes = JSON.parse(rawData.excludes) as string[];
+  const gallery = safeParse(rawData.gallery, [] as string[]);
+  const specs = safeParse(rawData.specs, [] as { label: string; value: string }[]);
+  const includes = safeParse(rawData.includes, [] as string[]);
+  const excludes = safeParse(rawData.excludes, [] as string[]);
   const priceJt = (rawData.price / 1000000).toFixed(0);
 
   return (
