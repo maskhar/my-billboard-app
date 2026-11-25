@@ -354,9 +354,9 @@ export default function BillboardFormPage() {
                                     <div key={log.id} className="bg-gray-50 p-3 rounded-lg border text-xs">
                                         <div className="flex justify-between font-bold text-gray-700 mb-1">
                                             <span>{log.changedBy?.name || "System"}</span>
-                                            <span className="text-[10px] font-normal text-gray-400">{new Date(log.archivedAt).toLocaleDateString()}</span>
+                                             <span className="text-[10px] font-normal text-gray-400">{new Date(log.archivedAt).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: '2-digit', year: 'numeric' })}</span>
                                         </div>
-                                        <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {log.price.toLocaleString()}</p>
+                                         <p className="text-gray-500 mb-2 truncate">Harga lama: Rp {log.price.toLocaleString('id-ID')}</p>
                                         <button onClick={()=>handleRollback(log)} className="text-blue-600 font-bold hover:underline flex gap-1"><RotateCcw size={10}/> Restore</button>
                                     </div>
                                 ))

@@ -97,7 +97,7 @@ export default function UserClientPage({ users }: { users: UserWithBookings[] })
                                              )}
                                          </div>
                                          <div className="text-[10px] text-gray-400 mt-1">
-                                             {new Date(user.createdAt).toLocaleDateString()}
+                                              {new Date(user.createdAt).toLocaleDateString('id-ID', { timeZone: 'Asia/Jakarta', day: '2-digit', month: '2-digit', year: 'numeric' })}
                                          </div>
                                     </td>
 
