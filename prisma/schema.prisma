@@ -292,6 +292,10 @@ model Billboard {
   mainImage   String
   videoUrl    String?
   smartsucoUrl String?
+  streetViewPanoId String?
+  streetViewHeading Float?
+  streetViewPitch   Float?
+  streetViewFov     Float?
 
   // Empat kolom di bawah dulu bertipe String dan menyimpan JSON sebagai teks:
   // setiap penulis memanggil `JSON.stringify`, setiap pembaca `JSON.parse`.

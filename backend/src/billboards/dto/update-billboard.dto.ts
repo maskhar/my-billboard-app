@@ -1,3 +1,4 @@
+import { AdminOption } from './create-billboard.dto';
 
 export class UpdateBillboardDto {
   title?: string;
@@ -18,8 +19,12 @@ export class UpdateBillboardDto {
   sides?: number;
   lighting?: string;
   material?: string;
-  adminOptions?: any[];
+  adminOptions?: AdminOption[];
   gallery?: string[];
   videoUrl?: string;
   smartsucoUrl?: string;
+  streetViewPanoId?: string | null;
+  streetViewHeading?: number | null;
+  streetViewPitch?: number | null;
+  streetViewFov?: number | null;
 }

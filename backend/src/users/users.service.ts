@@ -8,7 +8,7 @@ import {
   NotFoundException
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
-import { hash, compare } from 'bcryptjs';
+import { hash, compare } from 'bcrypt';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
@@ -298,5 +298,6 @@ export class UsersService {
     }
   }
 }
+
 
 

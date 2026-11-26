@@ -65,7 +65,7 @@ export class BillboardsService {
    * Helper ini melempar error yang jelas (bukan 500 generic) supaya penyebab
    * masalah (field mana yang rusak) gampang dilacak.
    */
-  private safeJsonParse<T = any>(value: string, field: string, billboardId?: string): T {
+  private safeJsonParse<T = unknown>(value: string, field: string, billboardId?: string): T {
     try {
       return JSON.parse(value) as T;
     } catch (error) {
@@ -90,6 +90,36 @@ export class BillboardsService {
     if (typeof value === 'string' && value.trim() === '') return fallback;
     const parsed = Number(value);
     return Number.isFinite(parsed) ? parsed : fallback;
+  }
+
+  /**
+   * Validasi angka opsional (heading/pitch/fov) dengan rentang. `null` atau
+   * string kosong berarti "kosongkan" (null). Pemanggil wajib memeriksa
+   * `undefined` lebih dulu: undefined = "tidak dikirim", jangan diubah.
+   */
+  private toOptionalRange(
+    value: unknown,
+    min: number,
+    max: number,
+    field: string,
+  ): number | null {
+    if (value === null) return null;
+    if (typeof value === 'string' && value.trim() === '') return null;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      throw new BadRequestException(`${field} harus berupa angka.`);
+    }
+    if (parsed < min || parsed > max) {
+      throw new BadRequestException(`${field} harus di antara ${min} dan ${max}.`);
+    }
+    return parsed;
+  }
+
+  /** Pano ID opsional; string kosong disimpan sebagai NULL. */
+  private toOptionalPanoId(value: unknown): string | null {
+    if (value === null) return null;
+    const trimmed = String(value).trim();
+    return trimmed === '' ? null : trimmed;
   }
 
   // otorisasi admin ditangani RolesGuard lewat @Roles(...ADMIN_ROLES) di
@@ -124,6 +154,10 @@ export class BillboardsService {
       mainImage,
       videoUrl,
       smartsucoUrl,
+      streetViewPanoId,
+      streetViewHeading,
+      streetViewPitch,
+      streetViewFov,
     } = createBillboardDto;
 
     // Sama persis seperti update(): slug wajib unik, dicek lebih dulu supaya
@@ -173,6 +207,20 @@ export class BillboardsService {
           mainImage: mainImage || '',
           videoUrl: videoUrl ?? null,
           smartsucoUrl: smartsucoUrl ?? null,
+          streetViewPanoId:
+            streetViewPanoId !== undefined ? this.toOptionalPanoId(streetViewPanoId) : null,
+          streetViewHeading:
+            streetViewHeading !== undefined
+              ? this.toOptionalRange(streetViewHeading, 0, 360, 'Heading')
+              : null,
+          streetViewPitch:
+            streetViewPitch !== undefined
+              ? this.toOptionalRange(streetViewPitch, -90, 90, 'Pitch')
+              : null,
+          streetViewFov:
+            streetViewFov !== undefined
+              ? this.toOptionalRange(streetViewFov, 10, 120, 'FOV')
+              : null,
           specs: packedSpecs,
           includes: JSON.stringify(includesList),
           excludes: JSON.stringify(excludesList),
@@ -219,6 +267,10 @@ export class BillboardsService {
       mainImage,
       videoUrl,
       smartsucoUrl,
+      streetViewPanoId,
+      streetViewHeading,
+      streetViewPitch,
+      streetViewFov,
     } = updateBillboardDto;
 
     if (slug) {
@@ -303,6 +355,22 @@ export class BillboardsService {
             mainImage,
             videoUrl: videoUrl !== undefined ? videoUrl : oldData.videoUrl,
             smartsucoUrl: smartsucoUrl !== undefined ? smartsucoUrl : oldData.smartsucoUrl,
+            streetViewPanoId:
+              streetViewPanoId !== undefined
+                ? this.toOptionalPanoId(streetViewPanoId)
+                : oldData.streetViewPanoId,
+            streetViewHeading:
+              streetViewHeading !== undefined
+                ? this.toOptionalRange(streetViewHeading, 0, 360, 'Heading')
+                : oldData.streetViewHeading,
+            streetViewPitch:
+              streetViewPitch !== undefined
+                ? this.toOptionalRange(streetViewPitch, -90, 90, 'Pitch')
+                : oldData.streetViewPitch,
+            streetViewFov:
+              streetViewFov !== undefined
+                ? this.toOptionalRange(streetViewFov, 10, 120, 'FOV')
+                : oldData.streetViewFov,
             specs: packedSpecs,
             includes: includesJson,
             excludes: excludesJson,
@@ -357,6 +425,18 @@ export class BillboardsService {
     });
   }
 
+  private async assertNoActiveBooking(billboardId: string) {
+    const hasActiveOrder = await this.prisma.booking.findFirst({
+      where: {
+        billboardId,
+        status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAID_CONFIRMED'] },
+      },
+    });
+    if (hasActiveOrder) {
+      throw new BadRequestException('Tidak bisa mengubah status ketersediaan karena ada booking aktif.');
+    }
+  }
+
   async updateStatus(id: string, data: { status?: string; publishStatus?: string }) {
     const billboard = await this.prisma.billboard.findUnique({ where: { id } });
     if (!billboard) {
@@ -372,15 +452,7 @@ export class BillboardsService {
 
     // Cek apakah ada order aktif jika ingin mengubah status ketersediaan
     if (data.status && data.status !== billboard.status) {
-    const hasActiveOrder = await this.prisma.booking.findFirst({
-      where: {
-        billboardId: id,
-          status: { in: ['ACTIVE', 'PENDING_PAYMENT', 'PAID_CONFIRMED'] },
-      },
-    });
-    if (hasActiveOrder) {
-        throw new BadRequestException('Tidak bisa mengubah status ketersediaan karena ada booking aktif.');
-    }
+      await this.assertNoActiveBooking(id);
     }
 
     return this.prisma.billboard.update({
@@ -392,12 +464,21 @@ export class BillboardsService {
   async quickUpdate(id: string, quickUpdateBillboardDto: QuickUpdateBillboardDto, actorId: string) {
     const { status, publishStatus } = quickUpdateBillboardDto;
 
+    const billboard = await this.prisma.billboard.findUnique({ where: { id } });
+    if (!billboard) {
+      throw new NotFoundException('Billboard tidak ditemukan');
+    }
+
     const dataToUpdate: { status?: string; publishStatus?: string } = {};
     if (status) dataToUpdate.status = status;
     if (publishStatus) dataToUpdate.publishStatus = publishStatus;
 
     if (Object.keys(dataToUpdate).length === 0) {
       throw new BadRequestException('Tidak ada data untuk diupdate');
+    }
+
+    if (status && status !== billboard.status) {
+      await this.assertNoActiveBooking(id);
     }
 
     try {
@@ -475,9 +556,7 @@ export class BillboardsService {
       ...h,
       snapshot: this.safeJsonParse(h.snapshot, 'snapshot', billboard.id)
     }));
-    parsedBillboard.history = parsedHistory;
-
-    return parsedBillboard;
+    return { ...parsedBillboard, history: parsedHistory };
   }
 
   async rollback(historyId: string, actorId: string) {
@@ -489,7 +568,7 @@ export class BillboardsService {
       throw new NotFoundException('History not found');
     }
 
-    const details = this.safeJsonParse<Record<string, any>>(history.snapshot, 'snapshot', history.billboardId);
+    const details = this.safeJsonParse<Record<string, unknown>>(history.snapshot, 'snapshot', history.billboardId);
 
     try {
       await this.prisma.billboard.update({
@@ -505,6 +584,18 @@ export class BillboardsService {
           lat: details.lat,
           lng: details.lng,
           slug: details.slug,
+          ...(details.streetViewPanoId !== undefined
+            ? { streetViewPanoId: details.streetViewPanoId }
+            : {}),
+          ...(details.streetViewHeading !== undefined
+            ? { streetViewHeading: details.streetViewHeading }
+            : {}),
+          ...(details.streetViewPitch !== undefined
+            ? { streetViewPitch: details.streetViewPitch }
+            : {}),
+          ...(details.streetViewFov !== undefined
+            ? { streetViewFov: details.streetViewFov }
+            : {}),
           updatedById: actorId,
         },
       });
@@ -515,4 +606,7 @@ export class BillboardsService {
     }
   }
 }
+
+
+
 

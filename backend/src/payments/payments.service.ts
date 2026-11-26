@@ -28,13 +28,23 @@ export class PaymentsService {
     const nextStatus = order.designOption === 'service' ? 'IN_PRODUCTION' : 'DESIGN_RECEIVED';
 
     try {
-      await this.prisma.booking.update({
-        where: { id: orderId },
+      // Idempoten: hanya proses bila order masih PENDING_PAYMENT. Update
+      // bersyarat ini mencegah dua panggilan bersamaan saling menimpa status,
+      // paidAt, dan mengirim email duplikat. Replay pada status lain sukses
+      // tanpa mengubah apa pun.
+      const updated = await this.prisma.booking.updateMany({
+        where: { id: orderId, status: 'PENDING_PAYMENT' },
         data: {
           status: nextStatus,
           paidAt: new Date(),
         },
       });
+
+      if (updated.count === 0) {
+        console.log(`ℹ️ [NOTIFY] Order ${orderId} sudah diproses / bukan PENDING_PAYMENT, tidak ada perubahan.`);
+        return { status: 'ok' };
+      }
+
       console.log(`✅ Status Updated: ${nextStatus} & Waktu bayar dicatat`);
 
       const adminEmail = process.env.ADMIN_EMAIL;
@@ -78,9 +88,10 @@ export class PaymentsService {
       }
 
       return { status: 'ok' };
-    } catch (error: any) {
-      console.error('🔥 Server Error (Notify):', error.message);
+    } catch (error: unknown) {
+      console.error('🔥 Server Error (Notify):', error instanceof Error ? error.message : error);
       throw new InternalServerErrorException('Server Error');
     }
   }
 }
+

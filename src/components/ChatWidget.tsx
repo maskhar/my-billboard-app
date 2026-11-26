@@ -41,6 +41,7 @@ export default function ChatWidget() {
 
     socketRef.current.on('connect', () => {
         const storedId = localStorage.getItem('utero_chat_id');
+        const storedToken = localStorage.getItem('utero_chat_token');
         if (storedId && storedToken) {
             setSessionId(storedId);
             socketRef.current?.emit('joinRoom', storedId);

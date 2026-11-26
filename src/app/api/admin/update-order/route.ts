@@ -41,7 +41,7 @@ export async function POST(req: Request) {
           ...(isLocked !== undefined && { isLocked: isLocked })
       };
 
-      const alasan = teksOpsional(reason, 1000);
+      const alasan = typeof reason === 'string' ? reason.trim().slice(0, 1000) : '';
 
       // Kedua kolom bukti hanya menerima URL yang layak dirender. Pemeriksaannya
       // dulu tinggal di sini sebagai `new URL(teks)` tanpa base — dan itu

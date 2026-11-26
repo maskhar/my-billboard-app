@@ -130,6 +130,9 @@ function kebijakanKonten(): string {
 }
 
 const nextConfig: NextConfig = {
+  output: 'standalone',
+  allowedDevOrigins: ['127.0.0.1', 'localhost'],
+
   // Header keamanan untuk SELURUH rute.
   //
   // Ditulis di sini, bukan di `vercel.json`: berkas ini berlaku juga saat

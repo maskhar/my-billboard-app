@@ -1,11 +1,22 @@
-// import { prisma } from '@/lib/prisma';
+import { prisma } from '@/lib/prisma';
+import type { Prisma } from '@prisma/client';
+import { bacaHalaman, hitungPaginasi, PER_HALAMAN, urlHalaman } from '@/lib/paginasi';
+import { bacaKataKunci, bacaPilihan } from '@/lib/kueri-daftar';
+import { KUNCI_URUT_BILLBOARD, URUT_BILLBOARD, whereBillboard } from '@/lib/saringan-daftar';
+import { tanggalRingkas } from '@/lib/tanggal';
+import { angkaRupiah } from '@/lib/money';
+import { redirect } from 'next/navigation';
+import NavigasiHalaman from '@/components/admin/NavigasiHalaman';
+import KotakCari from '@/components/admin/KotakCari';
+import KepalaUrut from '@/components/admin/KepalaUrut';
+import TombolEkspor from '@/components/admin/TombolEkspor';
 import { cookies } from 'next/headers';
 import { buildNextAuthCookieHeader } from '@/lib/nextauth-cookie';
 import Link from 'next/link';
 import { Plus, MapPin, Tag, Edit, Eye, User, Clock, ImageOff } from 'lucide-react';
 import DeleteBillboardBtn from '@/components/admin/DeleteBillboardBtn'; 
 import StatusChanger from '@/components/admin/StatusChanger'; 
-import { Billboard, User as UserType } from '@prisma/client';
+import type { Billboard } from '@prisma/client';
 
 export const dynamic = 'force-dynamic';
 
@@ -44,28 +55,20 @@ async function getAdminBillboards(
   orderBy: Prisma.BillboardOrderByWithRelationInput,
 ): Promise<{ data: BillboardWithUsers[]; total: number }> {
   try {
-    // Endpoint ini dilindungi @Roles(...ADMIN_ROLES) di backend, jadi cookie
-    // session NextAuth wajib ikut diteruskan. Server Component tidak punya
-    // cookie browser, jadi dibaca manual lalu dikirim sebagai header `Cookie`.
-    const backendUrl = process.env.BACKEND_API_URL || 'http://localhost:4001';
-    const targetUrl = `${backendUrl}/api/billboards/admin`;
-
-    const cookieHeader = buildNextAuthCookieHeader(await cookies());
-
-    const res = await fetch(targetUrl, {
-      cache: 'no-store',
-      headers: cookieHeader ? { Cookie: cookieHeader } : {},
-    });
-
-    if (!res.ok) {
-      console.error("Gagal mengambil data admin billboards:", res.status, await res.text());
-      // 401 = session tidak diteruskan/kedaluwarsa, 403 = role bukan admin.
-      return [];
-    }
-    
-    const billboards = await res.json();
-    return billboards;
-
+    const [data, total] = await Promise.all([
+      prisma.billboard.findMany({
+        where,
+        orderBy,
+        skip: (halamanDiminta - 1) * PER_HALAMAN,
+        take: PER_HALAMAN,
+        include: {
+          createdBy: { select: { id: true, name: true } },
+          updatedBy: { select: { id: true, name: true } },
+        },
+      }),
+      prisma.billboard.count({ where }),
+    ]);
+    return { data, total };
   } catch (error) {
     console.error('Gagal mengambil data admin billboards:', error);
     return { data: [], total: 0 };

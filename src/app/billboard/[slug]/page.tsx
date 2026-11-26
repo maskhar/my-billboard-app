@@ -2,7 +2,7 @@
 import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import BillboardDetailClient from './BillboardDetailClient';
-import { Billboard } from '@prisma/client';
+import { Billboard, SystemSetting } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { uangUntukClient } from '@/lib/money';
 import { STATUS_MENGUNCI_TANGGAL } from '@/lib/transisi-status';
@@ -73,6 +73,7 @@ async function getSystemSettings(): Promise<SystemSetting | null> {
         siteDesc: 'Platform Sewa Billboard Terlengkap',
         geminiApiKey: null,
         googleMapsApiKey: null,
+        waNumber: null,
         updatedAt: new Date()
     }
 }
@@ -238,6 +239,10 @@ export default async function DetailPage({ params, searchParams }: Props) {
         lat: rawData.lat,
         lng: rawData.lng,
         smartsucoUrl: rawData.smartsucoUrl,
+        streetViewPanoId: rawData.streetViewPanoId,
+        streetViewHeading: rawData.streetViewHeading,
+        streetViewPitch: rawData.streetViewPitch,
+        streetViewFov: rawData.streetViewFov,
         gallery: rawData.gallery,
         specs: rawData.specs,
         includes: rawData.includes,

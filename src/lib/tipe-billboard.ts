@@ -158,6 +158,10 @@ export type FormBillboard = {
   lighting: string;
   material: string;
   smartsucoUrl: string;
+  streetViewPanoId: string;
+  streetViewHeading: string;
+  streetViewPitch: string;
+  streetViewFov: string;
   gallery: string[];
   adminOptions: OpsiFasilitas[];
 };
@@ -237,6 +241,10 @@ export type DetailBillboardPublik = {
   lat: number;
   lng: number;
   smartsucoUrl: string | null;
+  streetViewPanoId: string | null;
+  streetViewHeading: number | null;
+  streetViewPitch: number | null;
+  streetViewFov: number | null;
   gallery: unknown;
   specs: unknown;
   includes: unknown;

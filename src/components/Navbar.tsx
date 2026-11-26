@@ -160,7 +160,7 @@ const Navbar = () => {
 
           {/* 2. MENU DESKTOP (Hanya muncul di layar MD ke atas)
 
-              "Cari Billboard" MENUNJUK `/billboards`, bukan `/`.
+              "List Billboard" MENUNJUK `/billboards`, yaitu halaman katalog; peta tetap di `/`.
               Ia dulu menunjuk `/` — alamat yang sama dengan logo di sebelahnya,
               jadi dua kendali bersebelahan melakukan hal yang identik sementara
               satu-satunya cara MENCARI (mengurutkan harga, membaca jumlah hasil,
@@ -170,7 +170,7 @@ const Navbar = () => {
               di peta" di katalog. */}
           <div className="hidden md:flex items-center space-x-8">
               <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">Home</Link>
-              <Link href="/" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
+              <Link href="/billboards" className="text-sm font-medium text-gray-700 hover:text-utero transition">List Billboard</Link>
               <Link href="/about" className="text-sm font-medium text-gray-700 hover:text-utero transition">Tentang Kami</Link>
               {session && (
                 <Link href="/dashboard" className="text-sm font-medium text-gray-700 hover:text-utero transition">Pesanan Saya</Link>
@@ -302,7 +302,7 @@ const Navbar = () => {
 
                 {/* Link Navigasi Biasa */}
                 <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏠 Home</Link>
-                <Link href="/" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
+                <Link href="/billboards" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">📍 List Billboard</Link>
                 <Link href="/about" className="block px-3 py-3 rounded-lg text-base font-medium text-gray-700 hover:bg-gray-50 hover:text-utero">🏢 Tentang Kami</Link>
                 
                 {/* Tombol CTA dipindah kesini untuk mobile */}

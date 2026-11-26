@@ -46,42 +46,33 @@ export default function RegisterPage() {
     setLoading(true);
     setError('');
 
-    // Ambil data dari form
     const formData = new FormData(e.currentTarget);
     const name = formData.get('name');
     const email = formData.get('email');
     const phone = formData.get('phone');
     const password = formData.get('password');
 
-    // Kirim ke API yang baru kita buat
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-    const res = await fetch(`${apiUrl}/api/users/register`, {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+      const res = await fetch(`${apiUrl}/api/users/register`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ name, email, phone, password }),
         credentials: 'include',
-    });
+      });
+      const jawaban = await bacaJawaban(res);
 
-        const jawaban = await bacaJawaban(res);
-
-        if (res.ok) {
-            // `alert` di sini MEMBEKUKAN tab sampai OK ditekan, jadi navigasi ke
-            // halaman login di baris berikutnya tertunda tepat pada saat calon
-            // pengguna paling ingin dilanjutkan. Toast tidak menahan apa pun, dan
-            // tetap terbaca di halaman login karena `ToastProvider` dipasang di
-            // layout akar.
-            toast.sukses(jawaban.pesan ?? 'Pendaftaran berhasil. Silakan masuk.');
-            router.push('/login'); // Arahkan ke login
-        } else {
-            // "Email sudah terpakai" dan "Password terlalu pendek" menuntut
-            // tindakan berbeda; keduanya dulu bisa terbaca "Gagal mendaftar".
-            setError(alasanPenolakan(res, jawaban));
-        }
+      if (res.ok) {
+        toast.sukses(jawaban.pesan ?? 'Pendaftaran berhasil. Silakan masuk.');
+        router.push('/login');
+      } else {
+        setError(alasanPenolakan(res, jawaban));
+      }
     } catch (galat) {
-        console.error('Gagal mendaftar:', galat);
-        setError(pesanGalat(galat, "Gagal menghubungi server. Coba lagi."));
+      console.error('Gagal mendaftar:', galat);
+      setError(pesanGalat(galat, 'Gagal menghubungi server. Coba lagi.'));
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
   };
 
@@ -155,3 +146,4 @@ export default function RegisterPage() {
     </div>
   );
 }
+

@@ -264,7 +264,7 @@ export const authOptions: NextAuthOptions = {
           role?: string;
         };
         sessionUser.id = token.id as string;
-        sessionUser.role = token.role as string;
+        sessionUser.role = sahRole(token.role) ? token.role : 'USER';
         session.user.image = token.picture;
       }
       return session;

@@ -1,8 +1,38 @@
 
-import { Injectable, InternalServerErrorException } from '@nestjs/common';
+import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { MailService } from '../lib/mail.service';
 import { UpdateOrderDto } from './dto/update-order.dto';
+
+const VALID_ORDER_STATUSES = [
+  'PENDING_PAYMENT',
+  'PAID_CONFIRMED',
+  'DESIGN_RECEIVED',
+  'IN_PRODUCTION',
+  'INSTALLATION',
+  'ACTIVE',
+  'WAITING_BANK',
+  'REVIEW_REFUND',
+  'PROCESS_REFUND',
+  'REFUNDED',
+  'CANCELLED',
+] as const;
+
+const TERMINAL_ORDER_STATUSES = ['CANCELLED', 'REFUNDED'] as const;
+
+const ALLOWED_ORDER_TRANSITIONS: Record<string, readonly string[]> = {
+  PENDING_PAYMENT: ['CANCELLED', 'PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION'],
+  PAID_CONFIRMED: ['CANCELLED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'REVIEW_REFUND'],
+  DESIGN_RECEIVED: ['IN_PRODUCTION', 'REVIEW_REFUND'],
+  IN_PRODUCTION: ['INSTALLATION', 'REVIEW_REFUND'],
+  INSTALLATION: ['ACTIVE', 'REVIEW_REFUND'],
+  ACTIVE: ['WAITING_BANK', 'REVIEW_REFUND'],
+  WAITING_BANK: ['PROCESS_REFUND'],
+  REVIEW_REFUND: ['WAITING_BANK', 'ACTIVE'],
+  PROCESS_REFUND: ['REFUNDED'],
+  REFUNDED: [],
+  CANCELLED: [],
+};
 
 @Injectable()
 export class OrdersService {
@@ -13,12 +43,56 @@ export class OrdersService {
 
   // otorisasi admin ditangani RolesGuard lewat @Roles(...ADMIN_ROLES) di
   // controller. `adminEmail` di body masih diterima tapi diabaikan.
+  private assertValidStatus(status: string) {
+    if (!VALID_ORDER_STATUSES.includes(status as (typeof VALID_ORDER_STATUSES)[number])) {
+      throw new BadRequestException(
+        `Status order tidak valid. Gunakan salah satu: ${VALID_ORDER_STATUSES.join(', ')}.`,
+      );
+    }
+  }
+
+  private assertTransitionAllowed(currentStatus: string, nextStatus: string) {
+    if (currentStatus === nextStatus) return;
+    if (TERMINAL_ORDER_STATUSES.includes(currentStatus as (typeof TERMINAL_ORDER_STATUSES)[number])) {
+      throw new BadRequestException('Status akhir (CANCELLED/REFUNDED) tidak dapat diubah lagi.');
+    }
+    const allowed = ALLOWED_ORDER_TRANSITIONS[currentStatus] ?? [];
+    if (!allowed.includes(nextStatus)) {
+      throw new BadRequestException(
+        `Transisi status tidak diizinkan: ${currentStatus} -> ${nextStatus}.`,
+      );
+    }
+  }
+
   async updateOrderStatus(updateOrderDto: UpdateOrderDto) {
     const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = updateOrderDto;
 
+    if (!orderId) {
+      throw new BadRequestException('orderId wajib diisi.');
+    }
+    if (newStatus !== undefined && newStatus !== null) {
+      this.assertValidStatus(String(newStatus));
+    }
+
     try {
-      const updateData: any = {
-        status: newStatus,
+      const currentOrder = await this.prisma.booking.findUnique({ where: { id: orderId } });
+      if (!currentOrder) {
+        throw new NotFoundException('Pesanan tidak ditemukan.');
+      }
+
+      if (newStatus !== undefined && newStatus !== null) {
+        this.assertTransitionAllowed(currentOrder.status, String(newStatus));
+      }
+
+      const updateData: {
+        status?: string;
+        cancelReason?: string;
+        refundProof?: string;
+        installationProof?: string;
+        isLocked?: boolean;
+        refundedAt?: Date;
+      } = {
+        ...(newStatus !== undefined && newStatus !== null && { status: newStatus }),
         ...(reason && { cancelReason: reason }),
         ...(refundProof && { refundProof: refundProof }),
         ...(installationProof && { installationProof: installationProof }),
@@ -26,8 +100,7 @@ export class OrdersService {
       };
 
       if (newStatus === 'REFUNDED') {
-        const currentOrder = await this.prisma.booking.findUnique({ where: { id: orderId } });
-        if (!currentOrder?.refundedAt) {
+        if (!currentOrder.refundedAt) {
           updateData.refundedAt = new Date();
         }
       }
@@ -76,8 +149,15 @@ export class OrdersService {
 
       return { message: 'Update Sukses' };
     } catch (error) {
+      if (error instanceof BadRequestException || error instanceof NotFoundException) {
+        throw error;
+      }
       console.error('Update Error:', error);
       throw new InternalServerErrorException('Gagal Update');
     }
   }
 }
+
+
+
+

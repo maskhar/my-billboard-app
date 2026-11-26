@@ -9,6 +9,10 @@ import { writeFile, mkdir } from "fs/promises";
 import { randomUUID } from "crypto";
 import path from "path";
 
+const BATAS_UNGGAH = 10;
+const JENDELA_UNGGAH_MS = 15 * 60 * 1000;
+const MAX_BYTES = 10 * 1024 * 1024;
+
 // Ekstensi yang diizinkan HARUS cocok dengan MIME yang dikirim. Jangan percaya
 // salah satu saja: `file.type` berasal dari client, dan nama file juga bisa
 // dipalsukan. Dengan mencocokkan keduanya, file `.html`/`.svg` yang dikirim

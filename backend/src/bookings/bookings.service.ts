@@ -102,6 +102,18 @@ export class BookingsService {
       throw new BadRequestException('Tanggal mulai tidak valid.');
     }
 
+    const jakartaDateFormatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Jakarta',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+    const startDateKey = jakartaDateFormatter.format(startDate);
+    const todayKey = jakartaDateFormatter.format(new Date());
+    if (startDateKey < todayKey) {
+      throw new BadRequestException('Tanggal mulai tidak boleh sebelum hari ini.');
+    }
+
     const targetBillboard = await this.prisma.billboard.findUnique({
       where: { id: billboardId },
     });
@@ -219,7 +231,14 @@ export class BookingsService {
 
   async submitDesign(submitDesignDto: SubmitDesignDto, actorId: string) {
     const { orderId, designUrl } = submitDesignDto;
-    await this.assertOrderOwner(orderId, actorId);
+    const existing = await this.assertOrderOwner(orderId, actorId);
+
+    const submittableStatuses = ['PENDING_PAYMENT', 'PAID_CONFIRMED', 'DESIGN_RECEIVED'];
+    if (!submittableStatuses.includes(existing.status)) {
+      throw new BadRequestException(
+        'Produksi sudah berjalan, hubungi admin untuk mengubah desain.',
+      );
+    }
 
     try {
       await this.prisma.booking.update({

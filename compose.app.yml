@@ -1,0 +1,51 @@
+services:
+  backend:
+    container_name: my-billboard-backend
+    image: my-billboard-backend:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      FRONTEND_URL: http://localhost:4000
+      NEXTAUTH_URL: http://localhost:4000
+    ports:
+      - "127.0.0.1:4001:4001"
+    restart: unless-stopped
+    networks:
+      - billboard-existing
+
+  frontend:
+    container_name: my-billboard-frontend
+    image: my-billboard-frontend:dev
+    build:
+      context: .
+      target: development
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?schema=public
+      BACKEND_API_URL: http://backend:4001
+      NEXT_PUBLIC_API_URL: http://localhost:4001
+      NEXTAUTH_URL: http://localhost:4000
+      APP_ORIGIN: http://localhost:4000
+      PRIVATE_UPLOAD_STORAGE_ROOT: /app/uploads/private/designs
+    ports:
+      - "127.0.0.1:4000:3000"
+    volumes:
+      - billboard-app-uploads:/app/uploads/private/designs
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - billboard-existing
+
+volumes:
+  billboard-app-uploads:
+
+networks:
+  billboard-existing:
+    external: true
+    name: my-billboard-app_default

@@ -1,6 +1,8 @@
 // src/components/admin/StatusChanger.tsx
 'use client';
 
+import { Check } from 'lucide-react';
+
 // Pengubah cepat status billboard dari tabel admin.
 //
 // Lima pilihan di menu ini dulu ditulis sebagai `<a href="#">` dengan

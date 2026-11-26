@@ -180,7 +180,7 @@ export default function BillboardDetailClient({ rawData, setting, tautanWa, book
             {/* LOKASI VISUALIZER */}
             <div className="bg-white p-8 rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                 <h3 className="text-xl font-bold mb-6 text-gray-800 flex items-center gap-2">📍 Lokasi & Street View</h3>
-                <LocationVisualizer lat={rawData.lat} lng={rawData.lng} address={rawData.address} apiKey={setting?.googleMapsApiKey} />
+                <LocationVisualizer lat={rawData.lat} lng={rawData.lng} address={rawData.address} apiKey={setting?.googleMapsApiKey} panoId={rawData.streetViewPanoId} heading={rawData.streetViewHeading} pitch={rawData.streetViewPitch} fov={rawData.streetViewFov} />
             </div>
 
             {/* SPESIFIKASI */}

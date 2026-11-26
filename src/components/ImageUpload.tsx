@@ -128,19 +128,15 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
 
         try {
             const res = await fetch("/api/upload", { method: "POST", body: formData });
-            const data = await res.json();
-            
-            if (res.ok) {
-                onChange(data.url); // Simpan path lokal
-            } else {
-                // Route mengembalikan `{ message }`, bukan `{ error }`.
-                alert("Gagal Upload Lokal: " + (data?.message || "Terjadi kesalahan"));
-            }
-            if (!jawaban.url) {
+            const jawaban = await bacaJawaban(res);
+
+            if (res.ok && jawaban.url) {
+                onChange(jawaban.url);
+            } else if (res.ok) {
                 toast.galat('Berkas terunggah, tapi server tidak memulangkan tautannya. Coba unggah ulang.');
-                return;
+            } else {
+                alert("Gagal Upload Lokal: " + (jawaban.pesan || "Terjadi kesalahan"));
             }
-            onChange(jawaban.url); // Simpan path lokal
         } catch (galat) {
             console.error('Gagal mengunggah gambar ke server lokal:', galat);
             toast.galat('Server tidak dapat dihubungi. Berkas belum terunggah.');

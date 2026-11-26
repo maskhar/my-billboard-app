@@ -8,6 +8,14 @@ import { useSession } from 'next-auth/react';
 import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
 import dynamic from 'next/dynamic';
+import { useToast } from '@/components/ui/Toast';
+import { useKonfirmasi } from '@/components/ui/Konfirmasi';
+import { angkaRupiah } from '@/lib/money';
+import { tanggalRingkas } from '@/lib/tanggal';
+import { sahStatusBillboard, sahStatusPublikasi } from '@/lib/tipe-billboard';
+import type { BarisRiwayatBillboard, FormBillboard, OpsiFasilitas } from '@/lib/tipe-billboard';
+
+type KolomTeksForm = 'title' | 'slug' | 'sku' | 'address' | 'type' | 'status' | 'publishStatus' | 'sizeH' | 'sizeW' | 'orientation' | 'sides' | 'lighting' | 'material' | 'smartsucoUrl' | 'streetViewPanoId' | 'streetViewHeading' | 'streetViewPitch' | 'streetViewFov';
 
 // Endpoint detail backend (`billboards.service.ts` `findOne`) sudah
 // JSON.parse kolom specs/includes/excludes/gallery sebelum dikirim, jadi bentuk
@@ -85,7 +93,7 @@ export default function BillboardFormPage() {
   const [memuatPratinjau, setMemuatPratinjau] = useState<string | null>(null);
 
   // DEFAULT DATA CHECKLIST
-  const defaultAdminOptions = [
+  const defaultAdminOptions: OpsiFasilitas[] = [
       { name: "Sewa Lahan / Konstruksi", included: true },
       { name: "Pengawasan Media / Maintenance", included: true },
       { name: "Biaya Cetak (1x)", included: true },
@@ -96,13 +104,14 @@ export default function BillboardFormPage() {
       { name: "PPN 11%", included: false },
   ];
 
-  const [form, setForm] = useState<any>({
+  const [form, setForm] = useState<FormBillboard>({
       title: '', slug: '', sku: '', address: '', type: 'Videotron',
       price: 0, lat: DEFAULT_LAT, lng: DEFAULT_LNG, 
-      publishStatus: 'DRAFT', mainImage: '',
+      status: 'Available', publishStatus: 'DRAFT', mainImage: '',
       sizeH: '', sizeW: '', 
       orientation: 'Horizontal', sides: '1', lighting: 'Frontlight', material: 'Vinyl Backlight',
       smartsucoUrl: '',
+      streetViewPanoId: '', streetViewHeading: '', streetViewPitch: '', streetViewFov: '',
       gallery: [], 
       adminOptions: defaultAdminOptions
   });
@@ -145,7 +154,7 @@ export default function BillboardFormPage() {
                     const sSides = cariSpec("Tampilan")?.replace(' Sisi', '');
                     if(sSides) sides = sSides;
 
-                    const mergedOptions: OpsiFasilitas[] = OPSI_BAWAAN.map(opt => ({
+                    const mergedOptions: OpsiFasilitas[] = defaultAdminOptions.map(opt => ({
                         name: opt.name,
                         included: dbIncludes.includes(opt.name),
                     }));
@@ -189,6 +198,10 @@ export default function BillboardFormPage() {
                             : prev.publishStatus,
                         mainImage: data.mainImage ?? '',
                         smartsucoUrl: data.smartsucoUrl ?? '',
+                        streetViewPanoId: data.streetViewPanoId ?? '',
+                        streetViewHeading: data.streetViewHeading == null ? '' : String(data.streetViewHeading),
+                        streetViewPitch: data.streetViewPitch == null ? '' : String(data.streetViewPitch),
+                        streetViewFov: data.streetViewFov == null ? '' : String(data.streetViewFov),
                         gallery: parsedGallery,
                         adminOptions: mergedOptions,
                         sizeH: h, sizeW: w,
@@ -232,7 +245,7 @@ export default function BillboardFormPage() {
       // galeri dengan sebuah string, dan tombol Simpan menuliskannya ke
       // database — galerinya hilang tanpa satu pun galat.
       const { name, value } = e.target;
-      setForm((p) => ({ ...p, [name as KolomTeksForm]: value }));
+      setForm((p) => ({ ...p, [name as KolomTeksForm]: value } as FormBillboard));
   };
 
   const handleAdminCheck = (index: number) => {
@@ -371,6 +384,15 @@ export default function BillboardFormPage() {
                              <div><label className="text-[10px] font-bold text-gray-400 uppercase">Material</label><input name="material" value={form.material} onChange={handleChange} className="w-full border rounded p-2 mt-1" /></div>
                         </div>
                         <div><label className="text-[10px] font-bold text-gray-400 uppercase flex gap-1 items-center mb-1"><ExternalLink size={12}/> Link Laporan Trafik</label><input name="smartsucoUrl" value={form.smartsucoUrl} onChange={handleChange} className="w-full border border-blue-100 bg-blue-50/50 rounded p-2 text-xs text-blue-700"/></div>
+                        <div className="mt-4 border-t pt-4">
+                            <label className="mb-2 block text-xs font-bold text-gray-500">Street View (opsional)</label>
+                            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                                <label className="md:col-span-3 text-xs">Pano ID<input name="streetViewPanoId" value={form.streetViewPanoId} onChange={handleChange} className="mt-1 w-full rounded border p-2" /></label>
+                                <label className="text-xs">Heading (0-360)<input type="number" min="0" max="360" step="0.01" name="streetViewHeading" value={form.streetViewHeading} onChange={handleChange} className="mt-1 w-full rounded border p-2" /></label>
+                                <label className="text-xs">Pitch (-90 sampai 90)<input type="number" min="-90" max="90" step="0.01" name="streetViewPitch" value={form.streetViewPitch} onChange={handleChange} className="mt-1 w-full rounded border p-2" /></label>
+                                <label className="text-xs">FOV (10-120)<input type="number" min="10" max="120" step="0.01" name="streetViewFov" value={form.streetViewFov} onChange={handleChange} className="mt-1 w-full rounded border p-2" /></label>
+                            </div>
+                        </div>
                     </div>
 
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">

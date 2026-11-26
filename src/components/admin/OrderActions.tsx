@@ -5,7 +5,7 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { 
-    CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, 
+    CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, Wallet, Banknote,
     Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck, ImageOff
 } from 'lucide-react';
 import Link from 'next/link';
@@ -116,6 +116,8 @@ export default function OrderActions({
   const router = useRouter();
   const { data: session } = useSession();
   const [loading, setLoading] = useState(false);
+  const toast = useToast();
+  const konfirmasi = useKonfirmasi();
 
   // STATE MODALS
   const [showTransferModal, setShowTransferModal] = useState(false); // Buat upload bukti trf
@@ -167,16 +169,6 @@ export default function OrderActions({
       router.refresh();
   };
 
-  // --- HANDLERS HELPER ---
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, setter: any) => {
-      const file = e.target.files?.[0];
-      if (file) {
-          if (file.size > 2 * 1024 * 1024) { alert("Max 2MB"); return; }
-          const reader = new FileReader();
-          reader.onloadend = () => setter(reader.result as string);
-          reader.readAsDataURL(file);
-      }
-  };
 
   // --- HANDLERS HELPER ---
   // Berkas diunggah ke `/api/upload`, dan yang disimpan ke state adalah URL
@@ -876,7 +868,7 @@ export default function OrderActions({
                             )}
                         </div>
                         <a 
-                            href={order.designFileUrl} 
+                            href={order.designFileUrl ?? undefined}
                             download={`design-${order.id}.jpg`} // Anda bisa sesuaikan nama filenya
                             target="_blank"
                             rel="noopener noreferrer"
@@ -890,3 +882,4 @@ export default function OrderActions({
     </>
   );
 }
+

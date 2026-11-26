@@ -103,7 +103,7 @@ describe('BookingsService.create', () => {
       duration: 2,
       paymentType: 'full',
       designOption: 'upload',
-      startDateString: '2026-11-01',
+      startDateString: '2099-11-01',
       ...overrides,
     } as CreateBookingDto;
   }
@@ -227,13 +227,13 @@ describe('BookingsService.create', () => {
     it('Test A: overlap penuh ditolak dengan 409 dan booking tidak dibuat', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'ACTIVE',
       });
 
       const createAttempt = service.create(
-        baseDto({ startDateString: '2026-01-15', duration: 1 }),
+        baseDto({ startDateString: '2099-01-15', duration: 1 }),
         user.id,
       );
 
@@ -247,14 +247,14 @@ describe('BookingsService.create', () => {
     it('Test B: overlap dari sisi awal ditolak dengan 409', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'PAID_CONFIRMED',
       });
 
       await expect(
         service.create(
-          baseDto({ startDateString: '2026-01-05', duration: 1 }),
+          baseDto({ startDateString: '2099-01-05', duration: 1 }),
           user.id,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -264,14 +264,14 @@ describe('BookingsService.create', () => {
     it('Test C: existing berada di dalam new booking ditolak dengan 409', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-15'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-15'),
         status: 'ACTIVE',
       });
 
       await expect(
         service.create(
-          baseDto({ startDateString: '2026-01-05', duration: 1 }),
+          baseDto({ startDateString: '2099-01-05', duration: 1 }),
           user.id,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -281,13 +281,13 @@ describe('BookingsService.create', () => {
     it('Test D: boundary existing.endDate === newStartDate TIDAK overlap, booking dibuat', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'ACTIVE',
       });
 
       const result = await service.create(
-        baseDto({ startDateString: '2026-01-20', duration: 1 }),
+        baseDto({ startDateString: '2099-01-20', duration: 1 }),
         user.id,
       );
 
@@ -298,8 +298,8 @@ describe('BookingsService.create', () => {
     it('Test E: billboard berbeda tidak terpengaruh booking billboard lain', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'ACTIVE',
       });
       prisma.billboard.findUnique.mockResolvedValue({
@@ -308,7 +308,7 @@ describe('BookingsService.create', () => {
       });
 
       const result = await service.create(
-        baseDto({ billboardId: 'bb-2', startDateString: '2026-01-15', duration: 1 }),
+        baseDto({ billboardId: 'bb-2', startDateString: '2099-01-15', duration: 1 }),
         user.id,
       );
 
@@ -321,13 +321,13 @@ describe('BookingsService.create', () => {
       async (releasedStatus) => {
         storedBookings.push({
           billboardId: 'bb-1',
-          startDate: new Date('2026-01-10'),
-          endDate: new Date('2026-01-20'),
+          startDate: new Date('2099-01-10'),
+          endDate: new Date('2099-01-20'),
           status: releasedStatus,
         });
 
         const result = await service.create(
-          baseDto({ startDateString: '2026-01-15', duration: 1 }),
+          baseDto({ startDateString: '2099-01-15', duration: 1 }),
           user.id,
         );
 
@@ -339,8 +339,8 @@ describe('BookingsService.create', () => {
     it('Test G: query overlap benar-benar memfilter berdasarkan billboardId', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'ACTIVE',
       });
       prisma.billboard.findUnique.mockResolvedValue({
@@ -349,7 +349,7 @@ describe('BookingsService.create', () => {
       });
 
       await service.create(
-        baseDto({ billboardId: 'bb-2', startDateString: '2026-01-15', duration: 1 }),
+        baseDto({ billboardId: 'bb-2', startDateString: '2099-01-15', duration: 1 }),
         user.id,
       );
 
@@ -359,28 +359,28 @@ describe('BookingsService.create', () => {
 
     it('query overlap memakai kondisi ketat lt/gt sesuai definisi dan status non-blocking', async () => {
       await service.create(
-        baseDto({ startDateString: '2026-01-20', duration: 1 }),
+        baseDto({ startDateString: '2099-01-20', duration: 1 }),
         user.id,
       );
 
       const where = prisma.booking.findFirst.mock.calls[0][0].where;
       expect(where.billboardId).toBe('bb-1');
       expect(where.status.notIn).toEqual(['CANCELLED', 'REFUNDED']);
-      expect(where.startDate).toEqual({ lt: new Date('2026-02-20') });
-      expect(where.endDate).toEqual({ gt: new Date('2026-01-20') });
+      expect(where.startDate).toEqual({ lt: new Date('2099-02-20') });
+      expect(where.endDate).toEqual({ gt: new Date('2099-01-20') });
     });
 
     it('booking berstatus DESIGN_RECEIVED (sudah bayar, produksi) tetap memblokir', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'DESIGN_RECEIVED',
       });
 
       await expect(
         service.create(
-          baseDto({ startDateString: '2026-01-15', duration: 1 }),
+          baseDto({ startDateString: '2099-01-15', duration: 1 }),
           user.id,
         ),
       ).rejects.toBeInstanceOf(ConflictException);
@@ -390,14 +390,14 @@ describe('BookingsService.create', () => {
     it('booking refund yang masih diproses (PROCESS_REFUND) tetap memblokir', async () => {
       storedBookings.push({
         billboardId: 'bb-1',
-        startDate: new Date('2026-01-10'),
-        endDate: new Date('2026-01-20'),
+        startDate: new Date('2099-01-10'),
+        endDate: new Date('2099-01-20'),
         status: 'PROCESS_REFUND',
       });
 
       await expect(
         service.create(
-          baseDto({ startDateString: '2026-01-15', duration: 1 }),
+          baseDto({ startDateString: '2099-01-15', duration: 1 }),
           user.id,
         ),
       ).rejects.toBeInstanceOf(ConflictException);

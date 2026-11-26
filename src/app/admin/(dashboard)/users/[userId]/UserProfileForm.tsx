@@ -14,27 +14,6 @@ import {
   type RolePengguna,
 } from '@/lib/tipe-pengguna';
 
-export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
-  // KTP/NPWP hanya dikirim utuh kepada SUPER_ADMIN. Untuk peran lain,
-  // halaman induk mengirim bentuk tersamar dan menyalakan penanda ini.
-  // Tanpa memeriksanya, penyimpanan biasa akan menulis balik string
-  // bertitik-titik itu ke database dan menghapus nomor aslinya.
-  const identitasTersamar = user.identitasTersamar;
-
-const SelectField = ({ label, id, value, onChange, children }: any) => (
-    <div>
-      <label htmlFor={id} className="block text-sm font-medium text-gray-700">{label}</label>
-      <select
-        id={id}
-        value={value}
-        onChange={onChange}
-        className="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"
-      >
-        {children}
-      </select>
-    </div>
-  );
-
 const getApiErrorMessage = async (res: Response) => {
   try {
     const data = await res.json();
@@ -44,7 +23,8 @@ const getApiErrorMessage = async (res: Response) => {
   }
 };
 
-export default function UserProfileForm({ user }: { user: User }) {
+export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
+  const identitasTersamar = user.identitasTersamar;
   const [businessDetails, setBusinessDetails] = useState({
     name: user.name || '',
     companyName: user.companyName || '',
@@ -116,11 +96,6 @@ export default function UserProfileForm({ user }: { user: User }) {
 
   const handleAccountSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (userAccount.newPassword !== userAccount.confirmPassword) {
-      alert("Passwords do not match!");
-      return;
-    }
-
     const roleChanged = userAccount.role !== user.role;
 
     const updateAccount = async () => {
@@ -128,9 +103,6 @@ export default function UserProfileForm({ user }: { user: User }) {
         username: userAccount.username,
         whatsapp: userAccount.whatsapp,
       };
-      if (userAccount.newPassword) {
-        data.password = userAccount.newPassword;
-      }
       try {
         const res = await fetch(`/api/proxy/users/${user.id}/admin-account`, {
           method: 'PATCH',
@@ -316,3 +288,5 @@ export default function UserProfileForm({ user }: { user: User }) {
     </div>
   );
 }
+
+

@@ -6,6 +6,12 @@ import { signIn, signOut, getSession } from 'next-auth/react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Navbar from '@/components/Navbar';
+
+const KELAS_ISIAN =
+  'bg-gray-50 border border-gray-300 text-gray-900 sm:text-sm rounded-lg block w-full p-2.5 ' +
+  'outline-none focus:ring-2 focus:ring-utero focus:border-utero transition';
+const KELAS_LABEL = 'block mb-2 text-sm font-medium text-gray-900';
+
 function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();

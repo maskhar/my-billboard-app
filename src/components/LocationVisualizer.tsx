@@ -26,8 +26,28 @@ const Popup = dynamic(
   { ssr: false }
 );
 
-export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat: number, lng: number, address: string, apiKey?: string | null }) {
-  const [viewMode, setViewMode] = useState<'MAP' | 'STREET'>('MAP');
+type LocationVisualizerProps = {
+  lat: number;
+  lng: number;
+  address: string;
+  apiKey?: string | null;
+  panoId?: string | null;
+  heading?: number | null;
+  pitch?: number | null;
+  fov?: number | null;
+};
+
+export default function LocationVisualizer({ lat, lng, address, apiKey, panoId, heading, pitch, fov }: LocationVisualizerProps) {
+  const [viewMode, setViewMode] = useState<'MAP' | 'STREET'>(panoId ? 'STREET' : 'MAP');
+  const resolvedKey = (process.env.NEXT_PUBLIC_GOOGLE_MAPS_API_KEY || apiKey || '').trim();
+  const embedUrl = panoId
+    ? resolvedKey
+      ? `https://www.google.com/maps/embed/v1/streetview?key=${encodeURIComponent(resolvedKey)}&pano=${encodeURIComponent(panoId)}&heading=${heading ?? 0}&pitch=${pitch ?? 0}&fov=${fov ?? 90}`
+      : `https://www.google.com/maps/embed?pb=!4v1!6m8!1m7!1s${encodeURIComponent(panoId)}!2m2!1d${lat}!2d${lng}!3f${heading ?? 0}!4f${pitch ?? 0}!5f0.7820865974627469`
+    : null;
+  const streetViewUrl = panoId
+    ? `https://www.google.com/maps/@?api=1&map_action=pano&pano=${encodeURIComponent(panoId)}&heading=${heading ?? 0}&pitch=${pitch ?? 0}&fov=${fov ?? 90}`
+    : `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`;
 
   // --- SOLUSI BUG ICON HILANG/CRASH DI NEXT.JS ---
   // Kita set icon secara manual di dalam useEffect (Hanya jalan di Client)
@@ -100,13 +120,13 @@ export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat:
 
         {/* --- VIEW 2: STREET VIEW --- */}
         {viewMode === 'STREET' && (
-            apiKey ? (
+            embedUrl ? (
                 <iframe
                     width="100%"
                     height="100%"
                     frameBorder="0"
                     style={{ border: 0 }}
-                    src={`https://www.google.com/maps/embed/v1/streetview?key=${apiKey}&location=${lat},${lng}&heading=210&pitch=10&fov=35`}
+                    src={embedUrl ?? streetViewUrl} title={`Street View ${address}`} loading="lazy" referrerPolicy="no-referrer-when-downgrade"
                     allowFullScreen
                 ></iframe>
             ) : (
@@ -144,7 +164,7 @@ export default function LocationVisualizer({ lat, lng, address, apiKey }: { lat:
                         </p>
                         
                         <a 
-                            href={`https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat},${lng}`} 
+                            href={streetViewUrl}
                             target="_blank"
                             className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-full font-bold text-sm inline-flex items-center gap-2 transition shadow-lg"
                         >

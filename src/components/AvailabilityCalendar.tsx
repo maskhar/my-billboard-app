@@ -103,7 +103,7 @@ export default function AvailabilityCalendar({ bookedDates, onDateSelect, initia
     };
     
     const formatMonthYear = (date: Date) => {
-        return date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+        return date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric', timeZone: 'Asia/Jakarta' });
     };
 
     const renderMonthCalendars = () => {
@@ -111,7 +111,7 @@ export default function AvailabilityCalendar({ bookedDates, onDateSelect, initia
             const monthDate = new Date(activeDate.getFullYear(), i, 1);
             return (
                 <div key={i} className="p-2">
-                    <h5 className="text-center font-bold text-sm mb-2">{monthDate.toLocaleDateString('id-ID', { month: 'long' })}</h5>
+                    <h5 className="text-center font-bold text-sm mb-2">{monthDate.toLocaleDateString('id-ID', { month: 'long', timeZone: 'Asia/Jakarta' })}</h5>
                     <Calendar
                         activeStartDate={monthDate}
                         minDate={batasBawah}

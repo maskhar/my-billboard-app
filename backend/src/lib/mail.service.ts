@@ -1,6 +1,15 @@
 import * as nodemailer from 'nodemailer';
 import { Injectable } from '@nestjs/common';
 
+interface OrderEmailDetail {
+  id: string;
+  billboardTitle?: string;
+  billboardAddress?: string;
+  duration?: number;
+  total: number;
+  status?: string;
+}
+
 @Injectable()
 export class MailService {
   private transporter: nodemailer.Transporter;
@@ -25,7 +34,7 @@ export class MailService {
     }).format(number);
   }
 
-  private generateTemplate(title: string, message: string, orderDetail?: any) {
+  private generateTemplate(title: string, message: string, orderDetail?: OrderEmailDetail) {
     return `
     <div style="font-family: Arial, sans-serif; color: #333; max-width: 680px; margin: 0 auto; border: 1px solid #eaeaea; border-radius: 12px; overflow: hidden; background-color: #fcfcfc;">
         <div style="background-color: #ffffff; padding: 30px; text-align: center; border-bottom: 1px solid #eaeaea;">
@@ -90,7 +99,19 @@ export class MailService {
     `;
   }
 
-  async sendEmail({ to, subject, title, message, orderDetail }: any) {
+  async sendEmail({
+    to,
+    subject,
+    title,
+    message,
+    orderDetail,
+  }: {
+    to: string;
+    subject: string;
+    title: string;
+    message: string;
+    orderDetail?: OrderEmailDetail;
+  }) {
     if (!to) {
       console.warn('⚠️ Email batal dikirim: Penerima (to) tidak didefinisikan.');
       return false;
@@ -105,9 +126,10 @@ export class MailService {
       });
       console.log('✅ Email Terkirim ke:', to, '| ID:', info.messageId);
       return true;
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('🔥 Gagal Kirim Email:', error);
       return false;
     }
   }
 }
+

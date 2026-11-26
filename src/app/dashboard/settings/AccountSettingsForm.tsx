@@ -22,6 +22,7 @@ type PlainUser = {
 };
 
 export default function AccountSettingsForm({ user }: { user: PlainUser }) {
+    const toast = useToast();
     const [profileData, setProfileData] = useState({
         name: user.name,
         whatsapp: user.whatsapp,

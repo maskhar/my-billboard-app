@@ -244,6 +244,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   };
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     const file = e.target.files?.[0];
     // Kotak isian dikosongkan SEBELUM pekerjaan dimulai. Tanpa ini, berkas yang
     // sama tidak bisa dicoba dua kali: `<input type="file">` tidak memicu
@@ -266,12 +267,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
     try {
       // JANGAN set header Content-Type di sini: browser yang harus menambahkan
       // multipart/form-data beserta boundary-nya sendiri.
+      if (!apiUrl) {
+        toast.galat('Alamat API belum dikonfigurasi.');
+        return;
+      }
       const res = await fetch(`${apiUrl}/api/uploads/design`, { method: 'POST', body: formData, credentials: 'include' });
-      const data = await res.json();
-      if (res.ok) {
-        await handleDesignSubmit(data.url);
-      } else {
-        alert('Upload Gagal: ' + data.message);
+      const jawaban = await bacaJawaban(res);
+      if (!res.ok) {
+        alert('Upload Gagal: ' + alasanPenolakan(res, jawaban));
+        return;
       }
       // `url` diperiksa, tidak diteruskan buta. Respons 200 tanpa `url` —
       // badan JSON yang bentuknya berubah, atau proxy yang memangkasnya —
@@ -362,7 +366,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   // --- VISUAL UI ---
 
   // Cek apakah user boleh upload desain?
-  const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED', 'IN_PRODUCTION', 'ACTIVE'].includes(order.status);
+  const canUploadDesign = ['PAID_CONFIRMED', 'DESIGN_RECEIVED'].includes(order.status);
   const isImageProof = order.refundProof?.startsWith('data:image');
 
   // Pesanan yang uangnya sudah keluar lagi, atau tidak akan pernah masuk, tidak
