@@ -34,10 +34,12 @@ export default function ChatWidget() {
   const lastMsgCount = useRef(0);
 
   useEffect(() => {
+    if (!chatUrl) return;
+
     // withCredentials hanya berlaku untuk handshake XHR/polling. Browser TIDAK
     // pernah mengirim cookie pada handshake WebSocket, jadi kalau gateway
     // socket.io di backend butuh session, harus pakai extraHeaders.
-    socketRef.current = io("http://localhost:4001", { withCredentials: true }); // Ganti port ke backend NestJS
+    socketRef.current = io(chatUrl, { withCredentials: true });
 
     socketRef.current.on('connect', () => {
         const storedId = localStorage.getItem('utero_chat_id');

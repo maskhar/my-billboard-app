@@ -98,7 +98,7 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
         alert(`Gagal mengupdate status: ${msg}`);
       }
-    } catch (error) {
+    } catch {
       alert('Terjadi kesalahan pada server. Pastikan backend sedang berjalan.');
     } finally {
       // `setTimeout(..., 500)` dulu menahan hamparan loading setengah detik
@@ -113,15 +113,11 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
   // yang sama disalin ulang, dan tidak satu pun menandai nilai yang sedang
   // berlaku: operator melihat lima baris identik dan harus menebak posisi
   // billboard ini sekarang dari badge di belakang menu yang sedang tertutupi.
-  const Pilihan = ({
-    type,
-    value,
-    label,
-  }: {
-    type: 'status' | 'publishStatus';
-    value: string;
-    label: string;
-  }) => {
+  const renderPilihan = (
+    type: 'status' | 'publishStatus',
+    value: string,
+    label: string,
+  ) => {
     const aktif = (type === 'status' ? currentStatus : currentPublishStatus || 'DRAFT') === value;
     return (
       <button
@@ -192,15 +188,15 @@ export default function StatusChanger({ billboardId, currentStatus, currentPubli
         >
           <div className="py-1" role="none">
             <p className="px-3 py-1 text-[10px] font-bold text-gray-400 uppercase">Ketersediaan</p>
-            <Pilihan type="status" value="Available" label="Available" />
-            <Pilihan type="status" value="Booked" label="Booked" />
+            {renderPilihan('status', 'Available', 'Available')}
+            {renderPilihan('status', 'Booked', 'Booked')}
 
             <div className='border-t my-1'></div>
 
             <p className="px-3 py-1 text-[10px] font-bold text-gray-400 uppercase">Publikasi</p>
-            <Pilihan type="publishStatus" value="PUBLISHED" label="Published" />
-            <Pilihan type="publishStatus" value="DRAFT" label="Draft" />
-            <Pilihan type="publishStatus" value="ARCHIVED" label="Archived" />
+            {renderPilihan('publishStatus', 'PUBLISHED', 'Published')}
+            {renderPilihan('publishStatus', 'DRAFT', 'Draft')}
+            {renderPilihan('publishStatus', 'ARCHIVED', 'Archived')}
           </div>
         </div>
       )}

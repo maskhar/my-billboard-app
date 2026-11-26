@@ -423,6 +423,9 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [memuatLama, setMemuatLama] = useState(false);
   const [galatChat, setGalatChat] = useState('');
+  const chatTidakTersambung = !alamatChat()
+    ? `Chat tidak tersambung. ${PESAN_CHAT_BELUM_DIKONFIGURASI} Pesan baru tidak akan masuk sampai ini dibereskan.`
+    : '';
   const socketRef = useRef<ReturnType<typeof io> | null>(null);
 
   // Kehadiran yang datang lewat socket, menimpa potret dari server.
@@ -442,7 +445,9 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
   // dibutuhkan listener hanyalah id yang sedang terbuka, bukan koneksi baru;
   // ref inilah yang menyediakannya, sehingga socketnya dibuat sekali saja.
   const idTerpilihRef = useRef<string | null>(null);
-  idTerpilihRef.current = selectedSession?.id ?? null;
+  useEffect(() => {
+    idTerpilihRef.current = selectedSession?.id ?? null;
+  }, [selectedSession?.id]);
 
   // Efek untuk koneksi Socket.IO
   useEffect(() => {
@@ -456,13 +461,8 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
     // diberi tahu — bukan dibiarkan menatap inbox yang tidak pernah hidup.
     const chatUrl = alamatChat();
     if (!chatUrl) {
-      setGalatChat(
-        `Chat tidak tersambung. ${PESAN_CHAT_BELUM_DIKONFIGURASI} ` +
-          'Pesan baru tidak akan masuk sampai ini dibereskan.'
-      );
       return;
     }
-    setGalatChat('');
 
     const socket = io(chatUrl, { withCredentials: true });
     socketRef.current = socket;
@@ -713,9 +713,9 @@ export default function CS_InboxLayout({ sessions }: { sessions: SesiChat[] }) {
             adalah satu percakapan. Pesannya sendiri sudah menyatakan apa yang
             terjadi, jadi judulnya tidak menambah apa pun kecuali risiko
             berbohong. */}
-        {galatChat && (
+        {(chatTidakTersambung || galatChat) && (
             <div role="alert" className="flex-shrink-0 bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-800">
-                {galatChat}
+                {chatTidakTersambung || galatChat}
             </div>
         )}
         {/* Barisnya dideklarasikan untuk KEDUA lebar, dan semuanya

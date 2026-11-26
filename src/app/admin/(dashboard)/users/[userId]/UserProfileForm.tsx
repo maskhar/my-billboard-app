@@ -99,7 +99,7 @@ export default function UserProfileForm({ user }: { user: PenggunaUntukForm }) {
     const roleChanged = userAccount.role !== user.role;
 
     const updateAccount = async () => {
-      const data: any = {
+      const data = {
         username: userAccount.username,
         whatsapp: userAccount.whatsapp,
       };

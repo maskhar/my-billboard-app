@@ -49,6 +49,8 @@ yarn-error.log*
 # di akar membuat `chat-server/.env.example` tetap terabaikan — dan berkas contoh
 # yang tidak pernah masuk Git adalah berkas yang tidak pernah dibaca siapa pun.
 !**/.env.example
+!/.env.production.example
+!/.env.development.example
 
 # Database
 prisma/dev.db

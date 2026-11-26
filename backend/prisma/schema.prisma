@@ -21,6 +21,19 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum Role {
+  USER
+  ADMIN
+  SUPER_ADMIN
+  OPERATOR
+  CS
+}
+
+enum AuthProvider {
+  EMAIL
+  GOOGLE
+}
+
 // 1. MODEL USER
 model User {
   id            String    @id @default(cuid())
@@ -29,7 +42,7 @@ model User {
   password      String?   
   image         String?   
   
-  role          String    @default("USER") // USER, ADMIN, SUPER_ADMIN, OPERATOR
+  role          Role      @default(USER)
   
   whatsapp      String?
   companyName   String?
@@ -40,16 +53,17 @@ model User {
   ktpAddress    String?
   officeAddress String?
   username      String?   @unique
+  xenditCustomerId String? @unique
   
   // === FITUR BARU ===
-  authProvider  String    @default("EMAIL") // "EMAIL" atau "GOOGLE"
+  authProvider  AuthProvider @default(EMAIL)
   isVerified    Boolean   @default(false)
   
-  otpCode       String?   // Kode rahasia sementara
-  otpExpires    DateTime?
   // ==================
   
   createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt @default(now())
+  sessionVersion Int     @default(0)
   
   bookings          Booking[] 
   createdBillboards Billboard[] @relation("CreatedBy")

@@ -1,11 +1,11 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { CldUploadWidget, type CloudinaryUploadWidgetResults } from 'next-cloudinary';
 // `Image as ImageIcon` dibuang dari impor: ia tidak dirender di satu tempat pun
 // di berkas ini.
 import { Trash, Loader2, UploadCloud, Server, Cloud, CloudOff } from 'lucide-react';
-import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
+import { bacaJawaban } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
 
 // APA YANG DITUTUP DI SINI: menekan tab CDN MENJATUHKAN SELURUH FORM.
@@ -57,13 +57,9 @@ interface ImageUploadProps {
 export default function ImageUpload({ value, onChange, label = "Upload Gambar" }: ImageUploadProps) {
     const toast = useToast();
     const [loading, setLoading] = useState(false);
-    const [mounted, setMounted] = useState(false);
     
     // STATE PILIHAN MODE: 'LOCAL' atau 'CLOUD'
     const [storageMode, setStorageMode] = useState<'LOCAL' | 'CLOUD'>('LOCAL');
-
-    // Hindari hydration mismatch
-    useEffect(() => { setMounted(true); }, []);
 
     // 1. LOGIKA CLOUD (CLOUDINARY)
     //
@@ -149,7 +145,7 @@ export default function ImageUpload({ value, onChange, label = "Upload Gambar" }
         }
     };
 
-        if (!mounted) return null;
+        if (typeof window === 'undefined') return null;
 
     // JIKA TIDAK ADA GAMBAR (TAMPILAN UPLOAD)
     if (!value) {

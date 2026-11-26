@@ -1,12 +1,12 @@
 // src/components/admin/OrderActions.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { 
     CheckCircle, XCircle, Loader2, AlertTriangle, UploadCloud, Wallet, Banknote,
-    Eye, Lock, Pencil, CheckCircle2, X, Printer, Hammer, Palette, Truck, ImageOff
+    Eye, Printer, Hammer, Palette, Truck, ImageOff
 } from 'lucide-react';
 import Link from 'next/link';
 import { rupiah } from '@/lib/money';
@@ -125,8 +125,8 @@ export default function OrderActions({
   const [showDesignModal, setShowDesignModal] = useState(false); // BUAT LIHAT DESAIN USER
   const [showCatatModal, setShowCatatModal] = useState(false); // CATAT PEMBAYARAN MANUAL
 
-  const [proofData, setProofData] = useState<string>("");
-  const [installData, setInstallData] = useState<string>(""); // Data Foto Tayang
+  const [proofData, setProofData] = useState<string | null>(null);
+  const [installData, setInstallData] = useState<string | null>(null); // Data Foto Tayang
   const [nominalCatat, setNominalCatat] = useState<string>("");
   const [keteranganCatat, setKeteranganCatat] = useState<string>("");
   // Berkas sedang diunggah. Dipisah dari `loading` (yang menandai permintaan
@@ -134,10 +134,8 @@ export default function OrderActions({
   // berjalan tanpa ikut mematikan seluruh panel aksi.
   const [mengunggah, setMengunggah] = useState(false);
 
-  useEffect(() => {
-      setProofData(order.refundProof || "");
-      setInstallData(order.installationProof || "");
-  }, [order]);
+  const tautanBukti = proofData ?? order.refundProof ?? "";
+  const tautanPemasangan = installData ?? order.installationProof ?? "";
 
   const updateStatus = async (newStatus: string, extraData: DataTambahan = {}) => {
       setLoading(true);
@@ -453,11 +451,11 @@ export default function OrderActions({
 
   // 4. SELESAI TAYANG (Upload Bukti)
   const handleFinishInstall = () => {
-      if (!installData) {
+      if (!tautanPemasangan) {
           toast.galat('Wajib unggah foto bukti tayang sebelum pesanan diaktifkan.');
           return;
       }
-      updateStatus('ACTIVE', { installationProof: installData });
+      updateStatus('ACTIVE', { installationProof: tautanPemasangan });
   };
 
   // 5. SELESAIKAN REFUND (Upload Bukti Transfer)
@@ -471,7 +469,7 @@ export default function OrderActions({
   // gambar di dashboard pelanggan, dan server menolak skema lain — termasuk
   // `data:` hasil unggah berkas.
   const handleFinishRefund = async () => {
-      const bukti = proofData.trim();
+      const bukti = tautanBukti.trim();
       if (!bukti) {
           toast.galat('Wajib isi tautan bukti transfer.');
           return;
@@ -699,10 +697,10 @@ export default function OrderActions({
                                  satu untuk arahan yang tidak menutup apa-apa. */}
                              {mengunggah
                                 ? <p className="text-xs text-gray-500">Mengunggah…</p>
-                                : installData
+                                : tautanPemasangan
                                     ? (
                                         // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={installData} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/>
+                                        <img src={tautanPemasangan} alt="Pratinjau foto hasil pemasangan" className="max-h-32 mx-auto rounded shadow-sm"/>
                                       )
                                     : <><UploadCloud className="mx-auto text-indigo-300 mb-2"/><p className="text-xs text-gray-500">Upload Foto Hasil Pasang</p></>}
                         </div>
@@ -712,7 +710,7 @@ export default function OrderActions({
                             sebagai toast — sesudah tombolnya tampak menerima tekanan. */}
                         <button
                             onClick={handleFinishInstall}
-                            disabled={loading || mengunggah || !installData}
+                            disabled={loading || mengunggah || !tautanPemasangan}
                             className="w-full bg-indigo-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-indigo-700 disabled:bg-gray-300 transition"
                         >
                             Tayangkan &amp; Aktifkan
@@ -754,7 +752,7 @@ export default function OrderActions({
                             </label>
                             <input
                                 type="url"
-                                value={proofData}
+                                value={tautanBukti}
                                 onChange={(e) => setProofData(e.target.value)}
                                 placeholder="https://drive.google.com/..."
                                 className="w-full border rounded-md p-2 text-xs"
@@ -766,7 +764,7 @@ export default function OrderActions({
 
                         <button
                             onClick={handleFinishRefund}
-                            disabled={!proofData.trim()}
+                            disabled={!tautanBukti.trim()}
                             className="w-full bg-green-600 text-white py-2 rounded-lg font-bold text-xs shadow hover:bg-green-700 disabled:bg-gray-300 transition"
                         >
                             Tandai Refund Selesai

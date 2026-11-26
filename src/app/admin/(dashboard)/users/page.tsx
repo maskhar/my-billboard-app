@@ -192,6 +192,7 @@ export default async function ManageUsersPage({
         kueriAktif={kueriAktif}
         total={totalPengguna}
         bolehEkspor={bolehEkspor}
+        bolehBuatSuperAdmin={session?.user?.role === 'SUPER_ADMIN'}
       />
 
       <NavigasiHalaman

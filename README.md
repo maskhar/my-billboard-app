@@ -30,6 +30,25 @@ satu-satunya yang menjaga penjualan ganda.
 
 ---
 
+## Berkas environment
+
+| Berkas | Dipakai oleh | Status |
+| --- | --- | --- |
+| `.env` | `docker-compose.yml`, `compose.app.yml`, dan `npm run dev` lokal | Rahasia lokal, jangan commit. |
+| `.env.example` | Contoh `.env` untuk pengembangan lokal | Aman untuk Git; samakan `POSTGRES_*` dengan `DATABASE_URL`. |
+| `.env.production.local` | `compose.production.yml --profile prod` | Rahasia production, tidak dipakai stack lokal. |
+| `.env.production.example` | Contoh `.env.production.local` | Aman untuk Git. |
+| `.env.development.local` | `compose.production.yml --profile dev` (jika dibuat) | Rahasia deployment dev, terpisah dari `.env`. |
+| `.env.development.example` | Contoh `.env.development.local` | Aman untuk Git; build-nya tetap `NODE_ENV=production`. |
+| `chat-server/.env` | Proses chat saja (jika dijalankan) | Rahasia terpisah; lihat `chat-server/.env.example`. |
+
+`compose.app.yml` menimpa beberapa nilai dari `.env` untuk jaringan Docker.
+`DATABASE_URL` di contoh lokal memakai port host `5434`; untuk database
+lokal yang sudah ada, cek port sebenarnya dengan `docker compose ps` (misalnya
+`15436`) dan jangan mengganti kredensial atau volume database yang sudah aktif.
+Template tidak pernah dibaca otomatis sebagai kredensial aplikasi.
+
+---
 ## Menjalankan pertama kali
 
 ```bash

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM node:22-bookworm-slim AS dependencies
+FROM node:24.22.1-bookworm-slim AS dependencies
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 RUN apt-get update \
@@ -17,11 +17,13 @@ EXPOSE 3000
 CMD ["npx", "next", "dev", "-H", "0.0.0.0", "-p", "3000"]
 
 FROM dependencies AS builder
+ARG NEXT_PUBLIC_API_URL=/backend
 ARG NEXT_PUBLIC_CHAT_ENABLED=false
 ARG NEXT_PUBLIC_CHAT_URL=
 ARG NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=
 ARG NEXT_PUBLIC_CLOUDINARY_PRESET=
 ENV NODE_ENV=production \
+    NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL \
     NEXT_PUBLIC_CHAT_ENABLED=$NEXT_PUBLIC_CHAT_ENABLED \
     NEXT_PUBLIC_CHAT_URL=$NEXT_PUBLIC_CHAT_URL \
     NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME=$NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME \
@@ -37,7 +39,7 @@ FROM dependencies AS migrator
 COPY . .
 RUN npx prisma generate
 
-FROM node:22-bookworm-slim AS production
+FROM node:24.22.1-bookworm-slim AS production
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \

@@ -2,7 +2,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { CreditCard, UploadCloud, MapPin, Clock, Eye, Trash2, AlertTriangle, CornerUpLeft, Banknote, Landmark, CheckCircle2, ExternalLink, X, FileText, Image as ImageIcon, ImageOff, Loader2 } from 'lucide-react';
+import { UploadCloud, MapPin, Clock, Eye, AlertTriangle, Landmark, CheckCircle2, ExternalLink, Image as ImageIcon, ImageOff, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 // Keempat modal di berkas ini dulu `<div className="fixed inset-0">` biasa —
@@ -30,7 +30,6 @@ import { angkaRupiah } from '@/lib/money';
 import { labelPesanan } from '@/lib/nomor-pesanan';
 import { alasanPenolakan, bacaJawaban } from '@/lib/baca-jawaban';
 import { useToast } from '@/components/ui/Toast';
-import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 
 /**
  * Bentuk pesanan yang BOLEH menyeberang ke browser.
@@ -116,7 +115,6 @@ export type PesananUntukKartu = {
 export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const router = useRouter();
   const toast = useToast();
-  const konfirmasi = useKonfirmasi();
 
   // STATE UI & LOGIC
   const [loading, setLoading] = useState(false);
@@ -129,8 +127,13 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   const [linkInput, setLinkInput] = useState("");
 
   // State Timer
-  const [timeLeft, setTimeLeft] = useState("");
-  const [isExpired, setIsExpired] = useState(false);
+  const [waktuSekarang, setWaktuSekarang] = useState<number | null>(null);
+  const deadline = order.expiresAt ? new Date(order.expiresAt).getTime() : null;
+  const sisaMs = deadline === null || waktuSekarang === null ? null : deadline - waktuSekarang;
+  const isExpired = sisaMs !== null && sisaMs <= 0;
+  const timeLeft = sisaMs !== null && sisaMs > 0
+    ? `${Math.floor(sisaMs / 3600000)}j ${Math.floor((sisaMs % 3600000) / 60000)}m ${Math.floor((sisaMs % 60000) / 1000)}d`
+    : '';
 
   // LOGIKA 1: TIMER HITUNG MUNDUR (Khusus Pending)
   //
@@ -150,33 +153,15 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
   // `sapuPesananKedaluwarsa` di `src/lib/transisi-status.ts`, yang dipanggil
   // dari jalur pembuatan pesanan — timer ini hanya menampilkannya.
   useEffect(() => {
-    if (order.status !== 'PENDING_PAYMENT') return;
+    if (order.status !== 'PENDING_PAYMENT' || !order.expiresAt) return;
 
     // Pesanan lama dibuat sebelum kolom `expiresAt` ada, jadi tenggatnya tidak
     // pernah tercatat. Menebaknya dari `createdAt` berarti menampilkan
     // "EXPIRED" untuk pesanan yang tidak akan dihanguskan penyapu mana pun
     // (penyapu sengaja melewati baris ber-`expiresAt` kosong). Lebih jujur
     // tidak menampilkan hitung mundur sama sekali.
-    if (!order.expiresAt) {
-        setTimeLeft("");
-        setIsExpired(false);
-        return;
-    }
-
-    const deadline = new Date(order.expiresAt).getTime();
-
     const hitung = () => {
-        const dist = deadline - new Date().getTime();
-        if (dist <= 0) {
-            setIsExpired(true);
-            setTimeLeft("EXPIRED");
-            return;
-        }
-        setIsExpired(false);
-        const h = Math.floor(dist / (3600 * 1000));
-        const m = Math.floor((dist % (3600 * 1000)) / (60 * 1000));
-        const s = Math.floor((dist % (60 * 1000)) / 1000);
-        setTimeLeft(`${h}j ${m}m ${s}d`);
+        setWaktuSekarang(Date.now());
     };
 
     // Dipanggil sekali di depan: tanpa ini layar kosong selama satu detik
@@ -423,7 +408,7 @@ export default function BookingCard({ order }: { order: PesananUntukKartu }) {
             {/* 1. KOLOM KIRI: INFO PRODUK */}
             <div className="md:col-span-2 flex gap-4">
                 {order.billboard?.mainImage ? (
-                    <img src={order.billboard.mainImage} className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100" />
+                <img src={order.billboard.mainImage} alt={order.billboard.title} className="w-24 h-24 rounded-lg object-cover bg-gray-200 border border-gray-100" />
                 ) : (
                     <div className="w-24 h-24 rounded-lg bg-gray-200 border border-gray-100 flex items-center justify-center text-gray-400 shrink-0">
                         <ImageOff size={24} />

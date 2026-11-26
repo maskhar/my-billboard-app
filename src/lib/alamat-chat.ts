@@ -52,6 +52,7 @@ function tanpaGarisMiringAkhir(nilai: string): string {
  * di tempatnya mengembalikan bug yang berkas ini ada untuk menutup.
  */
 export function alamatChat(): string | null {
+  if (process.env.NEXT_PUBLIC_CHAT_ENABLED === 'false') return null;
   const dariEnv = (process.env.NEXT_PUBLIC_CHAT_URL || '').trim();
 
   if (dariEnv) return tanpaGarisMiringAkhir(dariEnv);

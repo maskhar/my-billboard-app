@@ -197,11 +197,17 @@ export const authOptions: NextAuthOptions = {
       const authorizeExistingUser = async (existingUser: {
         id: string;
         role: string;
+        authProvider: string;
+        isVerified: boolean;
         name: string | null;
         image: string | null;
       }) => {
-        // Staf/admin wajib login lewat /admin/login.
-        if (existingUser.role !== 'USER') {
+        // Akun admin lokal tetap memerlukan password; Google hanya diizinkan
+        // untuk akun yang terdaftar dengan provider Google dan sudah verified.
+        if (
+          existingUser.role !== 'USER' &&
+          (existingUser.authProvider !== 'GOOGLE' || !existingUser.isVerified)
+        ) {
           return false;
         }
 
@@ -213,7 +219,7 @@ export const authOptions: NextAuthOptions = {
       try {
         const existingUser = await prisma.user.findUnique({
           where: { email },
-          select: { id: true, role: true, name: true, image: true },
+          select: { id: true, role: true, authProvider: true, isVerified: true, name: true, image: true },
         });
 
         if (existingUser) {
@@ -237,7 +243,7 @@ export const authOptions: NextAuthOptions = {
           if ((error as { code?: string }).code === 'P2002') {
             const racedUser = await prisma.user.findUnique({
               where: { email },
-              select: { id: true, role: true, name: true, image: true },
+              select: { id: true, role: true, authProvider: true, isVerified: true, name: true, image: true },
             });
 
             if (!racedUser) {

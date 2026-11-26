@@ -71,8 +71,8 @@ export class UsersController {
 
   @Roles(...ADMIN_ROLES)
   @Post('admin-create')
-  adminCreate(@Body() dto: AdminCreateUserDto) {
-    return this.usersService.adminCreate(dto);
+  adminCreate(@Body() dto: AdminCreateUserDto, @CurrentUser() actor: AuthUser) {
+    return this.usersService.adminCreate(dto, actor.role);
   }
 
   @Roles(...ADMIN_ROLES)

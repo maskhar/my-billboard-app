@@ -57,6 +57,7 @@ export default function UserClientPage({
     kueriAktif,
     total,
     bolehEkspor,
+    bolehBuatSuperAdmin,
 }: {
     users: BarisPengguna[];
     /** Kunci urut yang sedang berlaku menurut URL; dipakai kepala kolom. */
@@ -80,12 +81,13 @@ export default function UserClientPage({
      * tetap di route ekspor — ini hanya menentukan tombolnya digambar.
      */
     bolehEkspor: boolean;
+    bolehBuatSuperAdmin: boolean;
 }) {
     const [isModalOpen, setIsModalOpen] = useState(false);
 
     return (
         <div className="space-y-6">
-            <UserFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} />
+            <UserFormModal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} bolehBuatSuperAdmin={bolehBuatSuperAdmin} />
 
             <div className="flex justify-between items-center">
                 <div>

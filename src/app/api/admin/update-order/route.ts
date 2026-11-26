@@ -2,10 +2,9 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { bacaBodyJson } from "@/lib/body-json";
 import { amankanHtml } from "@/lib/html";
 import { judulSurat, sendEmail } from "@/lib/mail";
-import { BookingStatus, daftarNilai, sahBookingStatus } from "@/lib/enum-guard";
+import { BookingStatus } from "@/lib/enum-guard";
 import { pesanTransisiDitolak, transisiSah } from "@/lib/transisi-status";
 import { keAngka, lebihBesar, rupiah } from "@/lib/money";
 import { masihAdaSisa, mengandaikanUangMasuk, sisaTagihan, uangMasuk } from "@/lib/pembayaran";
@@ -33,14 +32,6 @@ export async function POST(req: Request) {
   const { orderId, newStatus, reason, refundProof, installationProof, isLocked } = await req.json();
 
   try {
-      const updateData: any = { 
-          status: newStatus,
-          ...(reason && { cancelReason: reason }),
-          ...(refundProof && { refundProof: refundProof }),
-          ...(installationProof && { installationProof: installationProof }),
-          ...(isLocked !== undefined && { isLocked: isLocked })
-      };
-
       const alasan = typeof reason === 'string' ? reason.trim().slice(0, 1000) : '';
 
       // Kedua kolom bukti hanya menerima URL yang layak dirender. Pemeriksaannya

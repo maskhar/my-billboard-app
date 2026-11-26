@@ -1,13 +1,12 @@
 // src/app/admin/(dashboard)/users/UserFormModal.tsx
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, UserPlus } from 'lucide-react';
 import Modal from '@/components/ui/Modal';
 import { InputField, SelectField } from '@/components/FormField';
 import { useToast } from '@/components/ui/Toast';
-import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
 import { pesanGalat } from '@/lib/pesan-galat';
 import { OPSI_ROLE, sahRolePengguna, type RolePengguna } from '@/lib/tipe-pengguna';
 
@@ -30,18 +29,16 @@ const FORM_KOSONG: {
   role: 'USER',
 };
 
-export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void; }) {
+export default function UserFormModal({ isOpen, onClose, bolehBuatSuperAdmin }: { isOpen: boolean; onClose: () => void; bolehBuatSuperAdmin: boolean; }) {
   const [formData, setFormData] = useState(FORM_KOSONG);
   const [loading, setLoading] = useState(false);
   const router = useRouter();
   const toast = useToast();
 
-  useEffect(() => {
-    // Reset form when modal is opened
-    if (isOpen) {
-      setFormData(FORM_KOSONG);
-    }
-  }, [isOpen]);
+  const handleClose = () => {
+    setFormData(FORM_KOSONG);
+    onClose();
+  };
 
   // `if (!isOpen) return null` DIHAPUS: `Modal` di bawah yang memutuskan
   // visibilitas lewat prop `terbuka`, dan `Dialog` headless UI perlu tetap
@@ -86,10 +83,10 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
           }
     
           alert('Pengguna baru berhasil dibuat!');
-          onClose(); // Close the modal on success
+          handleClose(); // Close the modal on success
           router.refresh(); // Refresh the user list page
-    } catch (error: any) {
-      alert(`Error: ${error.message}`);
+    } catch (error) {
+      alert(`Error: ${pesanGalat(error, 'Gagal membuat pengguna.')}`);
     } finally {
       setLoading(false);
     }
@@ -104,7 +101,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
     // ia baca adalah galat untuk akun yang sebenarnya berhasil dibuat.
     <Modal
       terbuka={isOpen}
-      tutup={onClose}
+      tutup={handleClose}
       bolehTutup={!loading}
       judul={<><UserPlus size={18} className="text-red-600"/> Tambah Pengguna Baru</>}
       lebar="max-w-2xl"
@@ -141,7 +138,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
             />
             <div className="md:col-span-2">
                 <SelectField label="Role Pengguna" id="role" value={formData.role} onChange={handleRoleChange} required>
-                    {OPSI_ROLE.map((opsi) => (
+                    {OPSI_ROLE.filter((opsi) => bolehBuatSuperAdmin || opsi.nilai !== 'SUPER_ADMIN').map((opsi) => (
                       <option key={opsi.nilai} value={opsi.nilai}>
                         {opsi.label}
                       </option>
@@ -149,7 +146,7 @@ export default function UserFormModal({ isOpen, onClose }: { isOpen: boolean; on
                 </SelectField>
             </div>
             <div className="md:col-span-2 text-right mt-4">
-            <button type="button" onClick={onClose} disabled={loading} className="mr-2 py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+            <button type="button" onClick={handleClose} disabled={loading} className="mr-2 py-2 px-4 border border-gray-300 rounded-md text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
                 Batal
             </button>
             <button type="submit" disabled={loading} className="inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:bg-gray-400">

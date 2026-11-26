@@ -11,6 +11,7 @@ const eslintConfig = defineConfig([
     ".next/**",
     "out/**",
     "build/**",
+    "backend/dist/**",
     "next-env.d.ts",
     // `.claude/worktrees/` berisi SALINAN LENGKAP repo ini. Tanpa pola di bawah
     // `eslint` tanpa argumen melintasinya dan melaporkan setiap temuan dua kali

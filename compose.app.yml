@@ -2,6 +2,7 @@ services:
   backend:
     container_name: my-billboard-backend
     image: my-billboard-backend:local
+    command: [node, dist/src/main.js]
     build:
       context: .
       dockerfile: backend/Dockerfile

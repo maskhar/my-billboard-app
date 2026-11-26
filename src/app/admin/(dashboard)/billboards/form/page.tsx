@@ -5,11 +5,10 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 // PERBAIKAN: Menambahkan 'Plus' di sini
-import { ArrowLeft, Save, Loader2, Link as LinkIcon, Wand2, Ruler, Lightbulb, ExternalLink, X, History, Clock, RotateCcw, Plus } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Ruler, ExternalLink, X, History, RotateCcw } from 'lucide-react';
 import ImageUpload from '@/components/ImageUpload';
 import dynamic from 'next/dynamic';
 import { useToast } from '@/components/ui/Toast';
-import { useKonfirmasi } from '@/components/ui/Konfirmasi';
 import { angkaRupiah } from '@/lib/money';
 import { tanggalRingkas } from '@/lib/tanggal';
 import { sahStatusBillboard, sahStatusPublikasi } from '@/lib/tipe-billboard';
@@ -25,7 +24,7 @@ type KolomTeksForm = 'title' | 'slug' | 'sku' | 'address' | 'type' | 'status' | 
 // `JSON.parse("")` -> "Unexpected end of JSON input".
 const LocationPicker = dynamic(() => import("@/components/LocationPicker"), {ssr:false,loading:()=>('<div className="flex h-[360px] w-full items-center justify-center rounded-xl border border-gray-200 bg-gray-50 text-gray-500">Memuat Peta...</div>')});
 
-function toArray(value: unknown): any[] {
+function toArray(value: unknown): unknown[] {
   if (Array.isArray(value)) return value;
   if (typeof value === 'string') {
     try {
@@ -56,7 +55,6 @@ export default function BillboardFormPage() {
   const { data: session } = useSession();
   const billboardId = searchParams.get('id');
   const toast = useToast();
-  const konfirmasi = useKonfirmasi();
 
   const [loading, setLoading] = useState(false);
   // Nilai awalnya diturunkan dari `billboardId`, bukan disetel lewat
@@ -90,7 +88,7 @@ export default function BillboardFormPage() {
   // Panel riwayat memuat sampai sepuluh tombol "Pulihkan"; satu boolean akan
   // membuat kesepuluhnya berputar sekaligus, dan admin tidak tahu baris mana
   // yang sedang ditunggunya.
-  const [memuatPratinjau, setMemuatPratinjau] = useState<string | null>(null);
+  const [memuatPratinjau] = useState<string | null>(null);
 
   // DEFAULT DATA CHECKLIST
   const defaultAdminOptions: OpsiFasilitas[] = [
@@ -118,7 +116,6 @@ export default function BillboardFormPage() {
 
   useEffect(() => {
       if (billboardId) {
-          setFetching(true);
           fetch(`/api/proxy/billboards/${billboardId}/detail`)
             .then(async (res) => {
                 if (!res.ok) {
@@ -130,9 +127,11 @@ export default function BillboardFormPage() {
             })
             .then(data => {
                 if(data && data.id) {
-                    const parsedGallery = toArray(data.gallery);
+                    const parsedGallery = toArray(data.gallery).filter((item): item is string => typeof item === 'string');
                     const dbIncludes = toArray(data.includes);
-                    const parsedSpecs = toArray(data.specs);
+                    const parsedSpecs = toArray(data.specs).filter((item): item is { label: string; value: string } =>
+                        typeof item === 'object' && item !== null && 'label' in item && typeof item.label === 'string' &&
+                        'value' in item && typeof item.value === 'string');
 
                     let h = '', w = '', sides='1', mat='', orient='Horizontal', light='Frontlight';
 
@@ -212,7 +211,7 @@ export default function BillboardFormPage() {
                 }
                 setFetching(false);
             })
-            .catch((err: any) => { alert("Gagal memuat data billboard: " + (err?.message || "Error tidak diketahui")); setFetching(false); });
+            .catch((err: unknown) => { alert("Gagal memuat data billboard: " + (err instanceof Error ? err.message : "Error tidak diketahui")); setFetching(false); });
       }
       // `toast` ikut di sini karena dipakai di atas. Nilainya dimemoisasi di
       // `ToastProvider`, jadi ia tidak pernah memicu effect ini berjalan ulang
@@ -223,7 +222,7 @@ export default function BillboardFormPage() {
       // `fetching` menjadi `true` lebih dulu, di dalam penangan klik — bukan di
       // sini — karena `setState` sinkron di dalam effect memicu render berantai
       // (react-hooks/set-state-in-effect).
-  }, [billboardId, pemuatanKe, toast]);
+  }, [billboardId, pemuatanKe]);
 
   const generateSlug = () => {
       if (!form.title) {
@@ -268,9 +267,9 @@ export default function BillboardFormPage() {
       setForm((p) => ({ ...p, gallery: [...p.gallery, url] }));
   };
   
-  const removeGallery = (index: number) => setForm((p:any) => ({ ...p, gallery: p.gallery.filter((_:any, i:number) => i !== index) }));
+  const removeGallery = (index: number) => setForm((p) => ({ ...p, gallery: p.gallery.filter((_, i) => i !== index) }));
   
-  const handleRollback = async (historyItem: any) => {
+  const handleRollback = async (historyItem: BarisRiwayatBillboard) => {
       if(!confirm("Rollback data?")) return;
       if(!session?.user?.email) return alert("Gagal: sesi admin tidak ditemukan. Silakan login ulang.");
       setLoading(true);
@@ -280,7 +279,7 @@ export default function BillboardFormPage() {
         body: JSON.stringify({ historyId: historyItem.id, adminEmail: session.user.email }),
       });
       setLoading(false);
-      if (res.ok) window.location.reload();
+      if (res.ok) { setFetching(true); setPemuatanKe((value) => value + 1); }
       else {
         const data = await res.json().catch(() => null);
         alert("Gagal rollback: " + (Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`)));
@@ -305,8 +304,8 @@ export default function BillboardFormPage() {
           { label: "Jenis Penerangan", value: form.lighting },
           { label: "Material", value: form.material }
       ]);
-      const includesList = form.adminOptions.filter((o:any)=>o.included).map((o:any)=>o.name);
-      const excludesList = form.adminOptions.filter((o:any)=>!o.included).map((o:any)=>o.name);
+      const includesList = form.adminOptions.filter((o)=>o.included).map((o)=>o.name);
+      const excludesList = form.adminOptions.filter((o)=>!o.included).map((o)=>o.name);
 
       const payload = { 
           ...form, id: billboardId, adminEmail: session.user.email,
@@ -323,13 +322,13 @@ export default function BillboardFormPage() {
               headers: {'Content-Type': 'application/json'}, 
               body: JSON.stringify(payload),
           });
-          if(res.ok) { alert("Sukses!"); if(billboardId) window.location.reload(); else router.push('/admin/billboards'); }
+          if(res.ok) { alert("Sukses!"); if(billboardId) { setFetching(true); setPemuatanKe((value) => value + 1); } else router.push('/admin/billboards'); }
           else { 
             const data = await res.json().catch(() => null);
             const msg = Array.isArray(data?.message) ? data.message.join(', ') : (data?.message || `Error tidak diketahui (HTTP ${res.status})`);
             alert("Gagal: " + msg); 
           }
-      } catch(err) { alert("Error server. Pastikan backend sedang berjalan."); }
+      } catch { alert("Error server. Pastikan backend sedang berjalan."); }
       setLoading(false);
   }
 
@@ -424,7 +423,7 @@ export default function BillboardFormPage() {
                              <label className="text-xs font-bold text-gray-500 uppercase mb-1 block">Lokasi Titik &mdash; Klik Peta atau Geser Marker</label>
                              <LocationPicker
                                 value={{ lat: toCoord(form.lat, DEFAULT_LAT), lng: toCoord(form.lng, DEFAULT_LNG) }}
-                                onChange={(loc:{ lat:number; lng:number }) => setForm((p:any) => ({ ...p, lat: loc.lat, lng: loc.lng }))}
+                                onChange={(loc:{ lat:number; lng:number }) => setForm((p) => ({ ...p, lat: loc.lat, lng: loc.lng }))}
                              />
                          </div>
                                                   <div className="mt-4 pt-4 border-t">

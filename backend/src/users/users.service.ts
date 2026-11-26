@@ -115,7 +115,7 @@ export class UsersService {
     }
   }
 
-  async adminCreate(dto: AdminCreateUserDto) {
+  async adminCreate(dto: AdminCreateUserDto, actorRole: string | null) {
     const { name, email, password, role } = dto;
 
     if (!name || !email || !password || !role) {
@@ -124,6 +124,9 @@ export class UsersService {
 
     if (!USER_ROLES.includes(role as UserRole)) {
       throw new BadRequestException('Role tidak valid.');
+    }
+    if (role === UserRole.SUPER_ADMIN && actorRole !== UserRole.SUPER_ADMIN) {
+      throw new ForbiddenException('Hanya Super Admin yang dapat membuat Super Admin.');
     }
 
     const existing = await this.prisma.user.findUnique({
@@ -262,7 +265,7 @@ export class UsersService {
     try {
       const updatedUser = await this.prisma.user.update({
         where: { id: targetUserId },
-        data: { role: newRole },
+        data: { role: newRole as UserRole },
       });
 
       const { password: _password, ...safeUser } = updatedUser;

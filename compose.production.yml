@@ -13,6 +13,7 @@ x-prod-build: &prod-build
   context: .
   target: production
   args:
+    NEXT_PUBLIC_API_URL: ${PROD_NEXT_PUBLIC_API_URL:-/backend}
     NEXT_PUBLIC_CHAT_ENABLED: ${PROD_NEXT_PUBLIC_CHAT_ENABLED:-false}
     NEXT_PUBLIC_CHAT_URL: ${PROD_NEXT_PUBLIC_CHAT_URL:-}
     NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME: ${PROD_NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME:-}
@@ -57,11 +58,41 @@ services:
       POSTGRES_USER: null
       POSTGRES_PASSWORD: null
       POSTGRES_DB: null
+      NEXT_PUBLIC_API_URL: /backend
+      BACKEND_API_URL: http://billboard-backend-prod:4001
+      PRIVATE_UPLOAD_STORAGE_ROOT: /app/uploads/private/designs
     depends_on:
       billboard-db-prod:
         condition: service_healthy
     volumes: [billboard-prod-uploads:/app/uploads/private/designs]
-    networks: [billboard-prod-db, billboard-proxy]
+    networks: [billboard-prod-db, billboard-proxy, billboard-egress]
+
+  billboard-backend-prod:
+    image: billboard-backend:prod-${BILLBOARD_IMAGE_TAG:-local}
+    profiles: [prod]
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    env_file: [.env.production.local]
+    environment:
+      POSTGRES_USER: null
+      POSTGRES_PASSWORD: null
+      POSTGRES_DB: null
+      FRONTEND_URL: https://billboard.uteroindonesia.com
+      NEXTAUTH_URL: https://billboard.uteroindonesia.com
+    expose: ["4001"]
+    depends_on:
+      billboard-db-prod:
+        condition: service_healthy
+    volumes: [billboard-prod-backend-uploads:/app/backend/public/uploads/designs]
+    networks: [billboard-prod-db, billboard-proxy, billboard-egress]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4001/api/billboards').then(r=>process.exit(r.status<500?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   billboard-migrate-prod:
     image: billboard-app:migrate-prod-${BILLBOARD_IMAGE_TAG:-local}
@@ -147,10 +178,12 @@ services:
       - maskhar-network
       - utero-id-network
       - uteroindonesia-network
+      - n8n-host_automation-network
 
 volumes:
   billboard-prod-db:
   billboard-prod-uploads:
+  billboard-prod-backend-uploads:
   billboard-dev-db:
   billboard-dev-uploads:
 
@@ -165,11 +198,16 @@ networks:
     ipam:
       config:
         - subnet: 10.253.2.0/24
+  billboard-egress:
+    driver: bridge
   billboard-proxy:
     internal: true
     ipam:
       config:
         - subnet: 10.253.3.0/24
+  n8n-host_automation-network:
+    external: true
+    name: n8n-host_automation-network
   carubra-network:
     external: true
     name: carubra-network

@@ -18,7 +18,7 @@ const produksi = process.env.NODE_ENV === 'production';
 function asalChat(): string[] {
   const mentah = (process.env.NEXT_PUBLIC_CHAT_URL || '').trim().replace(/\/+$/, '');
   if (!mentah) {
-    if (produksi) {
+    if (produksi && process.env.NEXT_PUBLIC_CHAT_ENABLED !== 'false') {
       // Dicatat, bukan didiamkan. Tanpa baris ini kegagalannya baru terlihat
       // sebagai "chat tidak jalan di produksi" berhari-hari kemudian, dengan
       // konsol peramban pengguna sebagai satu-satunya petunjuk. `alamatChat()`
@@ -99,6 +99,7 @@ function kebijakanKonten(): string {
     'script-src': [
       "'self'",
       "'unsafe-inline'",
+      'https://static.cloudflareinsights.com',
       ...(produksi ? [] : ["'unsafe-eval'"]),
     ],
     'style-src': ["'self'", "'unsafe-inline'"],
@@ -108,6 +109,7 @@ function kebijakanKonten(): string {
       "'self'",
       'https://checkout-ui-gateway.xendit.co',
       'https://log.xendit.co',
+      'https://cloudflareinsights.com',
       ...chat,
     ],
     'frame-src': ["'self'", 'https:'],

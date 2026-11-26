@@ -5,8 +5,11 @@ import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { Save, Loader2, Bot, Key, Globe, Map, Trash2 } from 'lucide-react';
 
-function extractErrorMessage(payload: any): string {
-  const message = payload?.message ?? payload?.error;
+function extractErrorMessage(payload: unknown): string {
+  const data = payload !== null && typeof payload === 'object'
+    ? payload as Record<string, unknown>
+    : {};
+  const message = data.message ?? data.error;
   if (Array.isArray(message)) return message.join(', ');
   if (typeof message === 'string' && message.trim()) return message;
   return 'Terjadi kesalahan. Silakan coba lagi.';

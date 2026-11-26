@@ -175,7 +175,7 @@ export default async function Home({ searchParams: searchParamsProp }: Props) {
                 )}
              </div>
         </div>
-        <ChatWidget />
+        {process.env.NEXT_PUBLIC_CHAT_ENABLED !== 'false' && <ChatWidget />}
       </div>
     </main>
   );

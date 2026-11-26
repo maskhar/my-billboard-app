@@ -1,10 +1,6 @@
-export enum UserRole {
-  USER = 'USER',
-  OPERATOR = 'OPERATOR',
-  CS = 'CS',
-  ADMIN = 'ADMIN',
-  SUPER_ADMIN = 'SUPER_ADMIN',
-}
+import { Role as UserRole } from '@prisma/client';
+
+export { UserRole };
 
 export const USER_ROLES = Object.values(UserRole);
 

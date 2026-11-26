@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS build
+FROM node:24.22.1-bookworm-slim AS build
 WORKDIR /app/backend
 ENV NODE_ENV=development
 RUN apt-get update \
@@ -11,7 +11,7 @@ COPY backend/ ./
 RUN PRISMA_GENERATE_SKIP_AUTOINSTALL=1 npx prisma generate --schema=prisma/schema.prisma \
     && npm run build
 
-FROM node:22-bookworm-slim AS runtime
+FROM node:24.22.1-bookworm-slim AS runtime
 WORKDIR /app/backend
 ENV NODE_ENV=production
 RUN apt-get update \
@@ -22,5 +22,5 @@ COPY --from=build /app/backend/node_modules ./node_modules
 COPY --from=build /app/backend/dist ./dist
 COPY --from=build /app/backend/prisma ./prisma
 EXPOSE 4001
-CMD ["node", "dist/main.js"]
+CMD ["node", "dist/src/main.js"]
 
