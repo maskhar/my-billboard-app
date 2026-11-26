@@ -78,6 +78,15 @@ export class UsersService {
     }
   }
 
+  async updateProfileImage(userId: string, image: string) {
+    try {
+      await this.prisma.user.update({ where: { id: userId }, data: { image } });
+    } catch (error) {
+      console.error('Update profile image error:', error);
+      throw new InternalServerErrorException('Foto profil gagal disimpan.');
+    }
+  }
+
   async changePassword(userId: string, changePasswordDto: ChangePasswordDto) {
     const { currentPassword, newPassword } = changePasswordDto;
 

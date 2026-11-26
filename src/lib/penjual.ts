@@ -37,7 +37,7 @@ export const NAMA_PENJUAL = 'Utero Cloud';
 export const BADAN_USAHA_PENJUAL = 'Utero Indonesia';
 
 /** Alamat kantor, sebagaimana tertulis di invoice pelanggan. */
-export const ALAMAT_PENJUAL = 'Jl. Soekarno Hatta No. 1, Malang';
+export const ALAMAT_PENJUAL = 'Jl. Bantaran 1 No.25, Tulusrejo, Kec. Lowokwaru, Kota Malang, Jawa Timur 65141';
 
 /** Alamat surat yang boleh dihubungi pelanggan. */
 export const EMAIL_PENJUAL = 'support@utero.cloud';

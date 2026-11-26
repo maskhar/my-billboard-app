@@ -195,7 +195,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="max-w-4xl space-y-8 pb-20">
+    <div className="w-full max-w-7xl space-y-8 pb-20">
       <div>
         <h1 className="text-2xl font-bold text-gray-800">Pengaturan System</h1>
         <p className="text-gray-500 text-sm">Pusat kendali konfigurasi API dan SEO.</p>

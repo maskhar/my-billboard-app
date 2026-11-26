@@ -1,10 +1,11 @@
 // src/app/dashboard/settings/AccountSettingsForm.tsx
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
-import { Loader2 } from 'lucide-react';
+import Image from 'next/image';
+import { Camera, Loader2 } from 'lucide-react';
 import { InputField } from '@/components/FormField';
 import { useToast } from '@/components/ui/Toast';
 import { bacaJawaban, alasanPenolakan } from '@/lib/baca-jawaban';
@@ -19,6 +20,7 @@ type PlainUser = {
   name: string;
   whatsapp: string;
   email: string;
+  image: string | null;
 };
 
 export default function AccountSettingsForm({ user }: { user: PlainUser }) {
@@ -34,6 +36,9 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
     });
     const [loading, setLoading] = useState(false);
     const [passwordLoading, setPasswordLoading] = useState(false);
+    const [profileImage, setProfileImage] = useState(user.image);
+    const [imageLoading, setImageLoading] = useState(false);
+    const imageInput = useRef<HTMLInputElement>(null);
     const router = useRouter();
     const { data: session, update } = useSession();
 
@@ -43,6 +48,39 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
 
     const handlePasswordChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         setPasswordData({ ...passwordData, [e.target.name]: e.target.value });
+    };
+
+    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        const file = e.target.files?.[0];
+        e.target.value = '';
+        if (!file) return;
+        if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) || file.size > 5 * 1024 * 1024) {
+            toast.galat('Pilih foto JPG, PNG, atau WebP maksimal 5 MB.');
+            return;
+        }
+
+        setImageLoading(true);
+        try {
+            const formData = new FormData();
+            formData.append('file', file);
+            const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+            const res = await fetch(`${apiUrl}/api/users/${user.id}/profile-image`, {
+                method: 'POST',
+                body: formData,
+                credentials: 'include',
+            });
+            const jawaban = await bacaJawaban(res);
+            if (!res.ok || !jawaban.url) throw new Error(alasanPenolakan(res, jawaban));
+
+            setProfileImage(jawaban.url);
+            await update({ ...session, user: { ...session?.user, image: jawaban.url } });
+            router.refresh();
+            toast.sukses('Foto profil berhasil diperbarui.');
+        } catch (error) {
+            toast.galat(pesanGalat(error, 'Gagal mengunggah foto profil.'));
+        } finally {
+            setImageLoading(false);
+        }
     };
 
     const handleProfileSubmit = async (e: React.FormEvent) => {
@@ -114,6 +152,19 @@ export default function AccountSettingsForm({ user }: { user: PlainUser }) {
             {/* Form Profil */}
             <div className="bg-white p-6 rounded-xl shadow-sm border">
                 <h2 className="text-lg font-semibold mb-4">Informasi Personal</h2>
+                <div className="mb-6 flex flex-wrap items-center gap-4">
+                    <div className="relative flex h-20 w-20 items-center justify-center overflow-hidden rounded-full bg-gray-100 text-2xl font-bold text-gray-600">
+                        {profileImage ? <Image src={profileImage} alt="Foto profil" fill sizes="80px" unoptimized className="object-cover" /> : user.name.charAt(0).toUpperCase()}
+                    </div>
+                    <div>
+                        <input ref={imageInput} type="file" accept="image/jpeg,image/png,image/webp" onChange={handleImageUpload} className="sr-only" aria-label="Pilih foto profil" />
+                        <button type="button" onClick={() => imageInput.current?.click()} disabled={imageLoading} className="inline-flex min-h-11 items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-semibold text-gray-800 hover:bg-gray-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero disabled:opacity-60">
+                            {imageLoading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                            {imageLoading ? 'Mengunggah...' : 'Upload foto profil'}
+                        </button>
+                        <p className="mt-1 text-xs text-gray-500">JPG, PNG, atau WebP. Maksimal 5 MB.</p>
+                    </div>
+                </div>
                 <form onSubmit={handleProfileSubmit} className="space-y-4">
                     <InputField label="Nama Lengkap" id="name" value={profileData.name} onChange={handleProfileChange} required />
                     {/*

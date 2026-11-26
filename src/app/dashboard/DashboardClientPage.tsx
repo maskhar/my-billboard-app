@@ -5,6 +5,7 @@ import DashboardLayout from './DashboardLayout'; // Impor layout baru
 import BookingCard, { type PesananUntukKartu } from '@/components/BookingCard';
 import { User, Wallet, Briefcase, History } from 'lucide-react';
 import { rupiahSingkat } from '@/lib/money';
+import Image from 'next/image';
 
 /**
  * Hanya bagian sesi yang benar-benar dipakai kartu profil. Objek sesi NextAuth
@@ -14,6 +15,7 @@ type SesiUntukDashboard = {
   user?: {
     name?: string | null;
     email?: string | null;
+    image?: string | null;
   } | null;
 };
 
@@ -51,9 +53,9 @@ export default function DashboardClientPage({
 
   return (
     <DashboardLayout>
-      <div className="grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6 md:gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-12 gap-6 md:gap-8">
 
-        <div className="md:col-span-2 lg:col-span-3">
+        <div className="md:col-span-8">
            <OrderTabs
               activeOrders={activeOrders}
               historyOrders={historyOrders}
@@ -63,7 +65,7 @@ export default function DashboardClientPage({
            />
         </div>
 
-        <div className="md:col-span-1 lg:col-span-1">
+        <div className="md:col-span-4">
            <ProfileCard
               session={session}
               activeOrderCount={jumlahAktif}
@@ -89,13 +91,17 @@ const ProfileCard = ({ session, activeOrderCount, totalSpent }: ProfileCardProps
   return (
     <div className="bg-white p-6 rounded-2xl shadow-sm border border-gray-100 sticky top-24">
       <div className="flex items-center gap-4 mb-6">
-        <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center text-2xl font-bold text-white shadow-md flex-shrink-0">
-            {session.user?.name?.charAt(0).toUpperCase()}
+        <div className="relative w-16 h-16 rounded-full bg-gradient-to-tr from-gray-700 to-gray-900 flex items-center justify-center text-2xl font-bold text-white shadow-md flex-shrink-0 overflow-hidden">
+            {session.user?.image ? (
+              <Image src={session.user.image} alt="Foto profil" fill sizes="64px" unoptimized className="object-cover" />
+            ) : (
+              session.user?.name?.charAt(0).toUpperCase()
+            )}
         </div>
-        <div className="min-w-0">
-            <h1 className="text-xl font-bold text-gray-800 truncate">{session.user?.name}</h1>
-            <p className="text-gray-500 text-sm flex items-center gap-1 truncate">
-                <User size={12}/> {session.user?.email}
+        <div className="min-w-0 flex-1">
+            <h1 className="text-lg font-bold text-gray-800 break-words leading-tight">{session.user?.name}</h1>
+            <p className="text-gray-500 text-sm flex items-start gap-1 break-all mt-1">
+                <User size={12} className="mt-1 flex-shrink-0"/> <span>{session.user?.email}</span>
             </p>
         </div>
       </div>

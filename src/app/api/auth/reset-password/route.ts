@@ -96,7 +96,7 @@ export async function POST(req: Request) {
         userId: true,
         expiresAt: true,
         usedAt: true,
-        user: { select: { email: true, name: true, password: true } },
+        user: { select: { email: true, name: true, password: true, authProvider: true, isVerified: true } },
       },
     });
 
@@ -111,10 +111,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ message: PESAN_TOKEN_TIDAK_BERLAKU }, { status: 400 });
     }
 
-    // Akun yang kehilangan sandinya di antara penerbitan dan penukaran (mis.
-    // diubah admin menjadi akun Google) tidak ditulisi sandi baru lewat jalur
-    // ini. Menulisnya akan MEMBUAT sandi pada akun yang sengaja tidak punya.
-    if (!baris.user.password) {
+    if (!baris.user.password && (baris.user.authProvider !== 'GOOGLE' || !baris.user.isVerified)) {
       return NextResponse.json({ message: PESAN_TOKEN_TIDAK_BERLAKU }, { status: 400 });
     }
 
@@ -125,7 +122,7 @@ export async function POST(req: Request) {
     //
     // Diperiksa SEBELUM token ditandai terpakai, supaya ia masih bisa mencoba
     // sandi lain dengan tautan yang sama.
-    if (await bcrypt.compare(sandiBaru.nilai, baris.user.password)) {
+    if (baris.user.password && await bcrypt.compare(sandiBaru.nilai, baris.user.password)) {
       return NextResponse.json(
         { message: 'Sandi baru harus berbeda dari sandi sebelumnya.' },
         { status: 400 }

@@ -69,7 +69,7 @@ const JENDELA_RESET_MS = 60 * 60 * 1000;
 // terdaftar" maupun "jika terdaftar" dengan nada mencurigakan — ia menyatakan
 // apa yang dilakukan sistem, dan itu benar pada kedua cabang.
 const PESAN_TERKIRIM =
-  'Bila alamat itu terdaftar dan memakai sandi, tautan reset sudah dikirim. ' +
+  'Bila alamat itu terdaftar dan memenuhi syarat, tautan pengaturan sandi sudah dikirim. ' +
   'Periksa kotak masuk Anda, termasuk folder spam.';
 
 export async function POST(req: Request) {
@@ -141,15 +141,12 @@ export async function POST(req: Request) {
       // seluruh baris — termasuk `password`, `ktp`, `npwp`, dan
       // `xenditCustomerId` — ke memori pada SETIAP permintaan, juga yang
       // alamatnya tidak terdaftar sama sekali.
-      select: { id: true, name: true, email: true, password: true },
+      select: { id: true, name: true, email: true, password: true, authProvider: true, isVerified: true },
     });
 
-    // Akun tanpa sandi (mendaftar lewat Google) tidak diberi tautan, dan
-    // jawabannya tetap sama. Menerbitkan token untuk akun seperti itu berarti
-    // membuat jalur masuk berbasis sandi pada akun yang sengaja tidak punya
-    // sandi — dan pemiliknya tidak pernah memintanya. Yang benar bagi dia adalah
-    // tombol "Masuk dengan Google" yang sudah ada di halaman login.
-    if (user && user.password) {
+    // Pemilik akun Google terverifikasi boleh membuat sandi pertama melalui
+    // tautan satu kali yang dikirim ke alamat Google yang sama.
+    if (user && (user.password || (user.authProvider === 'GOOGLE' && user.isVerified))) {
       const { mentah, hash } = terbitkanTokenReset();
       const sekarang = new Date();
 
@@ -210,7 +207,7 @@ export async function POST(req: Request) {
           title: 'Atur ulang sandi Anda',
           message:
             `Halo ${amankanHtml(user.name ?? 'pengguna')},<br/><br/>` +
-            'Kami menerima permintaan untuk mengatur ulang sandi akun ini. ' +
+            'Kami menerima permintaan untuk mengatur atau mengatur ulang sandi akun ini. ' +
             `Tautan di bawah berlaku <b>${menit} menit</b> dan hanya bisa dipakai sekali.<br/><br/>` +
             `<a href="${amankanHtml(tautan)}">Atur ulang sandi</a><br/><br/>` +
             'Bila bukan Anda yang meminta, abaikan surat ini — sandi Anda tidak ' +

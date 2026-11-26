@@ -2,6 +2,7 @@
 import { Lock } from 'lucide-react';
 import { ambilIdentitasSitus } from '@/lib/identitas-situs';
 import AdminLoginForm from './AdminLoginForm';
+import Link from 'next/link';
 
 export default async function AdminLoginPage() {
   const { nama } = await ambilIdentitasSitus();
@@ -21,6 +22,9 @@ export default async function AdminLoginPage() {
         <div className="w-full max-w-sm bg-gray-800 rounded-2xl shadow-2xl border border-gray-700 p-8">
           <AdminLoginForm />
         </div>
+        <Link href="/login" className="mt-6 inline-flex min-h-11 items-center rounded-lg px-4 text-sm font-semibold text-gray-300 hover:text-white hover:bg-gray-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero">
+          Kembali ke login biasa
+        </Link>
       </main>
 
       <p className="mt-8 text-xs text-gray-600">

@@ -346,7 +346,7 @@ export default function BillboardFormPage() {
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            <div className="lg:col-span-2 space-y-6">
+            <div className={`${billboardId ? 'lg:col-span-2' : 'lg:col-span-3'} space-y-6`}>
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200">
                         <h3 className="font-bold text-gray-800 border-b pb-3 mb-4">Informasi Dasar</h3>

@@ -66,7 +66,7 @@ export async function generateMetadata(): Promise<Metadata> {
 
   return {
     title: 'Tentang Kami',
-    description: `${nama} — ${deskripsi}. Sewa videotron, baliho, dan megatron dengan tahap pesanan yang bisa diikuti dari dashboard.`,
+    description: `${nama} — ${deskripsi}. Sewa videotron, baliho, dan billboard dengan tahap pesanan yang bisa diikuti dari dashboard.`,
   };
 }
 
@@ -108,14 +108,17 @@ const TAHAP_PESANAN = [
   },
 ] as const;
 
-export default async function AboutPage() {
-  const { nama, deskripsi, nomorWa } = await ambilIdentitasSitus();
+const PETA_KANTOR = 'https://maps.app.goo.gl/ZmPzy8KRat7PGNfV8';
+const PESAN_WA =
+  'Halo Admin Utero Billboard, saya mengetahui layanan ini dari https://billboard.uteroindonesia.com. ' +
+  'Saya ingin bertanya tentang pilihan billboard, lokasi, ketersediaan, dan proses pemesanannya. Bisa bantu saya?';
+const ADMIN_WA = [
+  { nama: 'Admin 1', nomor: '6281999900900', tampilan: '+62 819-9990-0900' },
+  { nama: 'Admin 2', nomor: '62817388616', tampilan: '+62 817-388-616' },
+] as const;
 
-  // Tanpa pesan pembuka: halaman ini tidak sedang menunjukkan satu titik media,
-  // jadi tidak ada konteks yang bisa disebut. Menuliskan "Halo" saja lalu
-  // mengirimkannya membuat sales menerima pesan yang tidak menambah apa pun di
-  // atas pesan yang ditulis pengunjung sendiri.
-  const tautanWa = keTautanWa(nomorWa);
+export default async function AboutPage() {
+  const { nama, deskripsi } = await ambilIdentitasSitus();
 
   return (
     <div className="bg-gray-50 min-h-screen pb-20 font-sans">
@@ -215,6 +218,9 @@ export default async function AboutPage() {
                 <p className="text-sm text-gray-800 font-medium mt-0.5">
                   {ALAMAT_PENJUAL}
                 </p>
+                <a href={PETA_KANTOR} target="_blank" rel="noopener noreferrer" className="inline-block mt-1 text-sm font-semibold text-utero hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero">
+                  Buka lokasi di Google Maps
+                </a>
               </div>
             </div>
 
@@ -235,25 +241,30 @@ export default async function AboutPage() {
               </div>
             </div>
 
-            {/* WhatsApp hanya muncul bila admin sudah mengaturnya. Halaman ini
-                tidak pernah menampilkan baris kontak kosong: baris "WhatsApp:
-                —" adalah janji jalur kontak yang tidak ada. */}
-            {tautanWa && (
-              <div className="flex gap-4">
-                <MessageCircle className="text-gray-400 flex-shrink-0" size={18} />
-                <div>
-                  <p className="text-xs font-bold text-gray-500 uppercase">WhatsApp</p>
-                  <a
-                    href={tautanWa}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-sm text-utero font-medium mt-0.5 block hover:underline"
-                  >
-                    {nomorWa}
-                  </a>
+            <div className="flex gap-4">
+              <MessageCircle className="text-gray-400 flex-shrink-0" size={18} />
+              <div>
+                <p className="text-xs font-bold text-gray-500 uppercase">Hubungi lewat WhatsApp</p>
+                <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:gap-6">
+                  {ADMIN_WA.map((admin) => {
+                    const tautan = keTautanWa(admin.nomor, PESAN_WA);
+                    return tautan ? (
+                    <a
+                      key={admin.nomor}
+                      href={tautan}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-sm text-utero font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero"
+                    >
+                      {admin.nama}: {admin.tampilan}
+                    </a>
+                    ) : (
+                      <span key={admin.nomor} className="text-sm text-gray-600">{admin.nama}: {admin.tampilan}</span>
+                    );
+                  })}
                 </div>
               </div>
-            )}
+            </div>
           </div>
         </section>
 

@@ -80,7 +80,7 @@ export default function ForgotPasswordPage() {
                 Lupa Sandi
               </h1>
               <p className="text-xs text-gray-400 mt-1">
-                Masukkan email akun Anda, kami kirim tautan untuk mengatur ulang sandi
+                Masukkan email akun Anda. Akun Google terverifikasi juga bisa membuat sandi pertama lewat email ini.
               </p>
             </div>
 
@@ -136,21 +136,15 @@ export default function ForgotPasswordPage() {
                     {memuat ? 'Mengirim...' : 'Kirim Tautan Reset'}
                   </button>
 
-                  {/* Akun Google disebut di sini, bukan sebagai pesan galat
-                      setelah pengguna menunggu email yang tidak akan datang.
-                      Route penerbit sengaja tidak membedakannya dalam
-                      jawabannya, jadi tempat yang benar untuk memberitahunya
-                      adalah sebelum ia mengirim. */}
                   <p className="text-xs text-gray-500 text-center leading-relaxed">
-                    Mendaftar dengan Google? Akun seperti itu tidak punya sandi —
-                    gunakan tombol{' '}
+                    Sudah masuk lewat Google? Anda tetap bisa memakai tombol{' '}
                     <Link
                       href="/login"
                       className="font-bold text-utero hover:underline rounded outline-none focus:ring-2 focus:ring-utero"
                     >
                       Masuk dengan Google
                     </Link>
-                    .
+                    {' '}tanpa menambahkan sandi.
                   </p>
 
                   <p className="text-sm font-light text-gray-500 text-center">

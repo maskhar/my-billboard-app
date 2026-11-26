@@ -1,5 +1,10 @@
 
-import { Body, Controller, Delete, ForbiddenException, HttpException, HttpStatus, Param, Patch, Post } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, ForbiddenException, HttpException, HttpStatus, Param, Patch, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { mkdir, unlink, writeFile } from 'fs/promises';
+import { extname, join } from 'path';
+import { randomUUID } from 'crypto';
 import { UsersService } from './users.service';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateProfileDto } from './dto/update-profile.dto';
@@ -50,6 +55,55 @@ export class UsersController {
     } catch (error) {
       console.error('Update profile error:', error);
       throw new HttpException(error.message, error.status || HttpStatus.INTERNAL_SERVER_ERROR);
+    }
+  }
+
+  @Post(':id/profile-image')
+  @UseInterceptors(FileInterceptor('file', {
+    storage: memoryStorage(),
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (_request, file, callback) => {
+      const accepted = ['image/jpeg', 'image/png', 'image/webp'];
+      callback(accepted.includes(file.mimetype) ? null : new BadRequestException('Foto harus JPG, PNG, atau WebP.'), accepted.includes(file.mimetype));
+    },
+  }))
+  async updateProfileImage(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthUser,
+    @UploadedFile() file: Express.Multer.File,
+  ) {
+    if (user.id !== id) throw new ForbiddenException('Anda hanya dapat mengubah foto profil sendiri.');
+    if (!file) throw new BadRequestException('Pilih foto profil terlebih dahulu.');
+
+    const ext = extname(file.originalname).toLowerCase();
+    const extByMime: Record<string, string> = {
+      'image/jpeg': '.jpg',
+      'image/png': '.png',
+      'image/webp': '.webp',
+    };
+    if (!extByMime[file.mimetype] || extByMime[file.mimetype] !== ext) {
+      throw new BadRequestException('Format dan ekstensi foto tidak cocok.');
+    }
+    const bytes = file.buffer;
+    const validJpeg = bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+    const validPng = bytes.length >= 8 && bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
+    const validWebp = bytes.length >= 12 && bytes.toString('ascii', 0, 4) === 'RIFF' && bytes.toString('ascii', 8, 12) === 'WEBP';
+    if (!(file.mimetype === 'image/jpeg' && validJpeg || file.mimetype === 'image/png' && validPng || file.mimetype === 'image/webp' && validWebp)) {
+      throw new BadRequestException('Isi file bukan gambar yang valid.');
+    }
+
+    const directory = join(process.cwd(), 'public/uploads/designs/profiles');
+    const filename = `${randomUUID()}${ext}`;
+    const path = join(directory, filename);
+    const url = `/uploads/designs/profiles/${filename}`;
+    await mkdir(directory, { recursive: true });
+    await writeFile(path, file.buffer, { flag: 'wx' });
+    try {
+      await this.usersService.updateProfileImage(id, url);
+      return { url };
+    } catch (error) {
+      await unlink(path).catch(() => undefined);
+      throw error;
     }
   }
 

@@ -20,7 +20,7 @@ export default async function AccountSettingsPage() {
     // hanya untuk merender empat isian.
     const user = await prisma.user.findUnique({
         where: { id: session.user.id },
-        select: { id: true, name: true, whatsapp: true, email: true },
+        select: { id: true, name: true, whatsapp: true, email: true, image: true },
     });
 
     if (!user) {
@@ -33,6 +33,7 @@ export default async function AccountSettingsPage() {
         name: user.name ?? '',
         whatsapp: user.whatsapp ?? '',
         email: user.email, // email is not optional
+        image: user.image,
     };
 
     return (

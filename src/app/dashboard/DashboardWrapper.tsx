@@ -330,6 +330,7 @@ export default async function DashboardWrapper() {
           user: {
             name: session.user?.name ?? null,
             email: session.user?.email ?? null,
+            image: session.user?.image ?? null,
           },
         }}
         activeOrders={activeOrders}

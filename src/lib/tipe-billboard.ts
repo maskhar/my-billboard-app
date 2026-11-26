@@ -66,9 +66,9 @@ export const JENIS_MEDIA = [
       'Media cetak berukuran besar di titik lalu lintas padat. Materinya tetap sepanjang periode sewa.',
   },
   {
-    nama: 'Megatron',
+    nama: 'Billboard',
     keterangan:
-      'Layar berukuran besar untuk jangkauan jarak jauh, umumnya di persimpangan utama kota.',
+      'Papan iklan luar ruang yang menampilkan pesan merek di lokasi strategis sepanjang masa sewa.',
   },
 ] as const;
 

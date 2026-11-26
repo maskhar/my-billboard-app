@@ -88,7 +88,7 @@ function labelUrut(kunci: string): string {
 export const metadata: Metadata = {
   title: 'Semua Titik Media',
   description:
-    'Daftar seluruh videotron, baliho, dan megatron yang sedang tersedia, beserta harga sewa dan alamatnya.',
+    'Daftar seluruh videotron, baliho, dan billboard yang sedang tersedia, beserta harga sewa dan alamatnya.',
   alternates: {
     // KANONIK TANPA QUERY, dan itu keputusan yang perlu ditulis.
     //
