@@ -170,7 +170,7 @@ export default async function InvoicePage(props: Props) {
                 <div className="text-right">
                     <h2 className="text-2xl font-extrabold text-utero tracking-tight">Utero<span className='text-gray-800'>Billboard</span></h2>
                     <p className="text-xs text-gray-500 mt-1">Jl. Soekarno Hatta No. 1, Malang</p>
-                    <p className="text-xs text-gray-500">support@utero.cloud</p>
+                    <p className="text-xs text-gray-500">{EMAIL_PENJUAL}</p>
                 </div>
             </div>
 

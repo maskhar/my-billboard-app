@@ -245,19 +245,19 @@ export default async function AboutPage() {
               <MessageCircle className="text-gray-400 flex-shrink-0" size={18} />
               <div>
                 <p className="text-xs font-bold text-gray-500 uppercase">Hubungi lewat WhatsApp</p>
-                <div className="mt-1 flex flex-col gap-2 sm:flex-row sm:gap-6">
+                <div className="mt-1 flex flex-col items-start gap-2">
                   {ADMIN_WA.map((admin) => {
                     const tautan = keTautanWa(admin.nomor, PESAN_WA);
                     return tautan ? (
-                    <a
-                      key={admin.nomor}
-                      href={tautan}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-sm text-utero font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero"
-                    >
-                      {admin.nama}: {admin.tampilan}
-                    </a>
+                      <a
+                        key={admin.nomor}
+                        href={tautan}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-utero font-semibold hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-utero"
+                      >
+                        {admin.nama}: {admin.tampilan}
+                      </a>
                     ) : (
                       <span key={admin.nomor} className="text-sm text-gray-600">{admin.nama}: {admin.tampilan}</span>
                     );

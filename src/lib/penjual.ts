@@ -40,7 +40,7 @@ export const BADAN_USAHA_PENJUAL = 'Utero Indonesia';
 export const ALAMAT_PENJUAL = 'Jl. Bantaran 1 No.25, Tulusrejo, Kec. Lowokwaru, Kota Malang, Jawa Timur 65141';
 
 /** Alamat surat yang boleh dihubungi pelanggan. */
-export const EMAIL_PENJUAL = 'support@utero.cloud';
+export const EMAIL_PENJUAL = 'marketingutero@gmail.com';
 
 /** Tagline yang dipakai di kepala surat. */
 export const TAGLINE_PENJUAL = 'PREMIUM OUTDOOR MEDIA';
